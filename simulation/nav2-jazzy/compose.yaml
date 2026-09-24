@@ -1,0 +1,16 @@
+services:
+  nav2-loopback:
+    platform: linux/arm64
+    image: ros-robot-nav2-jazzy:local
+    build:
+      context: .
+      args:
+        - APT_HTTP_PROXY
+    container_name: ros-robot-nav2-loopback
+    init: true
+    environment:
+      ROS_DOMAIN_ID: "62"
+      ROS_LOCALHOST_ONLY: "1"
+    ports:
+      - "127.0.0.1:18091:18091"
+    restart: unless-stopped
