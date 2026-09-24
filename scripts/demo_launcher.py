@@ -2,7 +2,7 @@
 """Start the local Qwen service and ROS person-tracking demo on Orange Pi."""
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import logging
 import os
@@ -79,6 +79,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--acceptance",
+        action="store_true",
+        help=(
+            "运行固定 WAV 与合成检测框的软件验收探针；"
+            "默认交互模式不会注入回放数据。"
+        ),
+    )
+    parser.add_argument(
         "--check-only",
         action="store_true",
         help=(
@@ -144,13 +152,19 @@ def load_config(
         )
 
     probe_text = _environment_value(
-        env, "DEMO_RUN_ACCEPTANCE_PROBE", "true"
+        env, "DEMO_RUN_ACCEPTANCE_PROBE", "false"
     )
     if probe_text not in ("true", "false"):
         raise DemoError(
             "验收探针配置只能是 true 或 false，当前值：{}".format(
                 probe_text
             )
+        )
+
+    run_acceptance_probe = probe_text == "true"
+    if run_acceptance_probe and audio_source != "wav_file":
+        raise DemoError(
+            "固定样本验收探针必须使用 wav_file；实时麦克风请使用普通交互模式。"
         )
 
     model_alias = _environment_value(
@@ -197,7 +211,7 @@ def load_config(
         web_port=web_port,
         ros_domain_id=int(ros_domain_text, 10),
         audio_source=audio_source,
-        run_acceptance_probe=(probe_text == "true"),
+        run_acceptance_probe=run_acceptance_probe,
         log_dir=Path(
             _environment_value(
                 env,
@@ -776,6 +790,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except DemoError as error:
         LOGGER.error("错误：%s", error)
         return 2
+    if args.acceptance:
+        config = replace(
+            config,
+            run_acceptance_probe=True,
+            audio_source="wav_file",
+        )
     return _run(config, args.check_only)
 
 

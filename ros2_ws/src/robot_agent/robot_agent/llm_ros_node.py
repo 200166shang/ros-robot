@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -11,7 +12,6 @@ from std_msgs.msg import String
 
 from .llama_client import LlamaCompletionClient
 from .llm_adapter import DecisionKind, decide_model_output
-
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是小沫，科研 AI。技术严谨，非技术诗意，主动启发，兼精准共情。"
@@ -65,8 +65,14 @@ class LlmRosNode(Node):
         self._response_publisher = self.create_publisher(
             String, "/llm/response", 10
         )
+        self._turn_event_publisher = self.create_publisher(
+            String, "/llm/turn/event", 10
+        )
         self.create_subscription(
             String, "/llm/user_input", self._on_user_input, 10
+        )
+        self.create_subscription(
+            String, "/llm/turn/request", self._on_turn_request, 10
         )
         if enable_commands:
             self._command_publisher = self.create_publisher(
@@ -88,12 +94,60 @@ class LlmRosNode(Node):
         )
 
     def _on_user_input(self, message):
-        if not message.data.strip():
-            self._publish_response("请先输入要咨询的内容。")
+        self._process_user_input(message.data)
+
+    def _on_turn_request(self, message):
+        try:
+            payload = json.loads(message.data)
+        except (TypeError, ValueError):
+            self.get_logger().warning("discarded malformed turn request")
             return
 
+        if not isinstance(payload, dict):
+            self.get_logger().warning("discarded turn request with invalid shape")
+            return
+
+        if payload.get("schema_version") != 1:
+            self.get_logger().warning("discarded unsupported turn request version")
+            return
+        turn_id = payload.get("turn_id")
+        run_id = payload.get("run_id")
+        text = payload.get("text")
+        if (
+            not isinstance(turn_id, str)
+            or not turn_id
+            or len(turn_id) > 64
+            or not isinstance(run_id, str)
+            or not run_id
+            or len(run_id) > 64
+            or not isinstance(text, str)
+            or len(text) > 4000
+        ):
+            self.get_logger().warning("discarded invalid turn request fields")
+            return
+        self._process_user_input(text, turn_id=turn_id, run_id=run_id)
+
+    def _process_user_input(self, user_text, turn_id=None, run_id=None):
+        started_at = time.monotonic()
+        if not user_text.strip():
+            response_text = "请先输入要咨询的内容。"
+            if turn_id is None:
+                self._publish_response(response_text)
+            if turn_id is not None:
+                self._publish_turn_event(
+                    turn_id, run_id, "failed", "failed",
+                    error_code="empty_input",
+                    response_text=response_text,
+                    started_at=started_at,
+                )
+            return
+
+        if turn_id is not None:
+            self._publish_turn_event(
+                turn_id, run_id, "inference", "started", started_at=started_at
+            )
         try:
-            raw_output = self._client.complete(self._system_prompt, message.data)
+            raw_output = self._client.complete(self._system_prompt, user_text)
             decision = decide_model_output(
                 raw_output, function_allowlist=self._function_allowlist
             )
@@ -101,30 +155,95 @@ class LlmRosNode(Node):
             self.get_logger().error(
                 f"local inference failed ({type(error).__name__})"
             )
-            self._publish_response(SERVICE_ERROR_TEXT)
+            response_text = SERVICE_ERROR_TEXT
+            if turn_id is None:
+                self._publish_response(response_text)
+            if turn_id is not None:
+                self._publish_turn_event(
+                    turn_id, run_id, "failed", "failed",
+                    error_code="llm_unavailable",
+                    response_text=response_text,
+                    started_at=started_at,
+                )
             return
 
+        error_code = None
+        final_status = "succeeded"
         if decision.kind is DecisionKind.CHAT_ONLY:
             response_text = (decision.model_response or "").strip()
             if not response_text:
                 response_text = REJECTION_TEXT
         elif decision.kind is DecisionKind.COMMAND and decision.command:
+            if turn_id is not None:
+                self._publish_turn_event(
+                    turn_id, run_id, "executing", "started",
+                    command=decision.command,
+                    started_at=started_at,
+                )
             response_payload = self._send_command_and_wait(decision.command)
             if response_payload is None:
                 response_text = COMMAND_TIMEOUT_TEXT
+                final_status = "failed"
+                error_code = "agent_timeout"
             elif response_payload.get("success") is not True:
                 response_text = "Agent 未确认该命令执行成功。"
+                final_status = "failed"
+                error_code = "agent_rejected"
             else:
                 response_text = self._confirmed_action_text(
                     decision.command, response_payload
                 )
+        elif decision.kind is DecisionKind.REJECTED:
+            self.get_logger().warning(
+                f"model action/output rejected ({decision.reason or decision.kind.value})"
+            )
+            response_text = REJECTION_TEXT
+            final_status = "rejected"
+            error_code = decision.reason or "action_rejected"
         else:
             self.get_logger().warning(
                 f"model action/output rejected ({decision.reason or decision.kind.value})"
             )
             response_text = REJECTION_TEXT
 
-        self._publish_response(response_text)
+        if turn_id is None:
+            self._publish_response(response_text)
+        if turn_id is not None:
+            self._publish_turn_event(
+                turn_id, run_id, final_status, final_status,
+                error_code=error_code,
+                response_text=response_text,
+                command=decision.command,
+                started_at=started_at,
+            )
+
+    def _publish_turn_event(
+        self, turn_id, run_id, stage, status, *,
+        error_code=None, response_text=None, command=None, started_at=None
+    ):
+        event = {
+            "schema_version": 1,
+            "turn_id": turn_id,
+            "run_id": run_id,
+            "stage": stage,
+            "status": status,
+            "event_time_utc": time.strftime(
+                "%Y-%m-%dT%H:%M:%S", time.gmtime()
+            ) + "Z",
+        }
+        if error_code:
+            event["error_code"] = str(error_code)[:64]
+        if response_text is not None:
+            event["response_text"] = response_text[:12000]
+        if command:
+            event["command"] = command
+        if started_at is not None:
+            event["elapsed_ms"] = max(
+                0, int((time.monotonic() - started_at) * 1000)
+            )
+        message = String()
+        message.data = json.dumps(event, ensure_ascii=False)
+        self._turn_event_publisher.publish(message)
 
     def _send_command_and_wait(self, command):
         if self._command_publisher is None:

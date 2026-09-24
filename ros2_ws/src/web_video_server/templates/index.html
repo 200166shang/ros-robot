@@ -12,6 +12,15 @@
     h1 { font-size: 22px; margin: 0; }
     .status { color: #9fb0d0; }
     .card { margin-top: 18px; background: #151d31; border: 1px solid #273451; border-radius: 14px; overflow: hidden; }
+    .chat { padding: 16px; }
+    .chat form { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+    textarea { min-height: 72px; resize: vertical; border: 1px solid #3b4b70; border-radius: 8px; padding: 10px; background: #0d1425; color: inherit; font: inherit; }
+    .turn { border-top: 1px solid #273451; padding: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .turn .question { color: #b7c6e6; }
+    .turn .answer { color: #99e2b4; }
+    .turn .progress { color: #9fb0d0; font-size: 13px; }
+    .audio-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    audio { width: min(480px, 100%); }
     #video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #03050a; }
     .toolbar { padding: 14px; }
     .group { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -27,6 +36,15 @@
     <h1>Orange Pi 视觉控制台</h1>
     <div id="status" class="status">正在连接……</div>
   </header>
+  <section class="card chat">
+    <h2>文字对话（板端 Qwen）</h2>
+    <form id="turn-form">
+      <textarea id="turn-input" maxlength="4000" placeholder="输入文本后提交；网页展示本次请求的处理阶段"></textarea>
+      <button id="turn-submit" type="submit">发送</button>
+    </form>
+    <p id="run-info" class="status">正在读取运行会话……</p>
+    <div id="turn-list" aria-live="polite"></div>
+  </section>
   <section class="card">
     <img id="video" src="/stream/detection" alt="实时摄像头画面">
     <div class="toolbar">
@@ -46,12 +64,182 @@
 </main>
 <script>
   let source = 'detection';
+  const activeTurns = new Set();
+  const activeAudio = new Set();
   function selectStream(next) {
     source = next;
     document.getElementById('video').src = '/stream/' + next + '?t=' + Date.now();
     document.getElementById('raw').classList.toggle('active', next === 'raw');
     document.getElementById('detection').classList.toggle('active', next === 'detection');
   }
+  const stageNames = {
+    accepted: '已提交，等待 Qwen',
+    inference: 'Qwen 推理中',
+    executing: '等待 Agent 执行并确认',
+    succeeded: '完成',
+    rejected: '请求已处理，但动作未获授权',
+    failed: '失败'
+  };
+  async function submitTurn(event) {
+    event.preventDefault();
+    const input = document.getElementById('turn-input');
+    const text = input.value.trim();
+    if (!text) return;
+    const button = document.getElementById('turn-submit');
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/turn', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: text})
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || '提交失败');
+      }
+      input.value = '';
+      addTurnCard(result.turn);
+      activeTurns.add(result.turn_id);
+      button.disabled = true;
+      pollTurn(result.turn_id);
+    } catch (error) {
+      document.getElementById('message').textContent = error.message;
+    } finally {
+      button.disabled = activeTurns.size > 0;
+    }
+  }
+  function addTurnCard(turn) {
+    const card = document.createElement('div');
+    card.className = 'turn';
+    card.id = 'turn-' + turn.turn_id;
+    const question = document.createElement('div');
+    question.className = 'question';
+    question.textContent = '你：' + turn.user_text;
+    const progress = document.createElement('div');
+    progress.className = 'progress';
+    progress.textContent = stageNames[turn.stage] || turn.status;
+    const answer = document.createElement('div');
+    answer.className = 'answer';
+    answer.textContent = '';
+    const audioRow = document.createElement('div');
+    audioRow.className = 'audio-row';
+    const audioButton = document.createElement('button');
+    audioButton.type = 'button';
+    audioButton.textContent = '生成语音（Mac 播放）';
+    audioButton.disabled = true;
+    audioButton.addEventListener('click', function() {
+      requestTurnAudio(turn.turn_id);
+    });
+    const player = document.createElement('audio');
+    player.controls = true;
+    player.hidden = true;
+    audioRow.append(audioButton, player);
+    card.append(question, progress, answer, audioRow);
+    document.getElementById('turn-list').prepend(card);
+  }
+  function updateTurnCard(turn) {
+    const card = document.getElementById('turn-' + turn.turn_id);
+    if (!card) return;
+    card.querySelector('.progress').textContent =
+      (stageNames[turn.stage] || turn.status) +
+      (turn.elapsed_ms === null ? '' : ' · ' + (turn.elapsed_ms / 1000).toFixed(1) + ' 秒');
+    if (turn.error_code) {
+      card.querySelector('.progress').textContent += ' · ' + turn.error_code;
+    }
+    if (turn.response_text) {
+      card.querySelector('.answer').textContent = '小沫：' + turn.response_text;
+      const audioButton = card.querySelector('.audio-row button');
+      const player = card.querySelector('.audio-row audio');
+      const audioStatus = turn.audio_status || 'not_requested';
+      if (audioStatus === 'ready') {
+        player.src = '/api/turn/' + encodeURIComponent(turn.turn_id) + '/audio';
+        player.hidden = false;
+        audioButton.textContent = '语音已生成，可反复播放';
+        audioButton.disabled = true;
+      } else if (audioStatus === 'queued' || audioStatus === 'generating') {
+        audioButton.textContent = '语音生成中……';
+        audioButton.disabled = true;
+      } else if (audioStatus === 'failed') {
+        audioButton.textContent = '重试生成语音';
+        audioButton.disabled = false;
+      } else {
+        audioButton.textContent = '生成语音（Mac 播放）';
+        audioButton.disabled = false;
+      }
+      if (turn.audio_error_code) {
+        card.querySelector('.progress').textContent +=
+          ' · 语音错误：' + turn.audio_error_code;
+      }
+    }
+  }
+  async function requestTurnAudio(turnId) {
+    const card = document.getElementById('turn-' + turnId);
+    const button = card.querySelector('.audio-row button');
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/turn/' + encodeURIComponent(turnId) + '/audio', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: '{}'
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || '语音请求失败');
+      }
+      activeAudio.add(turnId);
+      pollAudio(turnId);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = '重试生成语音';
+      document.getElementById('message').textContent = error.message;
+    }
+  }
+  async function pollAudio(turnId) {
+    if (!activeAudio.has(turnId)) return;
+    try {
+      const response = await fetch('/api/turn/' + encodeURIComponent(turnId), {cache: 'no-store'});
+      if (!response.ok) throw new Error('无法读取语音生成状态');
+      const turn = await response.json();
+      updateTurnCard(turn);
+      if (turn.audio_status === 'ready' || turn.audio_status === 'failed') {
+        activeAudio.delete(turnId);
+        return;
+      }
+    } catch (error) {
+      const card = document.getElementById('turn-' + turnId);
+      if (card) card.querySelector('.progress').textContent = error.message;
+    }
+    window.setTimeout(function() { pollAudio(turnId); }, 500);
+  }
+  async function pollTurn(turnId) {
+    if (!activeTurns.has(turnId)) return;
+    try {
+      const response = await fetch('/api/turn/' + encodeURIComponent(turnId), {cache: 'no-store'});
+      if (!response.ok) throw new Error('无法读取回合状态');
+      const turn = await response.json();
+      updateTurnCard(turn);
+      if (['succeeded', 'failed', 'rejected'].includes(turn.status)) {
+        activeTurns.delete(turnId);
+        document.getElementById('turn-submit').disabled = false;
+        return;
+      }
+    } catch (error) {
+      const card = document.getElementById('turn-' + turnId);
+      if (card) card.querySelector('.progress').textContent = error.message;
+    }
+    window.setTimeout(function() { pollTurn(turnId); }, 500);
+  }
+  document.getElementById('turn-form').addEventListener('submit', submitTurn);
+  fetch('/api/turn/active', {cache: 'no-store'}).then(function(response) {
+    return response.json();
+  }).then(function(result) {
+    if (result.turn) {
+      addTurnCard(result.turn);
+      activeTurns.add(result.turn.turn_id);
+      document.getElementById('turn-submit').disabled = true;
+      pollTurn(result.turn.turn_id);
+    }
+  }).catch(function() {});
   async function sendCommand(command) {
     const response = await fetch('/api/command', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -73,6 +261,14 @@
   }
   setInterval(refreshStatus, 1000);
   refreshStatus();
+  fetch('/api/run', {cache: 'no-store'}).then(function(response) {
+    return response.json();
+  }).then(function(run) {
+    document.getElementById('run-info').textContent =
+      '会话 ID：' + run.run_id + ' · 仅记录阶段、耗时和错误码，不写入对话内容';
+  }).catch(function() {
+    document.getElementById('run-info').textContent = '无法读取运行会话';
+  });
 </script>
 </body>
 </html>

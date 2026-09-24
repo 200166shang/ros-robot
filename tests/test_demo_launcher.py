@@ -60,8 +60,22 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.web_port, 8080)
         self.assertEqual(config.ros_domain_id, 74)
         self.assertEqual(config.audio_source, "wav_file")
-        self.assertTrue(config.run_acceptance_probe)
+        self.assertFalse(config.run_acceptance_probe)
         self.assertEqual(config.llama_model_alias, "qwen3-robot")
+
+    def test_acceptance_flag_selects_deterministic_wav_replay_profile(self):
+        config = make_config(audio_source="microphone")
+        with mock.patch.object(
+            demo_launcher, "load_config", return_value=config
+        ), mock.patch.object(
+            demo_launcher, "_run", return_value=0
+        ) as run_demo:
+            result = demo_launcher.main(["--acceptance"])
+
+        self.assertEqual(result, 0)
+        effective_config = run_demo.call_args.args[0]
+        self.assertTrue(effective_config.run_acceptance_probe)
+        self.assertEqual(effective_config.audio_source, "wav_file")
 
     def test_invalid_ports_and_duplicate_ports_are_rejected(self):
         cases = (
@@ -84,6 +98,13 @@ class ConfigTests(unittest.TestCase):
         cases = (
             ({"DEMO_AUDIO_SOURCE": "unknown"}, "音频来源"),
             ({"DEMO_RUN_ACCEPTANCE_PROBE": "yes"}, "验收探针"),
+            (
+                {
+                    "DEMO_RUN_ACCEPTANCE_PROBE": "true",
+                    "DEMO_AUDIO_SOURCE": "microphone",
+                },
+                "固定样本验收探针必须使用 wav_file",
+            ),
             ({"ROS_DOMAIN_ID": "7x"}, "ROS_DOMAIN_ID"),
         )
         for environment, message in cases:

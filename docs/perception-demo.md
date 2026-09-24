@@ -58,9 +58,12 @@ cd /home/orangepi/code/ros-robot
 
 该脚本会检查依赖、模型、摄像头和端口；如果 Qwen 服务未运行，则启动本机 `llama-server`，随后
 在前台启动 ROS launch。按 Ctrl-C 停止 ROS，脚本只清理由自己启动的 Qwen 进程。先检查、不启动
-任何节点可运行 `./scripts/run-demo.sh --check-only`。默认验收探针使用固定
-WAV 和合成检测框，不代表实时人物识别验收。跳过该探针、只启动相机及网页链路时设置
-`DEMO_RUN_ACCEPTANCE_PROBE=false`。跟踪始终保持 `dry_run=true`。
+任何节点可运行 `./scripts/run-demo.sh --check-only`。默认交互模式不会自动播放固定
+WAV，也不会注入合成检测框。需要可重复的软件验收时显式运行
+`./scripts/run-demo.sh --acceptance`；它固定使用随项目保存在 local-data 的 WAV 样本，
+不代表实时人物识别验收。也可通过 `DEMO_RUN_ACCEPTANCE_PROBE=true`启用探针，但必须同时
+设置 `DEMO_AUDIO_SOURCE=wav_file`；实时麦克风只用于普通交互模式。跟踪始终保持
+`dry_run=true`。
 
 下面的手工 launch 命令保留作底层调试参考。
 
@@ -150,11 +153,15 @@ curl --noproxy '*' http://127.0.0.1:18081/healthz
 ```
 
 这是 ROS 视频 UI，不是 LLaMA Factory WebUI。网页服务只监听 Orange Pi 的 loopback 接口且没有
-登录认证；不要将服务端口映射到公网。
+登录认证；不要将服务端口映射到公网。若 Qwen ROS 桥接节点尚未订阅文本请求 topic，
+网页会返回 503 且不会占住一个未完成回合；状态与事件记录只保存阶段、耗时和错误码，
+不落盘用户问题/模型回复。通过页面的“生成语音”按钮才会合成 TTS，WAV 保存在
+`/home/orangepi/local-data/ros-robot/web-audio/<run_id>/<turn_id>.wav`，由 Mac 浏览器显式播放；
+这些 WAV 目前不会自动清理，重启后仍留在 local-data，需在后续加入保留策略。
 
 ## Agent 命令和安全跟踪
 
-自动验收探针会发送 `start_tracking`、注入合成检测框，并验证 Agent 响应、`/rosout` 中
+显式运行 `--acceptance` 时，验收探针会发送 `start_tracking`、注入合成检测框，并验证 Agent 响应、`/rosout` 中
 的 `object_track` dry-run 预览，以及运动 topic 收到 **0 条 Twist**。探针会通过 Agent
 开启摄像头/跟踪；只能在独立 ROS domain 的测试环境使用，不要对日常运行中的 ROS graph
 直接执行：

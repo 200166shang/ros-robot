@@ -48,10 +48,14 @@ cd /home/orangepi/code/ros-robot
 
 The board-side script checks local models and ports, starts Qwen's `llama-server` if
 needed, then runs the ROS launch in the foreground. It reuses a healthy Qwen server
-and never kills a server it did not start. The default acceptance probe uses a fixed
-WAV and synthetic detector input; tracking remains `dry_run=true`. To check setup
-without starting Qwen, ROS nodes, or the camera, run
-`./scripts/run-demo.sh --check-only`.
+and never kills a server it did not start. The default is interactive mode: it does
+not replay a fixed WAV or inject synthetic detections. Use
+`./scripts/run-demo.sh --acceptance` only when you explicitly want the repeatable
+fixed-WAV software probe; it selects the WAV source even if interactive mode is
+configured for a microphone. Tracking remains `dry_run=true`. To check setup without starting
+Qwen, ROS nodes, or the camera, run `./scripts/run-demo.sh --check-only`.
+The text-turn API, privacy boundaries, and Phase A verification record are in
+`docs/phase-a-interaction-implementation.md`.
 
 For the browser video UI, configure the `orangepi-ts` SSH alias on the Mac and run
 `scripts/open-ui.sh` from a Mac checkout in a second terminal.
