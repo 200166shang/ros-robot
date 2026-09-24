@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>img_decode</name>
+  <version>0.1.0</version>
+  <description>MJPEG to RGB ROS 2 image decoder and validation monitor.</description>
+  <maintainer email="robot@example.com">robot</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>opencv</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

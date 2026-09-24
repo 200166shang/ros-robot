@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Orange Pi 视觉控制台</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #0b1020; color: #e8eefc; }
+    main { width: min(1180px, 94vw); margin: 24px auto; }
+    header, .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    h1 { font-size: 22px; margin: 0; }
+    .status { color: #9fb0d0; }
+    .card { margin-top: 18px; background: #151d31; border: 1px solid #273451; border-radius: 14px; overflow: hidden; }
+    #video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #03050a; }
+    .toolbar { padding: 14px; }
+    .group { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { border: 1px solid #3b4b70; border-radius: 8px; padding: 9px 14px; background: #202b46; color: inherit; cursor: pointer; }
+    button:hover, button.active { background: #2d6cdf; border-color: #4e83e9; }
+    button.stop { background: #47232b; border-color: #7d3948; }
+    #message { min-height: 24px; color: #99e2b4; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Orange Pi 视觉控制台</h1>
+    <div id="status" class="status">正在连接……</div>
+  </header>
+  <section class="card">
+    <img id="video" src="/stream/detection" alt="实时摄像头画面">
+    <div class="toolbar">
+      <div class="group">
+        <button id="detection" class="active" onclick="selectStream('detection')">检测画面</button>
+        <button id="raw" onclick="selectStream('raw')">原始画面</button>
+      </div>
+      <div class="group">
+        <button onclick="sendCommand('start_tracking')">开启跟踪</button>
+        <button class="stop" onclick="sendCommand('stop_tracking')">停止跟踪</button>
+        <button onclick="sendCommand('start_camera')">开启摄像头</button>
+        <button class="stop" onclick="sendCommand('stop_camera')">停止摄像头</button>
+      </div>
+    </div>
+  </section>
+  <p id="message"></p>
+</main>
+<script>
+  let source = 'detection';
+  function selectStream(next) {
+    source = next;
+    document.getElementById('video').src = '/stream/' + next + '?t=' + Date.now();
+    document.getElementById('raw').classList.toggle('active', next === 'raw');
+    document.getElementById('detection').classList.toggle('active', next === 'detection');
+  }
+  async function sendCommand(command) {
+    const response = await fetch('/api/command', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({command})
+    });
+    const result = await response.json();
+    document.getElementById('message').textContent = result.ok ? `命令已发送：${command}` : result.error;
+  }
+  async function refreshStatus() {
+    try {
+      const streams = await (await fetch('/api/status', {cache: 'no-store'})).json();
+      const current = streams[source];
+      document.getElementById('status').textContent = current.connected
+        ? `${source === 'raw' ? '原始' : '检测'}画面 · ${current.fps.toFixed(1)} FPS`
+        : '等待视频帧……';
+    } catch (_) {
+      document.getElementById('status').textContent = '网页节点连接中断';
+    }
+  }
+  setInterval(refreshStatus, 1000);
+  refreshStatus();
+</script>
+</body>
+</html>

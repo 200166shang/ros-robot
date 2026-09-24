@@ -1,0 +1,8 @@
+object_track:
+  ros__parameters:
+    dry_run: true
+
+web_video_server:
+  ros__parameters:
+    host: 127.0.0.1
+    port: 8080

@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>usb_camera</name>
+  <version>0.1.0</version>
+  <description>Reliable V4L2 MJPEG camera publisher for ROS 2.</description>
+  <maintainer email="robot@example.com">robot</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

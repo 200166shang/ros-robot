@@ -1,0 +1,31 @@
+# Colcon/CMake output. Keep these in the workspace for local development,
+# but never version generated build trees.
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
+/ros2_ws/Testing/
+
+# Local-only model and voice assets. Store them outside this repository when possible.
+/local-assets/
+/local-data/
+/models/
+**/*.rknn
+**/*.gguf
+**/*.onnx
+**/*.wav
+**/*.m4a
+**/rknn_api.h
+
+# Python/editor/OS-generated files.
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+._*
+/.vscode/
+/artifacts/
+
+# Local credentials/configuration.
+.env
+.env.*
+!.env.example
