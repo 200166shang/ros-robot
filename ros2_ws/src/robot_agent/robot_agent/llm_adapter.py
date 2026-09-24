@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from robot_head.catalog import MODEL_FUNCTIONS
+
 
 class DecisionKind(str, Enum):
     CHAT_ONLY = "chat_only"
@@ -31,7 +33,7 @@ class Decision:
 
 _ROS_COMMANDS = frozenset(
     {"status", "start_camera", "stop_camera", "start_tracking", "stop_tracking"}
-)
+) | MODEL_FUNCTIONS
 _STATUS_QUERY_FUNCTIONS = ("query_camera_status", "query_person_tracking_status")
 _DEFAULT_MAX_BYTES = 16 * 1024
 

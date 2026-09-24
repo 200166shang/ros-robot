@@ -1,0 +1,19 @@
+# Only fixed, reviewed motion names are accepted; this interface never maps to servos.
+string motion
+---
+bool success
+string backend
+string expression
+float32 pitch_deg
+float32 yaw_deg
+bool simulated
+string message
+string motion_id
+---
+string motion
+string phase
+string expression
+float32 pitch_deg
+float32 yaw_deg
+bool simulated
+string motion_id

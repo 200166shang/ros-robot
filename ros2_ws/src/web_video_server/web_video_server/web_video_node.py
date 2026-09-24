@@ -10,11 +10,14 @@ import cv2
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from flask import Flask, Response, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request, send_file, url_for
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
+
+from robot_interfaces.msg import HeadState
+from robot_head.catalog import MOTION_CATALOG, catalog_payload
 
 from .turn_store import (
     AudioResponseUnavailable,
@@ -89,6 +92,9 @@ class WebVideoNode(Node):
             '/home/orangepi/local-data/ros-robot/web-audio',
         ).value
         self.store = FrameStore()
+        self.head_state_lock = threading.Lock()
+        self.latest_head_state = None
+        self.head_state_received_at = 0.0
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -104,6 +110,8 @@ class WebVideoNode(Node):
             String, '/voice/web_tts_request', 10)
         self.create_subscription(
             String, '/llm/turn/event', self.on_turn_event, 10)
+        self.create_subscription(
+            HeadState, '/robot/head/state', self.on_head_state, 10)
         self.app = self.create_app()
         self.server_thread = threading.Thread(target=self.run_server, daemon=True)
         self.server_thread.start()
@@ -124,6 +132,43 @@ class WebVideoNode(Node):
             self.get_logger().warning(
                 'discarded malformed turn event: {}'.format(error)
             )
+
+    def on_head_state(self, message):
+        state = {
+            'backend': message.backend,
+            'motion': message.motion,
+            'phase': message.phase,
+            'expression': message.expression,
+            'pitch_deg': round(float(message.pitch_deg), 1),
+            'yaw_deg': round(float(message.yaw_deg), 1),
+            'simulated': bool(message.simulated),
+            'motion_id': message.motion_id,
+            'message': message.message,
+        }
+        with self.head_state_lock:
+            self.latest_head_state = state
+            self.head_state_received_at = time.monotonic()
+
+    def head_status(self):
+        with self.head_state_lock:
+            state = None if self.latest_head_state is None else dict(self.latest_head_state)
+            received_at = self.head_state_received_at
+        age = None if not received_at else max(0.0, time.monotonic() - received_at)
+        if state is None:
+            state = {
+                'backend': 'unknown',
+                'motion': '',
+                'phase': 'offline',
+                'expression': '正常',
+                'pitch_deg': 90.0,
+                'yaw_deg': 90.0,
+                'simulated': True,
+                'motion_id': '',
+                'message': '尚未收到虚拟头部状态。',
+            }
+        state['connected'] = age is not None and age < 2.0
+        state['age_seconds'] = None if age is None else round(age, 1)
+        return state
 
     def on_detection(self, message):
         now = time.monotonic()
@@ -157,8 +202,12 @@ class WebVideoNode(Node):
                    b'Cache-Control: no-cache\r\n\r\n' + frame + b'\r\n')
 
     def create_app(self):
-        template_folder = get_package_share_directory('web_video_server') + '/templates'
-        app = Flask(__name__, template_folder=template_folder)
+        package_share = Path(get_package_share_directory('web_video_server'))
+        template_folder = str(package_share / 'templates')
+        static_folder = package_share / 'static'
+        app = Flask(
+            __name__, template_folder=template_folder,
+            static_folder=str(static_folder), static_url_path='/static')
 
         @app.route('/', methods=['GET'])
         def index():
@@ -176,6 +225,51 @@ class WebVideoNode(Node):
         @app.route('/api/status', methods=['GET'])
         def status():
             return jsonify(self.store.status())
+
+        @app.route('/api/head/state', methods=['GET'])
+        def head_state():
+            return jsonify(self.head_status())
+
+        @app.route('/api/head/catalog', methods=['GET'])
+        def head_catalog():
+            return jsonify({
+                'backend': 'sim',
+                'simulated': True,
+                'motions': catalog_payload(),
+            })
+
+        @app.route('/api/head/assets', methods=['GET'])
+        def head_assets():
+            emotion_root = static_folder / 'emotions'
+            expressions = {}
+            for expression in ('正常', '微笑', '睡觉', '苏醒', '兴奋'):
+                directory = emotion_root / expression
+                if not directory.is_dir():
+                    expressions[expression] = []
+                    continue
+                if expression == '兴奋':
+                    paths = [
+                        path for path in directory.rglob('*.jpg')
+                        if any('2可循环动作' in part for part in path.parts)
+                    ]
+                else:
+                    paths = list(directory.rglob('*.jpg'))
+
+                def frame_order(path):
+                    try:
+                        return (0, int(path.stem))
+                    except ValueError:
+                        return (1, path.name.lower())
+
+                paths.sort(key=frame_order)
+                expressions[expression] = [
+                    url_for(
+                        'static',
+                        filename=path.relative_to(static_folder).as_posix(),
+                    )
+                    for path in paths
+                ]
+            return jsonify({'expressions': expressions})
 
         @app.route('/api/run', methods=['GET'])
         def run_status():
@@ -337,15 +431,35 @@ class WebVideoNode(Node):
 
         @app.route('/api/command', methods=['POST'])
         def command():
-            value = str((request.get_json(silent=True) or {}).get('command', ''))
+            payload = request.get_json(silent=True)
+            value = payload.get('command') if isinstance(payload, dict) else None
+            if not isinstance(value, str):
+                return jsonify({'ok': False, 'error': 'command must be text'}), 400
+            value = value.strip()
             allowed = {'start_camera', 'stop_camera', 'start_tracking',
-                       'stop_tracking', 'status'}
+                       'stop_tracking', 'status', 'head_cancel'} | set(MOTION_CATALOG)
             if value not in allowed:
                 return jsonify({'ok': False, 'error': 'unsupported command'}), 400
+            if value in MOTION_CATALOG or value == 'head_cancel':
+                if self.command_publisher.get_subscription_count() == 0:
+                    return jsonify({
+                        'ok': False,
+                        'error': 'Agent 未连接，无法提交虚拟头部动作。',
+                    }), 503
+                state = self.head_status()
+                if not state['connected'] or state['backend'] != 'sim':
+                    return jsonify({
+                        'ok': False,
+                        'error': '虚拟头部仿真节点未在线，请先启动演示。',
+                    }), 503
             message = String()
             message.data = value
             self.command_publisher.publish(message)
-            return jsonify({'ok': True, 'command': value})
+            return jsonify({
+                'ok': True,
+                'command': value,
+                'simulated': value in MOTION_CATALOG or value == 'head_cancel',
+            }), 202
 
         @app.route('/healthz', methods=['GET'])
         def health():

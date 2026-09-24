@@ -12,6 +12,7 @@ from std_msgs.msg import String
 
 from .llama_client import LlamaCompletionClient
 from .llm_adapter import DecisionKind, decide_model_output
+from robot_head.catalog import MODEL_FUNCTIONS, MOTION_CATALOG
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是小沫，科研 AI。技术严谨，非技术诗意，主动启发，兼精准共情。"
@@ -27,6 +28,9 @@ APPROVED_FUNCTION_ALLOWLIST = {
     "stop_camera_collection": "stop_camera",
     "start_tracking": "start_tracking",
 }
+for _head_function in MODEL_FUNCTIONS:
+    APPROVED_FUNCTION_ALLOWLIST[_head_function] = _head_function
+
 
 
 class LlmRosNode(Node):
@@ -286,6 +290,20 @@ class LlmRosNode(Node):
 
     @staticmethod
     def _confirmed_action_text(command, payload):
+        if command in MODEL_FUNCTIONS:
+            head = payload.get("head_state") or {}
+            pitch = head.get("pitch_deg")
+            yaw = head.get("yaw_deg")
+            posture = ''
+            if isinstance(pitch, (int, float)) and isinstance(yaw, (int, float)):
+                posture = '当前仿真角度为俯仰 {}°、偏航 {}°。'.format(
+                    round(pitch, 1), round(yaw, 1))
+            label = MOTION_CATALOG[command].label
+            return (
+                '虚拟头部已完成「{}」仿真。{}'
+                '此状态由网页端渲染，未驱动实体舵机。'
+            ).format(label, posture)
+
         camera_value = payload.get("camera_enabled")
         tracking_value = payload.get("tracking_enabled")
         camera = "开启" if camera_value is True else "关闭" if camera_value is False else "未知"

@@ -3,40 +3,83 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Orange Pi 视觉控制台</title>
+  <title>小沫机器人实验台</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
-    body { margin: 0; background: #0b1020; color: #e8eefc; }
-    main { width: min(1180px, 94vw); margin: 24px auto; }
-    header, .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-    h1 { font-size: 22px; margin: 0; }
-    .status { color: #9fb0d0; }
-    .card { margin-top: 18px; background: #151d31; border: 1px solid #273451; border-radius: 14px; overflow: hidden; }
-    .chat { padding: 16px; }
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+      --paper: #e8e6dc; --ink: #1e3232; --leaf: #47756a;
+      --signal: #d46a4e; --instrument: #c79b45; --mint: #c4d8ce;
+      --line: #c9cbc1; --muted: #687674; --panel: #f7f6f0;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); }
+    main {
+      display: grid; width: min(1480px, 96vw); margin: 28px auto 48px;
+      grid-template-columns: minmax(0, 1.55fr) minmax(320px, .85fr);
+      grid-template-areas: "header header" "camera head" "chat chat" "notice notice";
+      gap: 18px;
+    }
+    header { grid-area: header; display: flex; align-items: end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .eyebrow { margin: 0 0 5px; color: var(--leaf); font: 700 11px/1.2 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.03em; }
+    h2 { margin: 0 0 12px; font-size: 17px; }
+    .status, .muted { color: var(--muted); }
+    .card { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 5px 18px #1e32320b; }
+    #camera-card { grid-area: camera; }
+    #head-card { grid-area: head; padding: 20px; }
+    #chat-card { grid-area: chat; padding: 20px; }
+    #message { grid-area: notice; min-height: 22px; margin: 0; color: var(--leaf); }
     .chat form { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
-    textarea { min-height: 72px; resize: vertical; border: 1px solid #3b4b70; border-radius: 8px; padding: 10px; background: #0d1425; color: inherit; font: inherit; }
-    .turn { border-top: 1px solid #273451; padding: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .turn .question { color: #b7c6e6; }
-    .turn .answer { color: #99e2b4; }
-    .turn .progress { color: #9fb0d0; font-size: 13px; }
-    .audio-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    textarea, select { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 11px 12px; background: white; color: var(--ink); font: inherit; }
+    textarea { min-height: 72px; resize: vertical; }
+    .turn { border-top: 1px solid var(--line); padding: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .turn .question { color: var(--muted); }
+    .turn .answer { color: var(--leaf); }
+    .turn .progress { color: var(--muted); font-size: 13px; }
+    .audio-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
     audio { width: min(480px, 100%); }
-    #video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #03050a; }
-    .toolbar { padding: 14px; }
+    #video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #162221; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px; }
     .group { display: flex; gap: 8px; flex-wrap: wrap; }
-    button { border: 1px solid #3b4b70; border-radius: 8px; padding: 9px 14px; background: #202b46; color: inherit; cursor: pointer; }
-    button:hover, button.active { background: #2d6cdf; border-color: #4e83e9; }
-    button.stop { background: #47232b; border-color: #7d3948; }
-    #message { min-height: 24px; color: #99e2b4; }
+    button { border: 1px solid var(--line); border-radius: 9px; padding: 9px 13px; background: white; color: var(--ink); font: inherit; cursor: pointer; transition: background .16s, transform .16s, border-color .16s; }
+    button:hover, button.active { background: var(--mint); border-color: var(--leaf); }
+    button:active { transform: translateY(1px); }
+    button.primary { background: var(--leaf); border-color: var(--leaf); color: white; }
+    button.stop { color: #9c402d; border-color: #d9a392; background: #fff8f5; }
+    button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #c79b4580; outline-offset: 2px; }
+    .head-title, .head-row, .head-telemetry { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .head-title { margin-bottom: 15px; }
+    .head-title h2 { margin: 0; }
+    .sim-badge { border: 1px solid #cfaa68; border-radius: 999px; padding: 5px 9px; color: #805f21; background: #fbf2df; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .head-screen { display: grid; place-items: center; width: min(100%, 300px); aspect-ratio: 1; margin: 0 auto 14px; overflow: hidden; border: 8px solid #273d3b; border-radius: 24px; background: #050707; box-shadow: inset 0 0 0 1px #78918b, 0 10px 25px #1e32321c; }
+    #head-sprite { width: 100%; height: 100%; object-fit: contain; image-rendering: auto; transition: transform .18s ease-out; }
+    .head-telemetry { margin: 0 0 9px; }
+    .telemetry-cell { flex: 1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: white; }
+    .telemetry-cell span { display: block; color: var(--muted); font-size: 12px; }
+    .telemetry-cell strong { display: block; margin-top: 3px; font: 600 18px ui-monospace, monospace; }
+    #head-state-text { min-height: 38px; margin: 8px 0 15px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .motion-picker { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+    .motion-picker label { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+    .quick-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+    .quick-actions button { padding: 7px 10px; font-size: 13px; }
+    .sim-note { margin: 13px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    @media (max-width: 900px) {
+      main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "header" "camera" "head" "chat" "notice"; }
+      #head-card { padding: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Orange Pi 视觉控制台</h1>
+    <div><p class="eyebrow">XIAOMO · ROS 2 / LOCAL LAB</p><h1>小沫机器人实验台</h1></div>
     <div id="status" class="status">正在连接……</div>
   </header>
-  <section class="card chat">
+  <section class="card chat" id="chat-card">
     <h2>文字对话（板端 Qwen）</h2>
     <form id="turn-form">
       <textarea id="turn-input" maxlength="4000" placeholder="输入文本后提交；网页展示本次请求的处理阶段"></textarea>
@@ -45,7 +88,7 @@
     <p id="run-info" class="status">正在读取运行会话……</p>
     <div id="turn-list" aria-live="polite"></div>
   </section>
-  <section class="card">
+  <section class="card" id="camera-card">
     <img id="video" src="/stream/detection" alt="实时摄像头画面">
     <div class="toolbar">
       <div class="group">
@@ -60,12 +103,47 @@
       </div>
     </div>
   </section>
+  <aside class="card" id="head-card" aria-labelledby="head-heading">
+    <div class="head-title">
+      <h2 id="head-heading">虚拟头部</h2>
+      <span class="sim-badge" id="head-sim-status">SIM · 未连接实体舵机</span>
+    </div>
+    <div class="head-screen" aria-label="虚拟头部表情显示屏">
+      <img id="head-sprite" src="" alt="小沫机器人当前表情">
+    </div>
+    <div class="head-telemetry">
+      <div class="telemetry-cell"><span>俯仰 · 仿真角度</span><strong id="head-pitch">90.0°</strong></div>
+      <div class="telemetry-cell"><span>偏航 · 仿真角度</span><strong id="head-yaw">90.0°</strong></div>
+    </div>
+    <p id="head-state-text" aria-live="polite">等待板端虚拟头部状态……</p>
+    <div class="motion-picker">
+      <label for="head-motion-select">固定动作（与原 Agent 函数名对应）</label>
+      <select id="head-motion-select" aria-label="选择一个虚拟头部动作">
+        <option value="">正在读取动作目录……</option>
+      </select>
+      <button type="button" class="primary" id="head-run">执行仿真</button>
+    </div>
+    <div class="quick-actions" aria-label="常用虚拟动作">
+      <button type="button" data-head-command="head_nod">点头</button>
+      <button type="button" data-head-command="head_shake">摇头</button>
+      <button type="button" data-head-command="head_greet">打招呼</button>
+      <button type="button" data-head-command="head_look_around">环视</button>
+      <button type="button" data-head-command="head_reset">回中</button>
+      <button type="button" class="stop" data-head-command="head_cancel">停止</button>
+    </div>
+    <p class="sim-note">角度与表情由浏览器根据 ROS 仿真状态渲染。此面板不会调用 PWM、GPIO 或实体舵机。</p>
+  </aside>
   <p id="message"></p>
 </main>
 <script>
   let source = 'detection';
   const activeTurns = new Set();
   const activeAudio = new Set();
+  let headCatalog = [];
+  let headAssets = {};
+  let headSequenceKey = '';
+  let headFrameTimer = null;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   function selectStream(next) {
     source = next;
     document.getElementById('video').src = '/stream/' + next + '?t=' + Date.now();
@@ -241,13 +319,98 @@
     }
   }).catch(function() {});
   async function sendCommand(command) {
-    const response = await fetch('/api/command', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({command})
-    });
-    const result = await response.json();
-    document.getElementById('message').textContent = result.ok ? `命令已发送：${command}` : result.error;
+    try {
+      const response = await fetch('/api/command', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({command})
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || '命令提交失败');
+      document.getElementById('message').textContent = result.simulated
+        ? `已提交虚拟仿真动作：${command}`
+        : `已提交命令：${command}`;
+    } catch (error) {
+      document.getElementById('message').textContent = error.message;
+    }
   }
+  function updateHeadSprite(state) {
+    const expression = state.expression || '正常';
+    const frames = headAssets[expression] && headAssets[expression].length
+      ? headAssets[expression] : headAssets['正常'] || [];
+    if (!frames.length) return;
+    const animate = !reducedMotion && state.phase === 'moving' && frames.length > 1;
+    const nextKey = [state.motion_id || '', expression, animate ? 'moving' : state.phase].join(':');
+    if (nextKey !== headSequenceKey) {
+      headSequenceKey = nextKey;
+      if (headFrameTimer) window.clearInterval(headFrameTimer);
+      let frame = 0;
+      document.getElementById('head-sprite').src = frames[frame];
+      if (animate) {
+        headFrameTimer = window.setInterval(function() {
+          frame = (frame + 1) % frames.length;
+          document.getElementById('head-sprite').src = frames[frame];
+        }, 120);
+      }
+    }
+    const pitch = Number(state.pitch_deg || 90);
+    const yaw = Number(state.yaw_deg || 90);
+    const x = Math.max(-12, Math.min(12, (yaw - 90) * 0.45));
+    const y = Math.max(-12, Math.min(12, (pitch - 90) * 0.45));
+    document.getElementById('head-sprite').style.transform = `translate(${x}px, ${y}px)`;
+  }
+  async function refreshHeadState() {
+    try {
+      const response = await fetch('/api/head/state', {cache: 'no-store'});
+      if (!response.ok) throw new Error('状态接口不可用');
+      const state = await response.json();
+      const labels = new Map(headCatalog.map(function(item) { return [item.name, item.label]; }));
+      const label = labels.get(state.motion) || '待命';
+      document.getElementById('head-pitch').textContent = Number(state.pitch_deg || 90).toFixed(1) + '°';
+      document.getElementById('head-yaw').textContent = Number(state.yaw_deg || 90).toFixed(1) + '°';
+      document.getElementById('head-sim-status').textContent = state.connected
+        ? 'SIM · ' + (state.phase === 'moving' ? '动作中' : '仿真在线')
+        : 'SIM · 节点离线';
+      document.getElementById('head-state-text').textContent = state.connected
+        ? label + ' · ' + (state.message || '网页端虚拟渲染，未连接实体舵机。')
+        : '虚拟头部节点离线。请在开发板启动全链路；这里没有任何实体舵机连接。';
+      updateHeadSprite(state);
+    } catch (_) {
+      document.getElementById('head-state-text').textContent = '无法读取虚拟头部状态。';
+    }
+  }
+  async function initializeHeadPanel() {
+    try {
+      const responses = await Promise.all([
+        fetch('/api/head/catalog', {cache: 'no-store'}),
+        fetch('/api/head/assets', {cache: 'no-store'})
+      ]);
+      if (!responses[0].ok || !responses[1].ok) throw new Error('无法读取虚拟头部资源');
+      const catalogResult = await responses[0].json();
+      const assetsResult = await responses[1].json();
+      headCatalog = catalogResult.motions || [];
+      headAssets = assetsResult.expressions || {};
+      const selector = document.getElementById('head-motion-select');
+      selector.replaceChildren();
+      headCatalog.forEach(function(item) {
+        const option = document.createElement('option');
+        option.value = item.name;
+        option.textContent = item.label + ' · ' + item.name;
+        selector.append(option);
+      });
+      refreshHeadState();
+    } catch (error) {
+      document.getElementById('head-state-text').textContent = error.message;
+    }
+  }
+  document.getElementById('head-run').addEventListener('click', function() {
+    const command = document.getElementById('head-motion-select').value;
+    if (command) sendCommand(command);
+  });
+  document.querySelectorAll('[data-head-command]').forEach(function(button) {
+    button.addEventListener('click', function() {
+      sendCommand(button.dataset.headCommand);
+    });
+  });
   async function refreshStatus() {
     try {
       const streams = await (await fetch('/api/status', {cache: 'no-store'})).json();
@@ -260,6 +423,9 @@
     }
   }
   setInterval(refreshStatus, 1000);
+  setInterval(refreshHeadState, 500);
+  initializeHeadPanel();
+  refreshHeadState();
   refreshStatus();
   fetch('/api/run', {cache: 'no-store'}).then(function(response) {
     return response.json();

@@ -102,6 +102,25 @@ class TestModelOutputDecision(unittest.TestCase):
         self.assertEqual(decision.reason, "invalid_allowlist")
         self.assertIsNone(decision.command)
 
+    def test_fixed_virtual_head_function_maps_to_same_named_simulation_command(self):
+        decision = decide_model_output(
+            '{"res":"我点点头","fc":["head_nod"]}',
+            {"head_nod": "head_nod"},
+        )
+
+        self.assertIs(decision.kind, DecisionKind.COMMAND)
+        self.assertEqual(decision.command, "head_nod")
+
+    def test_virtual_head_function_does_not_accept_model_supplied_parameters(self):
+        decision = decide_model_output(
+            '{"res":"点头","fc":["head_nod(20)"]}',
+            {"head_nod": "head_nod"},
+        )
+
+        self.assertIs(decision.kind, DecisionKind.REJECTED)
+        self.assertEqual(decision.reason, "function_not_allowlisted")
+        self.assertIsNone(decision.command)
+
 
 if __name__ == "__main__":
     unittest.main()

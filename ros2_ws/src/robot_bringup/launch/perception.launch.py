@@ -38,6 +38,8 @@ def generate_launch_description():
         Node(package='object_track', executable='object_track_node', name='object_track',
              output='screen', parameters=[config, safety_config],
              condition=IfCondition(LaunchConfiguration('with_detector'))),
+        Node(package='robot_head', executable='robot_head_motion', name='robot_head_motion',
+             output='screen', condition=IfCondition(LaunchConfiguration('with_agent'))),
         Node(package='robot_agent', executable='command_agent', name='command_agent',
              output='screen', condition=IfCondition(LaunchConfiguration('with_agent'))),
         Node(package='web_video_server', executable='web_video_node', name='web_video_server',
