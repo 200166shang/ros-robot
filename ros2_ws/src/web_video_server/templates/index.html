@@ -17,7 +17,7 @@
     main {
       display: grid; width: min(1480px, 96vw); margin: 28px auto 48px;
       grid-template-columns: minmax(0, 1.55fr) minmax(320px, .85fr);
-      grid-template-areas: "header header" "camera head" "chat chat" "notice notice";
+      grid-template-areas: "header header" "camera head" "base base" "tracking tracking" "chat chat" "notice notice";
       gap: 18px;
     }
     header { grid-area: header; display: flex; align-items: end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
@@ -29,6 +29,18 @@
     #camera-card { grid-area: camera; }
     #head-card { grid-area: head; padding: 20px; }
     #chat-card { grid-area: chat; padding: 20px; }
+    #base-card { grid-area: base; padding: 20px; }
+    #tracking-card { grid-area: tracking; padding: 20px; }
+    .base-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(250px, .6fr); gap: 16px; align-items: start; }
+    #base-map { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 12px; background: #eeede5; }
+    .tracking-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .7fr); gap: 16px; align-items: start; }
+    #person-projection { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 12px; background: #14201f; }
+    .tracking-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .tracking-readout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .base-controls { display: grid; grid-template-columns: repeat(3, minmax(72px, 1fr)); gap: 8px; margin-top: 12px; }
+    .base-controls button { min-height: 48px; touch-action: none; user-select: none; }
+    .base-readout { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .base-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
     #message { grid-area: notice; min-height: 22px; margin: 0; color: var(--leaf); }
     .chat form { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
     textarea, select { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 11px 12px; background: white; color: var(--ink); font: inherit; }
@@ -65,8 +77,10 @@
     .quick-actions button { padding: 7px 10px; font-size: 13px; }
     .sim-note { margin: 13px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
     @media (max-width: 900px) {
-      main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "header" "camera" "head" "chat" "notice"; }
-      #head-card { padding: 16px; }
+      main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "header" "camera" "head" "base" "tracking" "chat" "notice"; }
+      #head-card, #base-card, #tracking-card { padding: 16px; }
+      .base-layout { grid-template-columns: minmax(0, 1fr); }
+      .tracking-layout { grid-template-columns: minmax(0, 1fr); }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
@@ -133,6 +147,60 @@
     </div>
     <p class="sim-note">角度与表情由浏览器根据 ROS 仿真状态渲染。此面板不会调用 PWM、GPIO 或实体舵机。</p>
   </aside>
+  <section class="card" id="base-card" aria-labelledby="base-heading">
+    <div class="head-title">
+      <h2 id="base-heading">虚拟差速底盘</h2>
+      <span class="sim-badge" id="base-sim-status">SIM · 等待状态</span>
+    </div>
+    <div class="base-layout">
+      <div>
+        <canvas id="base-map" width="960" height="540" aria-label="Mac 浏览器绘制的虚拟底盘地图与轨迹"></canvas>
+        <p class="base-note">位姿和里程计由板端运动学计算；地图与轨迹由 Mac 浏览器绘制。当前是空白平面，不代表真实地图或碰撞仿真。</p>
+      </div>
+      <div>
+        <div class="base-readout">
+          <div class="telemetry-cell"><span>真值 X / Y</span><strong id="base-position">0.00 / 0.00 m</strong></div>
+          <div class="telemetry-cell"><span>航向角</span><strong id="base-yaw">0.0°</strong></div>
+          <div class="telemetry-cell"><span>线速度</span><strong id="base-linear">0.00 m/s</strong></div>
+          <div class="telemetry-cell"><span>角速度</span><strong id="base-angular">0.00 rad/s</strong></div>
+        </div>
+        <p id="base-state-text" class="base-note" aria-live="polite">等待板端虚拟底盘状态……</p>
+        <div class="base-controls" aria-label="虚拟底盘手动控制">
+          <span></span><button type="button" data-base-linear="0.15" data-base-angular="0">前进</button><span></span>
+          <button type="button" data-base-linear="0" data-base-angular="0.5">左转</button>
+          <button type="button" class="stop" data-base-linear="0" data-base-angular="0">停止</button>
+          <button type="button" data-base-linear="0" data-base-angular="-0.5">右转</button>
+          <span></span><button type="button" data-base-linear="-0.15" data-base-angular="0">后退</button><span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="card" id="tracking-card" aria-labelledby="tracking-heading">
+    <div class="head-title">
+      <h2 id="tracking-heading">虚拟人物跟踪闭环</h2>
+      <span class="sim-badge" id="person-sim-status">SYNTHETIC · 等待状态</span>
+    </div>
+    <div class="tracking-layout">
+      <div>
+        <canvas id="person-projection" width="640" height="360" aria-label="由虚拟世界投影生成的合成检测框，不是摄像头图像"></canvas>
+        <p class="base-note">这是由固定世界坐标和虚拟底盘位姿计算出的合成检测框，不包含 RGB 像素，也不调用 C270 或 NPU。目标框随底盘转动而移动；浏览器仅负责绘图。</p>
+      </div>
+      <div>
+        <div class="tracking-readout">
+          <div class="telemetry-cell"><span>检测状态</span><strong id="person-detection">等待</strong></div>
+          <div class="telemetry-cell"><span>水平中心误差</span><strong id="person-center-error">-- px</strong></div>
+          <div class="telemetry-cell"><span>目标距离</span><strong id="person-range">-- m</strong></div>
+          <div class="telemetry-cell"><span>目标方位</span><strong id="person-bearing">--°</strong></div>
+        </div>
+        <p id="person-state-text" class="base-note" aria-live="polite">等待虚拟人物投影和跟踪状态……</p>
+        <div class="tracking-controls" aria-label="虚拟人物跟踪控制">
+          <button type="button" class="primary" onclick="sendCommand('start_tracking')">启动闭环跟踪</button>
+          <button type="button" class="stop" onclick="sendCommand('stop_tracking')">停止跟踪</button>
+        </div>
+        <p class="sim-note">启动后，现有 object_track 控制器只向 /robot/sim/tracking_cmd_vel 输出；实体 /cmd_vel 与电机驱动不在此启动项内。</p>
+      </div>
+    </div>
+  </section>
   <p id="message"></p>
 </main>
 <script>
@@ -144,6 +212,8 @@
   let headSequenceKey = '';
   let headFrameTimer = null;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const baseTrail = [];
+  let baseCommandTimer = null;
   function selectStream(next) {
     source = next;
     document.getElementById('video').src = '/stream/' + next + '?t=' + Date.now();
@@ -411,6 +481,217 @@
       sendCommand(button.dataset.headCommand);
     });
   });
+  function drawBaseMap(state, person) {
+    const canvas = document.getElementById('base-map');
+    const context = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    const scale = 90;
+    const pose = state.ground_truth || {x: 0, y: 0, yaw: 0};
+    const previous = baseTrail[baseTrail.length - 1];
+    if (!previous || Math.hypot(pose.x - previous.x, pose.y - previous.y) > 0.01) {
+      baseTrail.push({x: pose.x, y: pose.y});
+      if (baseTrail.length > 600) baseTrail.shift();
+    }
+
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = '#eeede5';
+    context.fillRect(0, 0, width, height);
+    context.strokeStyle = '#d5d5cb';
+    context.lineWidth = 1;
+    for (let x = width / 2 % (scale / 2); x < width; x += scale / 2) {
+      context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke();
+    }
+    for (let y = height / 2 % (scale / 2); y < height; y += scale / 2) {
+      context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke();
+    }
+    const point = function(value) {
+      return {x: width / 2 + value.x * scale, y: height / 2 - value.y * scale};
+    };
+    if (baseTrail.length > 1) {
+      context.beginPath();
+      baseTrail.forEach(function(item, index) {
+        const screen = point(item);
+        if (index === 0) context.moveTo(screen.x, screen.y);
+        else context.lineTo(screen.x, screen.y);
+      });
+      context.strokeStyle = '#47756a';
+      context.lineWidth = 3;
+      context.stroke();
+    }
+    const center = point(pose);
+    if (person && person.connected) {
+      const target = point({x: person.world_x, y: person.world_y});
+      context.beginPath();
+      context.moveTo(center.x, center.y);
+      context.lineTo(target.x, target.y);
+      context.strokeStyle = '#c79b45';
+      context.lineWidth = 2;
+      context.setLineDash([7, 6]);
+      context.stroke();
+      context.setLineDash([]);
+      context.beginPath();
+      context.arc(target.x, target.y, 10, 0, Math.PI * 2);
+      context.fillStyle = person.visible ? '#c79b45' : '#92968c';
+      context.fill();
+      context.strokeStyle = '#1e3232';
+      context.lineWidth = 2;
+      context.stroke();
+      context.fillStyle = '#1e3232';
+      context.font = '14px ui-monospace, monospace';
+      context.fillText('virtual person', target.x + 14, target.y - 10);
+    }
+    context.save();
+    context.translate(center.x, center.y);
+    context.rotate(-Number(pose.yaw || 0));
+    context.beginPath();
+    context.moveTo(20, 0);
+    context.lineTo(-13, -11);
+    context.lineTo(-13, 11);
+    context.closePath();
+    context.fillStyle = '#d46a4e';
+    context.fill();
+    context.strokeStyle = '#1e3232';
+    context.lineWidth = 2;
+    context.stroke();
+    context.restore();
+  }
+  function drawPersonProjection(state) {
+    const canvas = document.getElementById('person-projection');
+    const context = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = '#14201f';
+    context.fillRect(0, 0, width, height);
+    context.strokeStyle = '#334844';
+    context.lineWidth = 1;
+    for (let x = 0; x <= width; x += 40) {
+      context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke();
+    }
+    for (let y = 0; y <= height; y += 40) {
+      context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke();
+    }
+    context.strokeStyle = '#c79b45';
+    context.setLineDash([7, 7]);
+    context.beginPath(); context.moveTo(width / 2, 0); context.lineTo(width / 2, height); context.stroke();
+    context.setLineDash([]);
+    context.fillStyle = '#d6ddd2';
+    context.font = '14px ui-monospace, monospace';
+    context.fillText('SYNTHETIC PROJECTION · NO CAMERA PIXELS', 16, 26);
+    const connected = Boolean(state && state.connected);
+    const visible = connected && Boolean(state.visible);
+    if (visible) {
+      const x1 = Math.max(0, Math.min(width, Number(state.x1)));
+      const y1 = Math.max(0, Math.min(height, Number(state.y1)));
+      const x2 = Math.max(x1, Math.min(width, Number(state.x2)));
+      const y2 = Math.max(y1, Math.min(height, Number(state.y2)));
+      const centerX = (x1 + x2) / 2;
+      const centerY = (y1 + y2) / 2;
+      context.strokeStyle = '#90d9ad';
+      context.lineWidth = 3;
+      context.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      context.beginPath();
+      context.moveTo(centerX - 10, centerY); context.lineTo(centerX + 10, centerY);
+      context.moveTo(centerX, centerY - 10); context.lineTo(centerX, centerY + 10);
+      context.stroke();
+      context.fillText('person · ' + state.target_id, x1, Math.max(48, y1 - 8));
+    } else {
+      context.fillStyle = '#d6ddd2';
+      context.textAlign = 'center';
+      context.fillText(connected ? '当前合成视野中没有目标' : '虚拟人物节点离线', width / 2, height / 2);
+      context.textAlign = 'start';
+    }
+    document.getElementById('person-sim-status').textContent = connected
+      ? 'SYNTHETIC · ' + (visible ? '目标可见' : '目标丢失')
+      : 'SYNTHETIC · 节点离线';
+    document.getElementById('person-detection').textContent =
+      !connected ? '离线' : (visible ? '可见' : '未检出');
+    document.getElementById('person-center-error').textContent = visible
+      ? (Math.round((state.x1 + state.x2) / 2 - width / 2) + ' px')
+      : '-- px';
+    document.getElementById('person-range').textContent = visible
+      ? Number(state.range_m).toFixed(2) + ' m' : '-- m';
+    document.getElementById('person-bearing').textContent = visible
+      ? (Number(state.bearing_rad) * 180 / Math.PI).toFixed(1) + '°' : '--°';
+    document.getElementById('person-state-text').textContent = connected
+      ? '来源：' + state.source + ' · frame_id：' + state.frame_id
+      : '未收到新鲜的虚拟人物状态；跟踪控制器不应继续使用过期目标。';
+  }
+  async function sendBaseCommand(linear, angular) {
+    try {
+      const response = await fetch('/api/sim/base/cmd', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({linear_x: linear, angular_z: angular})
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || '底盘命令失败');
+      document.getElementById('message').textContent = '仿真手动控制已提交；松开按键自动发送停止命令。';
+    } catch (error) {
+      document.getElementById('base-state-text').textContent = error.message;
+    }
+  }
+  function startBaseCommand(button) {
+    const linear = Number(button.dataset.baseLinear);
+    const angular = Number(button.dataset.baseAngular);
+    if (baseCommandTimer) window.clearInterval(baseCommandTimer);
+    sendBaseCommand(linear, angular);
+    baseCommandTimer = window.setInterval(function() {
+      sendBaseCommand(linear, angular);
+    }, 150);
+  }
+  function stopBaseCommand() {
+    if (baseCommandTimer) {
+      window.clearInterval(baseCommandTimer);
+      baseCommandTimer = null;
+    }
+    sendBaseCommand(0, 0);
+  }
+  document.querySelectorAll('[data-base-linear]').forEach(function(button) {
+    button.addEventListener('pointerdown', function(event) {
+      event.preventDefault();
+      startBaseCommand(button);
+    });
+    button.addEventListener('pointerup', stopBaseCommand);
+    button.addEventListener('pointerleave', stopBaseCommand);
+    button.addEventListener('pointercancel', stopBaseCommand);
+  });
+  window.addEventListener('blur', stopBaseCommand);
+  async function refreshBaseState() {
+    try {
+      const responses = await Promise.all([
+        fetch('/api/sim/base/state', {cache: 'no-store'}),
+        fetch('/api/sim/person', {cache: 'no-store'})
+      ]);
+      if (!responses[0].ok) throw new Error('虚拟底盘状态接口不可用');
+      if (!responses[1].ok) throw new Error('虚拟人物状态接口不可用');
+      const state = await responses[0].json();
+      const person = await responses[1].json();
+      const pose = state.ground_truth;
+      document.getElementById('base-sim-status').textContent = state.connected
+        ? 'SIM · ' + state.control_source
+        : 'SIM · 节点离线';
+      document.getElementById('base-position').textContent =
+        Number(pose.x).toFixed(2) + ' / ' + Number(pose.y).toFixed(2) + ' m';
+      document.getElementById('base-yaw').textContent =
+        (Number(pose.yaw) * 180 / Math.PI).toFixed(1) + '°';
+      document.getElementById('base-linear').textContent =
+        Number(state.linear_x).toFixed(2) + ' m/s';
+      document.getElementById('base-angular').textContent =
+        Number(state.angular_z).toFixed(2) + ' rad/s';
+      document.getElementById('base-state-text').textContent = state.connected
+        ? (state.command_timed_out
+            ? '命令租约已超时，底盘已自动停止。'
+            : '仿真命令执行中 · 速度受上限保护。')
+        : '虚拟底盘节点离线；网页不会向真实底盘发送命令。';
+      drawBaseMap(state, person);
+      drawPersonProjection(person);
+    } catch (error) {
+      document.getElementById('base-state-text').textContent = error.message;
+      document.getElementById('person-state-text').textContent = error.message;
+    }
+  }
   async function refreshStatus() {
     try {
       const streams = await (await fetch('/api/status', {cache: 'no-store'})).json();
@@ -423,6 +704,8 @@
     }
   }
   setInterval(refreshStatus, 1000);
+  setInterval(refreshBaseState, 200);
+  refreshBaseState();
   setInterval(refreshHeadState, 500);
   initializeHeadPanel();
   refreshHeadState();

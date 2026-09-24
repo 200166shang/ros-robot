@@ -18,7 +18,9 @@ class CommandAgent(Node):
 
     def __init__(self):
         super().__init__('command_agent')
-        self.camera_enabled = True
+        self.simulation_mode = bool(
+            self.declare_parameter('simulation_mode', False).value)
+        self.camera_enabled = not self.simulation_mode
         self.tracking_enabled = False
         self._head_lock = threading.RLock()
         self._head_state = None
@@ -26,6 +28,8 @@ class CommandAgent(Node):
         self._head_goal_handle = None
         self.camera_pub = self.create_publisher(Bool, '/enable_camera', 10)
         self.tracking_pub = self.create_publisher(Bool, '/enable_tracking', 10)
+        self.sim_control_source_pub = self.create_publisher(
+            String, '/robot/sim/control_source', 10)
         self.response_pub = self.create_publisher(String, '/agent/response', 10)
         self.command_sub = self.create_subscription(String, '/agent/command', self.on_command, 10)
         self.head_state_sub = self.create_subscription(
@@ -42,6 +46,13 @@ class CommandAgent(Node):
         message = Bool()
         message.data = value
         publisher.publish(message)
+
+    def set_sim_control_source(self, source):
+        if not self.simulation_mode:
+            return
+        message = String()
+        message.data = source
+        self.sim_control_source_pub.publish(message)
 
     def on_head_state(self, message):
         with self._head_lock:
@@ -67,8 +78,14 @@ class CommandAgent(Node):
             'success': success,
             'camera_enabled': self.camera_enabled,
             'tracking_enabled': self.tracking_enabled,
-            'safe_output_topic': '/tracking/cmd_vel_safe',
+            'safe_output_topic': (
+                '/robot/sim/tracking_cmd_vel'
+                if self.simulation_mode else '/tracking/cmd_vel_safe'
+            ),
         }
+        if self.simulation_mode:
+            payload['backend'] = 'sim'
+            payload['simulated'] = True
         head_state = self.head_state_snapshot()
         if head_state is not None:
             payload['head_state'] = head_state
@@ -210,6 +227,11 @@ class CommandAgent(Node):
             self.cancel_head_motion()
             return
 
+        if self.simulation_mode and command in ('start_camera', 'stop_camera'):
+            self.respond(
+                command, False,
+                '当前启动的是虚拟人物仿真，没有真实摄像头可启停。')
+            return
         if command == 'start_camera':
             self.camera_enabled = True
             self.publish_bool(self.camera_pub, True)
@@ -219,13 +241,16 @@ class CommandAgent(Node):
             self.publish_bool(self.tracking_pub, False)
             self.publish_bool(self.camera_pub, False)
         elif command == 'start_tracking':
-            self.camera_enabled = True
+            self.camera_enabled = not self.simulation_mode
             self.tracking_enabled = True
-            self.publish_bool(self.camera_pub, True)
+            if not self.simulation_mode:
+                self.publish_bool(self.camera_pub, True)
             self.publish_bool(self.tracking_pub, True)
+            self.set_sim_control_source('tracking')
         elif command == 'stop_tracking':
             self.tracking_enabled = False
             self.publish_bool(self.tracking_pub, False)
+            self.set_sim_control_source('stop')
         elif command != 'status':
             self.respond(command, False, 'unsupported command')
             return

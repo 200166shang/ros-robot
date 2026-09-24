@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import threading
 import time
@@ -11,12 +12,13 @@ import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from flask import Flask, Response, jsonify, render_template, request, send_file, url_for
+from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 
-from robot_interfaces.msg import HeadState
+from robot_interfaces.msg import BaseState, HeadState, SimPersonState
 from robot_head.catalog import MOTION_CATALOG, catalog_payload
 
 from .turn_store import (
@@ -68,6 +70,9 @@ class FrameStore:
 
 
 class WebVideoNode(Node):
+    MAX_SIM_LINEAR = 0.25
+    MAX_SIM_ANGULAR = 0.8
+
     def __init__(self):
         super().__init__('web_video_server')
         self.host = self.declare_parameter('host', '127.0.0.1').value
@@ -95,6 +100,12 @@ class WebVideoNode(Node):
         self.head_state_lock = threading.Lock()
         self.latest_head_state = None
         self.head_state_received_at = 0.0
+        self.base_state_lock = threading.Lock()
+        self.latest_base_state = None
+        self.base_state_received_at = 0.0
+        self.person_state_lock = threading.Lock()
+        self.latest_person_state = None
+        self.person_state_received_at = 0.0
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -104,6 +115,10 @@ class WebVideoNode(Node):
         self.detection_subscription = self.create_subscription(
             Image, '/camera/image_det', self.on_detection, qos)
         self.command_publisher = self.create_publisher(String, '/agent/command', 10)
+        self.sim_manual_command_publisher = self.create_publisher(
+            Twist, '/robot/sim/manual_cmd_vel', 10)
+        self.sim_control_source_publisher = self.create_publisher(
+            String, '/robot/sim/control_source', 10)
         self.turn_request_publisher = self.create_publisher(
             String, '/llm/turn/request', 10)
         self.web_tts_publisher = self.create_publisher(
@@ -112,6 +127,11 @@ class WebVideoNode(Node):
             String, '/llm/turn/event', self.on_turn_event, 10)
         self.create_subscription(
             HeadState, '/robot/head/state', self.on_head_state, 10)
+        self.create_subscription(
+            BaseState, '/robot/sim/base_state', self.on_base_state, 10)
+        self.create_subscription(
+            SimPersonState, '/robot/sim/person_state',
+            self.on_sim_person_state, 10)
         self.app = self.create_app()
         self.server_thread = threading.Thread(target=self.run_server, daemon=True)
         self.server_thread.start()
@@ -168,6 +188,96 @@ class WebVideoNode(Node):
             }
         state['connected'] = age is not None and age < 2.0
         state['age_seconds'] = None if age is None else round(age, 1)
+        return state
+
+    def on_base_state(self, message):
+        state = {
+            'backend': message.backend,
+            'control_source': message.control_source,
+            'ground_truth': {
+                'x': float(message.ground_truth_x),
+                'y': float(message.ground_truth_y),
+                'yaw': float(message.ground_truth_yaw),
+            },
+            'odom': {
+                'x': float(message.odom_x),
+                'y': float(message.odom_y),
+                'yaw': float(message.odom_yaw),
+            },
+            'linear_x': float(message.linear_x),
+            'angular_z': float(message.angular_z),
+            'command_timed_out': bool(message.command_timed_out),
+            'simulated': bool(message.simulated),
+        }
+        with self.base_state_lock:
+            self.latest_base_state = state
+            self.base_state_received_at = time.monotonic()
+
+    def base_status(self):
+        with self.base_state_lock:
+            state = None if self.latest_base_state is None else dict(self.latest_base_state)
+            received_at = self.base_state_received_at
+        age = None if not received_at else max(0.0, time.monotonic() - received_at)
+        if state is None:
+            state = {
+                'backend': 'unknown',
+                'control_source': 'unknown',
+                'ground_truth': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+                'odom': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+                'linear_x': 0.0,
+                'angular_z': 0.0,
+                'command_timed_out': True,
+                'simulated': True,
+            }
+        state['connected'] = age is not None and age < 1.0
+        state['age_seconds'] = None if age is None else round(age, 2)
+        return state
+
+    def on_sim_person_state(self, message):
+        state = {
+            'visible': bool(message.visible),
+            'source': message.source,
+            'target_id': message.target_id,
+            'world_x': float(message.world_x),
+            'world_y': float(message.world_y),
+            'range_m': float(message.range_m),
+            'bearing_rad': float(message.bearing_rad),
+            'image_width': int(message.image_width),
+            'image_height': int(message.image_height),
+            'x1': int(message.x1),
+            'y1': int(message.y1),
+            'x2': int(message.x2),
+            'y2': int(message.y2),
+            'frame_id': message.header.frame_id,
+        }
+        with self.person_state_lock:
+            self.latest_person_state = state
+            self.person_state_received_at = time.monotonic()
+
+    def sim_person_status(self):
+        with self.person_state_lock:
+            state = None if self.latest_person_state is None else dict(self.latest_person_state)
+            received_at = self.person_state_received_at
+        age = None if not received_at else max(0.0, time.monotonic() - received_at)
+        if state is None:
+            state = {
+                'visible': False,
+                'source': 'synthetic_world_projection',
+                'target_id': 'virtual_person_1',
+                'world_x': 2.5,
+                'world_y': 0.8,
+                'range_m': 0.0,
+                'bearing_rad': 0.0,
+                'image_width': 640,
+                'image_height': 360,
+                'x1': 0,
+                'y1': 0,
+                'x2': 0,
+                'y2': 0,
+                'frame_id': '',
+            }
+        state['connected'] = age is not None and age < 0.5
+        state['age_seconds'] = None if age is None else round(age, 2)
         return state
 
     def on_detection(self, message):
@@ -230,6 +340,14 @@ class WebVideoNode(Node):
         def head_state():
             return jsonify(self.head_status())
 
+        @app.route('/api/sim/base/state', methods=['GET'])
+        def sim_base_state():
+            return jsonify(self.base_status())
+
+        @app.route('/api/sim/person', methods=['GET'])
+        def sim_person_state():
+            return jsonify(self.sim_person_status())
+
         @app.route('/api/head/catalog', methods=['GET'])
         def head_catalog():
             return jsonify({
@@ -270,6 +388,55 @@ class WebVideoNode(Node):
                     for path in paths
                 ]
             return jsonify({'expressions': expressions})
+
+        @app.route('/api/sim/base/cmd', methods=['POST'])
+        def sim_base_command():
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or set(payload) != {'linear_x', 'angular_z'}:
+                return jsonify({
+                    'ok': False,
+                    'error': '请求必须且只能包含 linear_x 和 angular_z。',
+                }), 400
+            linear = payload.get('linear_x')
+            angular = payload.get('angular_z')
+            if (isinstance(linear, bool) or not isinstance(linear, (int, float))
+                    or isinstance(angular, bool) or not isinstance(angular, (int, float))):
+                return jsonify({'ok': False, 'error': '速度必须是有限数值。'}), 400
+            linear = float(linear)
+            angular = float(angular)
+            if not math.isfinite(linear) or not math.isfinite(angular):
+                return jsonify({'ok': False, 'error': '速度必须是有限数值。'}), 400
+            if (abs(linear) > self.MAX_SIM_LINEAR
+                    or abs(angular) > self.MAX_SIM_ANGULAR):
+                return jsonify({
+                    'ok': False,
+                    'error': '速度超出仿真上限：linear ±0.25 m/s，angular ±0.8 rad/s。',
+                }), 400
+            state = self.base_status()
+            if not state['connected'] or state['backend'] != 'sim':
+                return jsonify({
+                    'ok': False,
+                    'error': '虚拟底盘仿真节点未在线，请先启动隔离模拟。',
+                }), 503
+            if self.sim_manual_command_publisher.get_subscription_count() == 0:
+                return jsonify({
+                    'ok': False,
+                    'error': '虚拟底盘没有订阅手动仿真命令。',
+                }), 503
+            source = String()
+            source.data = 'manual'
+            self.sim_control_source_publisher.publish(source)
+            command = Twist()
+            command.linear.x = linear
+            command.angular.z = angular
+            self.sim_manual_command_publisher.publish(command)
+            return jsonify({
+                'ok': True,
+                'backend': 'sim',
+                'simulated': True,
+                'linear_x': linear,
+                'angular_z': angular,
+            }), 202
 
         @app.route('/api/run', methods=['GET'])
         def run_status():
@@ -440,12 +607,26 @@ class WebVideoNode(Node):
                        'stop_tracking', 'status', 'head_cancel'} | set(MOTION_CATALOG)
             if value not in allowed:
                 return jsonify({'ok': False, 'error': 'unsupported command'}), 400
+            if self.command_publisher.get_subscription_count() == 0:
+                return jsonify({
+                    'ok': False,
+                    'error': 'Agent 未连接，命令没有被提交。',
+                }), 503
+            base = self.base_status()
+            simulation_online = base['connected'] and base['backend'] == 'sim'
+            if simulation_online and value in ('start_camera', 'stop_camera'):
+                return jsonify({
+                    'ok': False,
+                    'error': '当前是纯合成跟踪仿真，没有真实摄像头可启停。',
+                }), 409
+            if (simulation_online and value == 'start_tracking'
+                    and not self.get_subscriptions_info_by_topic(
+                        '/robot/sim/detections')):
+                return jsonify({
+                    'ok': False,
+                    'error': '仿真跟踪控制器未在线，无法启动闭环跟踪。',
+                }), 503
             if value in MOTION_CATALOG or value == 'head_cancel':
-                if self.command_publisher.get_subscription_count() == 0:
-                    return jsonify({
-                        'ok': False,
-                        'error': 'Agent 未连接，无法提交虚拟头部动作。',
-                    }), 503
                 state = self.head_status()
                 if not state['connected'] or state['backend'] != 'sim':
                     return jsonify({
@@ -458,7 +639,10 @@ class WebVideoNode(Node):
             return jsonify({
                 'ok': True,
                 'command': value,
-                'simulated': value in MOTION_CATALOG or value == 'head_cancel',
+                'simulated': (
+                    simulation_online or value in MOTION_CATALOG
+                    or value == 'head_cancel'
+                ),
             }), 202
 
         @app.route('/healthz', methods=['GET'])

@@ -1,0 +1,13 @@
+std_msgs/Header header
+string backend
+string control_source
+float64 ground_truth_x
+float64 ground_truth_y
+float64 ground_truth_yaw
+float64 odom_x
+float64 odom_y
+float64 odom_yaw
+float64 linear_x
+float64 angular_z
+bool command_timed_out
+bool simulated

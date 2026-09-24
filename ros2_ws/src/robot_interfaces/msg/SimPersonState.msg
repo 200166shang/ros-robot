@@ -1,0 +1,14 @@
+std_msgs/Header header
+bool visible
+string source
+string target_id
+float64 world_x
+float64 world_y
+float64 range_m
+float64 bearing_rad
+uint32 image_width
+uint32 image_height
+uint32 x1
+uint32 y1
+uint32 x2
+uint32 y2

@@ -440,7 +440,10 @@ llama-server 的 `/metrics` 需要显式启用 `--metrics`；本次板端 help �
 
 - 阶段 A 的代码实现和板端隔离验证已完成；真实 Qwen、Sherpa 合成和 Mac 实际试听仍待现场验收，详见 [阶段 A 记录](phase-a-interaction-implementation.md)。
 - 阶段 B 的虚拟头部与网页接口已在板端构建并隔离联调；29 个动作、100 帧资源和 HTTP→Agent→Action 状态闭环通过。未完成 URDF/3D，也未真实控制舵机；浏览器视觉检查与真实 Qwen 函数调用仍待现场验收，详见 [阶段 B 记录](phase-b-virtual-head-simulation.md)。
-- 当前主线下一步为阶段 C：差速虚拟底盘、速度超时停止、里程计/轨迹和 Mac 网页渲染；与真实 motor/PWM/MCU 命令隔离。
+- 阶段 C/D 的差速虚拟底盘、超时归零、里程计/TF、网页轨迹及虚拟人物投影闭环已经实现并通过板端隔离联调，详见 [阶段 C/D 记录](phase-cd-virtual-base-tracking.md)。
+- C/D 不经过 C270、RKNN/NPU、电机、PWM 或 MCU；不能据此声称真实视觉跟踪/底盘已验收。网页采用合成投影，浏览器目视验收仍待用户现场打开。
+- 当前主线下一步为阶段 E：在 Mac 的独立 ARM64 Linux 虚拟机中运行真实 Nav2 loopback，以有版本边界的 HTTP 网关接入板端 Agent；不依赖 Foxy/Jazzy 跨发行版 DDS。
+- 启动位置：`run-demo.sh` 运行于 Orange Pi；`open-ui.sh` 是 Mac 侧 SSH 隧道入口（须在 Mac 有该仓库工作副本时运行）。在 Mac 没有代码副本时，可手动建立 SSH 本地转发。
 
 ## 9. 建议代码边界与仓库管理
 

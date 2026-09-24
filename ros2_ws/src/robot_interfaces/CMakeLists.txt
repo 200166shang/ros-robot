@@ -10,6 +10,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Det.msg"
   "msg/Dets.msg"
   "msg/HeadState.msg"
+  "msg/BaseState.msg"
+  "msg/SimPersonState.msg"
   "action/HeadMotion.action"
   DEPENDENCIES action_msgs std_msgs
 )
