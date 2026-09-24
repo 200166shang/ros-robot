@@ -1,20 +1,28 @@
+# syntax=docker/dockerfile:1
 FROM ros:jazzy-ros-base
 ARG APT_HTTP_PROXY=""
 ENV DEBIAN_FRONTEND=noninteractive
-RUN if [ -n "$APT_HTTP_PROXY" ]; then \
-      apt-get -o "Acquire::http::Proxy=$APT_HTTP_PROXY" update && \
-      apt-get -o "Acquire::http::Proxy=$APT_HTTP_PROXY" install -y --no-install-recommends \
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    if [ -n "$APT_HTTP_PROXY" ]; then \
+      apt-get -o "Acquire::http::Proxy=$APT_HTTP_PROXY" \
+        -o Acquire::Retries=5 -o Acquire::http::Timeout=120 \
+        -o Acquire::http::Pipeline-Depth=0 update && \
+      apt-get -o "Acquire::http::Proxy=$APT_HTTP_PROXY" \
+        -o Acquire::Retries=5 -o Acquire::http::Timeout=120 \
+        -o Acquire::http::Pipeline-Depth=0 install -y --no-install-recommends \
         python3-colcon-common-extensions ros-jazzy-nav2-bringup \
         ros-jazzy-nav2-minimal-tb3-sim ros-jazzy-nav2-loopback-sim \
-        ros-jazzy-slam-toolbox && \
-      rm -rf /var/lib/apt/lists/*; \
+        ros-jazzy-slam-toolbox; \
     else \
-      apt-get update && \
-      apt-get install -y --no-install-recommends \
+      apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=120 \
+        -o Acquire::http::Pipeline-Depth=0 update && \
+      apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=120 \
+        -o Acquire::http::Pipeline-Depth=0 install -y --no-install-recommends \
         python3-colcon-common-extensions ros-jazzy-nav2-bringup \
         ros-jazzy-nav2-minimal-tb3-sim ros-jazzy-nav2-loopback-sim \
-        ros-jazzy-slam-toolbox && \
-      rm -rf /var/lib/apt/lists/*; \
+        ros-jazzy-slam-toolbox; \
     fi
 WORKDIR /opt/nav2_ws
 COPY ros2_ws/src /opt/nav2_ws/src
