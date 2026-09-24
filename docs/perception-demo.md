@@ -43,7 +43,26 @@ colcon test-result --test-result-base build --verbose
 BASH
 ```
 
-## 一键启动
+## 一键启动（推荐脚本）
+
+在 Mac 上通过 Tailscale SSH 登录板子，再从仓库根目录运行板端脚本：
+
+```sh
+# [Mac；替换成 Orange Pi 当前的 Tailscale IP]
+ssh -o HostKeyAlias=192.168.3.100 orangepi@<BOARD_TAILSCALE_IP>
+
+# [Orange Pi]
+cd /home/orangepi/code/ros-robot
+./scripts/run-demo.sh
+```
+
+该脚本会检查依赖、模型、摄像头和端口；如果 Qwen 服务未运行，则启动本机 `llama-server`，随后
+在前台启动 ROS launch。按 Ctrl-C 停止 ROS，脚本只清理由自己启动的 Qwen 进程。先检查、不启动
+任何节点可运行 `./scripts/run-demo.sh --check-only`。默认验收探针使用固定
+WAV 和合成检测框，不代表实时人物识别验收。跳过该探针、只启动相机及网页链路时设置
+`DEMO_RUN_ACCEPTANCE_PROBE=false`。跟踪始终保持 `dry_run=true`。
+
+下面的手工 launch 命令保留作底层调试参考。
 
 ```sh
 # [Orange Pi]
@@ -89,36 +108,49 @@ ros2 run img_decode image_monitor --ros-args \
 rsync -avP orangepi3b:/home/orangepi/local-data/ros-robot/artifacts/detection_snapshot.jpg .
 ```
 
-## 浏览器实时画面
+## Mac 浏览器访问
 
-总 launch 默认同时启动网页节点。在 Mac 浏览器尝试直接打开：
+总 launch 默认同时启动网页节点。网页服务绑定到 Orange Pi 的 `127.0.0.1:8080`，应通过 SSH
+隧道访问，不能依赖直接打开板子 IP 的 8080 端口：
 
 ```text
-http://<BOARD_IP>:8080
+（请勿直接访问 `http://<BOARD_IP>:8080`）
 ```
 
-页面可以切换检测画面和原始画面，并可安全地启停跟踪及摄像头。如果 Mac 的 VPN、
-本地网络权限或代理阻止直接访问局域网端口，建立 SSH 隧道：
+在 Mac 的 `~/.ssh/config` 中设置 Tailscale SSH 别名：
+
+```sshconfig
+Host orangepi-ts
+    HostName <BOARD_TAILSCALE_IP>
+    User orangepi
+    Port 22
+    HostKeyAlias 192.168.3.100
+```
+
+页面可以切换检测画面和原始画面。然后从 Mac 的仓库 checkout 另开终端运行：
 
 ```sh
-# [Mac] 保持此终端运行
-ssh -N -L 18080:127.0.0.1:8080 orangepi3b
+# [Mac；保持此终端运行]
+./scripts/open-ui.sh
 ```
+
+此辅助脚本只建立 SSH 隧道并检查网页健康状态；它不会启动或停止 Qwen、ROS。
 
 然后打开：
 
 ```text
-http://127.0.0.1:18080
+http://127.0.0.1:18081/
 ```
 
 如果使用命令行验证且 Mac 设置了全局 HTTP 代理，应绕过代理：
 
 ```sh
 # [Mac]
-curl --noproxy '*' http://127.0.0.1:18080/healthz
+curl --noproxy '*' http://127.0.0.1:18081/healthz
 ```
 
-网页服务只监听本机局域网端口，没有登录认证，不应通过路由器映射到公网。
+这是 ROS 视频 UI，不是 LLaMA Factory WebUI。网页服务只监听 Orange Pi 的 loopback 接口且没有
+登录认证；不要将服务端口映射到公网。
 
 ## Agent 命令和安全跟踪
 

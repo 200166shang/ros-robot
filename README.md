@@ -35,6 +35,29 @@ BASH
 
 The build only compiles packages; it does not open the camera or start robot nodes.
 
+## Start the end-to-end demo
+
+From a Mac terminal, connect to the Orange Pi over Tailscale using the current board
+Tailscale IP (replace the example with the current address):
+
+```bash
+ssh -o HostKeyAlias=192.168.3.100 orangepi@<BOARD_TAILSCALE_IP>
+cd /home/orangepi/code/ros-robot
+./scripts/run-demo.sh
+```
+
+The board-side script checks local models and ports, starts Qwen's `llama-server` if
+needed, then runs the ROS launch in the foreground. It reuses a healthy Qwen server
+and never kills a server it did not start. The default acceptance probe uses a fixed
+WAV and synthetic detector input; tracking remains `dry_run=true`. To check setup
+without starting Qwen, ROS nodes, or the camera, run
+`./scripts/run-demo.sh --check-only`.
+
+For the browser video UI, configure the `orangepi-ts` SSH alias on the Mac and run
+`scripts/open-ui.sh` from a Mac checkout in a second terminal.
+It only creates the tunnel; it does not launch another ROS stack. See
+[the demo guide](docs/perception-demo.md). The UI is not the LLaMA Factory WebUI.
+
 ## Local-only assets
 
 Model weights, Rockchip SDK headers, Sherpa-ONNX assets and voice fixtures are not stored in Git. Their expected paths, provenance and checksums are in [docs/local-assets.md](docs/local-assets.md). The detector launch accepts `model_path:=...`; the voice demo accepts `input_wav_path:=...`.
