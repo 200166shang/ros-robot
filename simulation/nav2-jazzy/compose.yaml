@@ -1,0 +1,23 @@
+services:
+  nav2-loopback:
+    platform: linux/arm64
+    image: ros-robot-nav2-jazzy:local
+    build:
+      context: .
+      args:
+        APT_HTTP_PROXY: ${APT_HTTP_PROXY:-}
+    container_name: ros-robot-nav2-loopback
+    init: true
+    environment:
+      ROS_DOMAIN_ID: "62"
+      ROS_LOCALHOST_ONLY: "1"
+      NAV2_LAUNCH_FILE: ${NAV2_LAUNCH_FILE:-nav2_loopback.launch.py}
+    command:
+      - bash
+      - -lc
+      - >-
+        source /opt/nav2_ws/install/setup.bash &&
+        ros2 launch robot_nav2_gateway "$$NAV2_LAUNCH_FILE"
+    ports:
+      - "127.0.0.1:18091:18091"
+    restart: unless-stopped

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小沫机器人 · Nav2 loopback</title>
+<style>
+:root{color-scheme:dark;--bg:#111821;--panel:#1a2633;--line:#34475b;--text:#eef5fb;--muted:#a5b4c4;--accent:#56c7a5;--warn:#f4c26b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,sans-serif}
+main{max-width:1180px;margin:24px auto;padding:0 18px}header{display:flex;gap:18px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+h1{font-size:23px;margin:0}.badge{border:1px solid #a47a35;color:var(--warn);border-radius:20px;padding:5px 12px;font-size:13px}
+.note{color:var(--muted);margin:8px 0 18px}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);gap:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+canvas{display:block;width:100%;height:auto;max-height:72vh;object-fit:contain;background:#e8edf0;border-radius:8px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.muted{color:var(--muted);font-size:13px}
+.locations{display:grid;gap:10px;margin-top:14px}button{border:0;border-radius:8px;padding:10px 14px;background:var(--accent);color:#10231e;font-weight:700;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}.cancel{background:#e47777;color:#2d1010}.task{white-space:pre-wrap;background:#101820;padding:12px;border-radius:8px;min-height:120px;margin-top:12px}
+dl{display:grid;grid-template-columns:1fr auto;gap:4px 14px;margin:12px 0}dt{color:var(--muted)}dd{margin:0;text-align:right}
+@media(max-width:760px){.layout{grid-template-columns:1fr}canvas{max-height:none}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>小沫机器人 · 导航原型</h1><span class="badge" id="simBadge">真实 Nav2 Action · 理想 loopback 仿真，无物理</span></header>
+<p class="note">ROS 2 Jazzy/Nav2 在 Mac 的 ARM64 Linux 虚拟机运行；地图与任务状态经本地 HTTP 提供，画面由此浏览器渲染。非 Gazebo，不代表实车定位、碰撞或电机性能。</p>
+<div class="layout">
+<section class="panel"><div class="row"><strong>Nav2 地图 / 轨迹</strong><span id="health" class="muted">连接中…</span></div><canvas id="map"></canvas></section>
+<section class="panel">
+<div class="row"><strong>命名地点</strong><span class="muted" id="pose">位姿等待中</span></div>
+<div id="locations" class="locations"></div>
+<div class="row" style="margin-top:18px"><strong>导航任务</strong><button id="cancel" class="cancel" disabled>取消当前任务</button></div>
+<div id="task" class="task">等待 Nav2 地图、初始位姿与 NavigateToPose Action 就绪。</div>
+<dl><dt>后端</dt><dd id="backend">nav2-jazzy-ideal-loopback</dd><dt>仿真性质</dt><dd id="simulationKind">无惯性 / 无碰撞</dd></dl>
+</section>
+</div>
+</main>
+<script>
+const canvas=document.getElementById("map"),ctx=canvas.getContext("2d");
+let grid=null,baseMap=null,locations=[],mapVersion=-1,locationMapVersion=-1;
+const health=document.getElementById("health"),taskBox=document.getElementById("task"),cancelButton=document.getElementById("cancel");
+function worldPixel(x,y){return [(x-grid.origin.x)/grid.resolution,grid.height-1-(y-grid.origin.y)/grid.resolution]}
+function paintBaseMap(m){
+  grid=m;mapVersion=m.map_version??mapVersion+1;canvas.width=m.width;canvas.height=m.height;
+  baseMap=document.createElement("canvas");baseMap.width=m.width;baseMap.height=m.height;
+  const bctx=baseMap.getContext("2d"),image=bctx.createImageData(m.width,m.height),raw=atob(m.data);
+  for(let i=0;i<raw.length;i++){let v=raw.charCodeAt(i);if(v>127)v-=256;
+    const shade=v<0?160:(v>50?20:245),p=i*4;
+    image.data[p]=shade;image.data[p+1]=shade;image.data[p+2]=shade;image.data[p+3]=255}
+  bctx.putImageData(image,0,0)
+}
+function render(s){
+  if(!grid)return;
+  ctx.drawImage(baseMap,0,0);ctx.save();ctx.scale(grid.width,grid.height);
+  if(s.path&&s.path.length>1){ctx.beginPath();s.path.forEach((p,i)=>{const q=worldPixel(p[0],p[1]);if(i===0)ctx.moveTo(q[0]/grid.width,q[1]/grid.height);else ctx.lineTo(q[0]/grid.width,q[1]/grid.height)});ctx.strokeStyle="#168c63";ctx.lineWidth=4/Math.max(grid.width,grid.height);ctx.stroke()}
+  for(const loc of locations){const p=worldPixel(loc.x,loc.y),x=p[0]/grid.width,y=p[1]/grid.height;ctx.beginPath();ctx.arc(x,y,.012,0,Math.PI*2);ctx.fillStyle="#d98d20";ctx.fill();ctx.fillStyle="#101820";ctx.font="0.025px system-ui";ctx.fillText(loc.label,x+.012,y)}
+  if(s.pose){const p=worldPixel(s.pose.x,s.pose.y),x=p[0]/grid.width,y=p[1]/grid.height;ctx.translate(x,y);ctx.rotate(-s.pose.yaw);ctx.beginPath();ctx.moveTo(.018,0);ctx.lineTo(-.012,-.010);ctx.lineTo(-.012,.010);ctx.closePath();ctx.fillStyle="#2278e5";ctx.fill()}
+  ctx.restore()
+}
+function showTask(t){if(!t){taskBox.textContent="当前无活动导航任务。";cancelButton.disabled=true;delete taskBox.dataset.taskId;return}
+  const left=t.distance_remaining_m==null?"":("\\n剩余距离："+Number(t.distance_remaining_m).toFixed(2)+" m");
+  taskBox.textContent="地点："+t.location_label+"\\n状态："+t.status+left+(t.error?"\\n错误："+t.error:"");
+  cancelButton.disabled=!["running","accepted"].includes(t.status);taskBox.dataset.taskId=t.task_id
+}
+function renderLocations(ready){
+  const box=document.getElementById("locations");box.replaceChildren();
+  for(const loc of locations){const b=document.createElement("button");b.textContent="前往 "+loc.label;
+    b.disabled=!ready;b.onclick=()=>startTask(loc.id);box.appendChild(b)}
+}
+async function refresh(){
+  try{
+    const h=await fetch("/healthz").then(r=>r.json());
+    health.textContent=h.ready?"Nav2 就绪":"Nav2 初始化中";health.style.color=h.ready?"#56c7a5":"#f4c26b";
+    const s=await fetch("/api/v1/navigation/state").then(r=>r.json());
+    if(h.map_ready&&s.map_version!==mapVersion){const r=await fetch("/api/v1/navigation/map");if(r.ok)paintBaseMap(await r.json())}
+    if(h.map_ready&&s.map_version!==locationMapVersion){const d=await fetch("/api/v1/navigation/locations").then(r=>r.json());
+      locations=d.locations||[];locationMapVersion=s.map_version;renderLocations(h.ready)}
+    document.getElementById("backend").textContent=s.backend+" · "+s.simulation;
+    document.getElementById("simBadge").textContent="真实 Nav2 Action · "+s.localization_mode+" · loopback 无物理";
+    document.getElementById("simulationKind").textContent=s.simulation;
+    document.getElementById("pose").textContent=s.pose?"x "+s.pose.x.toFixed(2)+" / y "+s.pose.y.toFixed(2)+" / θ "+s.pose.yaw.toFixed(2):"位姿等待中";
+    showTask(s.active_task);render(s);
+    for(const b of document.querySelectorAll("#locations button"))b.disabled=!h.ready
+  }catch(e){health.textContent="网关不可达";health.style.color="#e47777"}
+}
+async function startTask(id){
+  try{const r=await fetch("/api/v1/navigation/tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({location_id:id})});
+    const d=await r.json();if(!r.ok)throw new Error(d.error||("HTTP "+r.status));showTask(d)}
+  catch(e){taskBox.textContent="未能提交导航任务："+e.message}
+}
+cancelButton.onclick=async()=>{
+  const id=taskBox.dataset.taskId;if(!id)return;
+  try{const r=await fetch("/api/v1/navigation/tasks/"+encodeURIComponent(id)+"/cancel",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    const d=await r.json();if(!r.ok)throw new Error(d.error||("HTTP "+r.status));showTask(d)}
+  catch(e){taskBox.textContent="取消失败："+e.message}
+};
+(async()=>{refresh();setInterval(refresh,500)})();
+</script>
+</body>
+</html>

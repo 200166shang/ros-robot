@@ -1,7 +1,10 @@
 """One-shot half-duplex voice route into the existing safe text bridge."""
 
+import json
+import re
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import rclpy
@@ -57,6 +60,15 @@ class VoiceFrontendNode(Node):
         )
         self._num_threads = int(self.declare_parameter("num_threads", 2).value)
         self._play_audio = bool(self.declare_parameter("play_audio", True).value)
+        self._web_audio_enabled = bool(
+            self.declare_parameter("web_audio_enabled", True).value
+        )
+        self._web_audio_dir = Path(
+            self.declare_parameter(
+                "web_audio_dir",
+                "/home/orangepi/local-data/ros-robot/web-audio",
+            ).value
+        ).expanduser()
 
         asr_executable = self.declare_parameter(
             "asr_executable", SHERPA_BIN_DIR + "/sherpa-onnx"
@@ -111,10 +123,22 @@ class VoiceFrontendNode(Node):
         self._waiting_for_response = False
         self._response_text = None
         self._response_event = threading.Event()
+        self._tts_lock = threading.Lock()
+        self._web_audio_jobs = set()
+        self._web_audio_jobs_lock = threading.Lock()
 
         self._input_publisher = self.create_publisher(String, input_topic, 10)
         self.create_subscription(String, response_topic, self._on_llm_response, 10)
         self.create_service(Trigger, capture_service, self._on_capture_request)
+        self._web_audio_event_publisher = self.create_publisher(
+            String, "/llm/turn/event", 10
+        )
+        self.create_subscription(
+            String,
+            "/voice/web_tts_request",
+            self._on_web_tts_request,
+            10,
+        )
 
         self.get_logger().info(
             "voice frontend ready: Trigger {} -> {}/ASR -> {} -> {} -> TTS; "
@@ -125,6 +149,105 @@ class VoiceFrontendNode(Node):
                 response_topic,
             )
         )
+
+    def _on_web_tts_request(self, message):
+        try:
+            payload = json.loads(message.data)
+        except (TypeError, ValueError):
+            self.get_logger().warning("discarded malformed browser TTS request")
+            return
+        if not isinstance(payload, dict):
+            self.get_logger().warning("discarded browser TTS request with invalid shape")
+            return
+
+        if payload.get("schema_version") != 1:
+            self.get_logger().warning("discarded unsupported browser TTS request version")
+            return
+        turn_id = payload.get("turn_id")
+        run_id = payload.get("run_id")
+        text = payload.get("text")
+        if (
+            not isinstance(turn_id, str)
+            or re.fullmatch(r"[0-9a-f]{32}", turn_id) is None
+            or not isinstance(run_id, str)
+            or re.fullmatch(r"[0-9a-f]{32}", run_id) is None
+            or not isinstance(text, str)
+            or not text.strip()
+            or len(text) > 12000
+            or len(text.encode("utf-8")) > 36000
+        ):
+            self.get_logger().warning("discarded invalid browser TTS request fields")
+            return
+
+        if not self._web_audio_enabled:
+            self._publish_audio_event(
+                payload, "failed", error_code="browser_audio_disabled"
+            )
+            return
+
+        job_id = (run_id, turn_id)
+        with self._web_audio_jobs_lock:
+            if job_id in self._web_audio_jobs:
+                return
+            self._web_audio_jobs.add(job_id)
+        self._publish_audio_event(payload, "generating")
+        threading.Thread(
+            target=self._run_web_tts,
+            args=(payload,),
+            daemon=True,
+        ).start()
+
+    def _run_web_tts(self, payload):
+        started_at = time.monotonic()
+        audio_path = None
+        try:
+            run_dir = self._web_audio_dir / payload["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            audio_path = run_dir / (payload["turn_id"] + ".wav")
+            with self._tts_lock:
+                self._tts.synthesize(payload["text"], str(audio_path))
+            if audio_path.stat().st_size > 32 * 1024 * 1024:
+                audio_path.unlink()
+                raise RuntimeError("browser TTS output exceeds the size limit")
+            self._publish_audio_event(
+                payload,
+                "ready",
+                elapsed_ms=int((time.monotonic() - started_at) * 1000),
+            )
+        except Exception as error:
+            if audio_path is not None and audio_path.exists():
+                try:
+                    audio_path.unlink()
+                except OSError:
+                    pass
+            self.get_logger().error(
+                "browser TTS failed ({})".format(type(error).__name__)
+            )
+            self._publish_audio_event(
+                payload, "failed", error_code="tts_failed"
+            )
+        finally:
+            with self._web_audio_jobs_lock:
+                self._web_audio_jobs.discard((payload["run_id"], payload["turn_id"]))
+
+    def _publish_audio_event(
+        self, payload, status, error_code=None, elapsed_ms=None
+    ):
+        event = {
+            "schema_version": 1,
+            "turn_id": payload["turn_id"],
+            "run_id": payload["run_id"],
+            "stage": "audio",
+            "status": status,
+            "audio_status": status,
+        }
+        if error_code:
+            event["error_code"] = error_code
+        if elapsed_ms is not None:
+            event["elapsed_ms"] = max(0, int(elapsed_ms))
+        message = String()
+        message.data = json.dumps(event, ensure_ascii=False)
+        self._web_audio_event_publisher.publish(message)
 
     def _on_capture_request(self, _request, response):
         with self._state_lock:
@@ -185,7 +308,8 @@ class VoiceFrontendNode(Node):
                     raise RuntimeError("/llm/response was empty")
 
                 tts_path = str(Path(temp_dir) / "response.wav")
-                self._tts.synthesize(response_text, tts_path)
+                with self._tts_lock:
+                    self._tts.synthesize(response_text, tts_path)
                 self.get_logger().info(
                     "TTS WAV generated; response length={} characters".format(
                         len(response_text)

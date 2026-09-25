@@ -11,6 +11,8 @@
   <exec_depend>rknn_yolov6</exec_depend>
   <exec_depend>object_track</exec_depend>
   <exec_depend>robot_agent</exec_depend>
+  <exec_depend>robot_head</exec_depend>
+  <exec_depend>robot_sim</exec_depend>
   <exec_depend>web_video_server</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

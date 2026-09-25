@@ -4,7 +4,7 @@ This repository contains the ROS 2 modules migrated from the XiaoMo robot projec
 
 The ROS workspace is `ros2_ws/`. It contains the application packages listed below; the tutorial-only `cpp_pubsub` talker/listener demo is intentionally excluded.
 
-- `robot_bringup`, `robot_interfaces`, `robot_agent`, `robot_voice`
+- `robot_bringup`, `robot_interfaces`, `robot_agent`, `robot_head`, `robot_voice`
 - `usb_camera`, `img_decode`, `rknn_yolov6`, `object_track`, `web_video_server`
 
 ## Build on Orange Pi
@@ -35,6 +35,42 @@ BASH
 
 The build only compiles packages; it does not open the camera or start robot nodes.
 
+## Start the virtual head without peripherals
+
+On the Orange Pi, in a board terminal:
+
+```bash
+cd /home/orangepi/code/ros-robot
+source /opt/ros/foxy/setup.bash
+source ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=157
+export ROS_LOCALHOST_ONLY=1
+ros2 launch robot_bringup head_sim_demo.launch.py web_port:=8080
+```
+
+This launch starts only the virtual head, Agent command gateway, and web UI.
+It does not start Qwen, camera, detector, or voice nodes. The video and chat
+panels therefore remain unavailable; use the clearly marked virtual-head
+controls. On the Mac, from a local checkout, run `./scripts/open-ui.sh` in a
+second terminal and open `http://127.0.0.1:18081/`. Press Ctrl-C in each
+terminal to stop its own launch/tunnel.
+
+If board port 8080 is occupied, choose another board port and pass the same
+port to the Mac tunnel, for example:
+
+```bash
+# Orange Pi
+ros2 launch robot_bringup head_sim_demo.launch.py web_port:=18088
+
+# Mac
+DEMO_WEB_PORT=18088 ./scripts/open-ui.sh
+```
+
+The web server remains bound to loopback; use the SSH tunnel instead of
+exposing it on a public interface. See
+[`docs/phase-b-virtual-head-simulation.md`](docs/phase-b-virtual-head-simulation.md)
+for interfaces, verification evidence, and limits.
+
 ## Start the end-to-end demo
 
 From a Mac terminal, connect to the Orange Pi over Tailscale using the current board
@@ -48,10 +84,14 @@ cd /home/orangepi/code/ros-robot
 
 The board-side script checks local models and ports, starts Qwen's `llama-server` if
 needed, then runs the ROS launch in the foreground. It reuses a healthy Qwen server
-and never kills a server it did not start. The default acceptance probe uses a fixed
-WAV and synthetic detector input; tracking remains `dry_run=true`. To check setup
-without starting Qwen, ROS nodes, or the camera, run
-`./scripts/run-demo.sh --check-only`.
+and never kills a server it did not start. The default is interactive mode: it does
+not replay a fixed WAV or inject synthetic detections. Use
+`./scripts/run-demo.sh --acceptance` only when you explicitly want the repeatable
+fixed-WAV software probe; it selects the WAV source even if interactive mode is
+configured for a microphone. Tracking remains `dry_run=true`. To check setup without starting
+Qwen, ROS nodes, or the camera, run `./scripts/run-demo.sh --check-only`.
+The text-turn API, privacy boundaries, and Phase A verification record are in
+`docs/phase-a-interaction-implementation.md`.
 
 For the browser video UI, configure the `orangepi-ts` SSH alias on the Mac and run
 `scripts/open-ui.sh` from a Mac checkout in a second terminal.

@@ -1,0 +1,10 @@
+std_msgs/Header header
+string backend
+string motion
+string phase
+string expression
+float32 pitch_deg
+float32 yaw_deg
+bool simulated
+string motion_id
+string message

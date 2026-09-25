@@ -44,7 +44,7 @@ def generate_launch_description():
                 default_value="/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn",
                 description="Path to the local RKNN model; model weights are not stored in Git.",
             ),
-            DeclareLaunchArgument("run_acceptance_probe", default_value="true"),
+            DeclareLaunchArgument("run_acceptance_probe", default_value="false"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(perception_launch),
                 launch_arguments={

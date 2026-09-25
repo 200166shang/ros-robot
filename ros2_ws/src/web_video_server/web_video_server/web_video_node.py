@@ -1,16 +1,31 @@
+import json
+import math
+import re
 import threading
 import time
+import uuid
 from collections import deque
+from pathlib import Path
 
 import cv2
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_file, url_for
+from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
+
+from robot_interfaces.msg import BaseState, HeadState, SimPersonState
+from robot_head.catalog import MOTION_CATALOG, catalog_payload
+
+from .turn_store import (
+    AudioResponseUnavailable,
+    TurnEventStore,
+    TurnInProgressError,
+)
 
 
 class FrameStore:
@@ -55,15 +70,42 @@ class FrameStore:
 
 
 class WebVideoNode(Node):
+    MAX_SIM_LINEAR = 0.25
+    MAX_SIM_ANGULAR = 0.8
+
     def __init__(self):
         super().__init__('web_video_server')
-        self.host = self.declare_parameter('host', '0.0.0.0').value
+        self.host = self.declare_parameter('host', '127.0.0.1').value
         self.port = int(self.declare_parameter('port', 8080).value)
         self.jpeg_quality = int(self.declare_parameter('jpeg_quality', 75).value)
         self.max_detection_fps = float(
             self.declare_parameter('max_detection_fps', 10.0).value)
         self.last_detection_encode = 0.0
+        run_log_dir = self.declare_parameter(
+            'run_log_dir',
+            '/home/orangepi/local-data/ros-robot/runs',
+        ).value
+        try:
+            self.turns = TurnEventStore(run_log_dir=run_log_dir)
+        except OSError as error:
+            self.get_logger().warning(
+                'turn event file logging is disabled: {}'.format(error)
+            )
+            self.turns = TurnEventStore()
+        self.audio_dir = self.declare_parameter(
+            'web_audio_dir',
+            '/home/orangepi/local-data/ros-robot/web-audio',
+        ).value
         self.store = FrameStore()
+        self.head_state_lock = threading.Lock()
+        self.latest_head_state = None
+        self.head_state_received_at = 0.0
+        self.base_state_lock = threading.Lock()
+        self.latest_base_state = None
+        self.base_state_received_at = 0.0
+        self.person_state_lock = threading.Lock()
+        self.latest_person_state = None
+        self.person_state_received_at = 0.0
 
         qos = QoSProfile(depth=1)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -73,6 +115,23 @@ class WebVideoNode(Node):
         self.detection_subscription = self.create_subscription(
             Image, '/camera/image_det', self.on_detection, qos)
         self.command_publisher = self.create_publisher(String, '/agent/command', 10)
+        self.sim_manual_command_publisher = self.create_publisher(
+            Twist, '/robot/sim/manual_cmd_vel', 10)
+        self.sim_control_source_publisher = self.create_publisher(
+            String, '/robot/sim/control_source', 10)
+        self.turn_request_publisher = self.create_publisher(
+            String, '/llm/turn/request', 10)
+        self.web_tts_publisher = self.create_publisher(
+            String, '/voice/web_tts_request', 10)
+        self.create_subscription(
+            String, '/llm/turn/event', self.on_turn_event, 10)
+        self.create_subscription(
+            HeadState, '/robot/head/state', self.on_head_state, 10)
+        self.create_subscription(
+            BaseState, '/robot/sim/base_state', self.on_base_state, 10)
+        self.create_subscription(
+            SimPersonState, '/robot/sim/person_state',
+            self.on_sim_person_state, 10)
         self.app = self.create_app()
         self.server_thread = threading.Thread(target=self.run_server, daemon=True)
         self.server_thread.start()
@@ -82,6 +141,144 @@ class WebVideoNode(Node):
     def on_raw(self, message):
         if message.data:
             self.store.put('raw', bytes(message.data))
+
+    def on_turn_event(self, message):
+        try:
+            event = json.loads(message.data)
+            if not isinstance(event, dict) or event.get('schema_version') != 1:
+                raise ValueError('unsupported turn event version')
+            self.turns.ingest_event(event)
+        except (TypeError, ValueError) as error:
+            self.get_logger().warning(
+                'discarded malformed turn event: {}'.format(error)
+            )
+
+    def on_head_state(self, message):
+        state = {
+            'backend': message.backend,
+            'motion': message.motion,
+            'phase': message.phase,
+            'expression': message.expression,
+            'pitch_deg': round(float(message.pitch_deg), 1),
+            'yaw_deg': round(float(message.yaw_deg), 1),
+            'simulated': bool(message.simulated),
+            'motion_id': message.motion_id,
+            'message': message.message,
+        }
+        with self.head_state_lock:
+            self.latest_head_state = state
+            self.head_state_received_at = time.monotonic()
+
+    def head_status(self):
+        with self.head_state_lock:
+            state = None if self.latest_head_state is None else dict(self.latest_head_state)
+            received_at = self.head_state_received_at
+        age = None if not received_at else max(0.0, time.monotonic() - received_at)
+        if state is None:
+            state = {
+                'backend': 'unknown',
+                'motion': '',
+                'phase': 'offline',
+                'expression': '正常',
+                'pitch_deg': 90.0,
+                'yaw_deg': 90.0,
+                'simulated': True,
+                'motion_id': '',
+                'message': '尚未收到虚拟头部状态。',
+            }
+        state['connected'] = age is not None and age < 2.0
+        state['age_seconds'] = None if age is None else round(age, 1)
+        return state
+
+    def on_base_state(self, message):
+        state = {
+            'backend': message.backend,
+            'control_source': message.control_source,
+            'ground_truth': {
+                'x': float(message.ground_truth_x),
+                'y': float(message.ground_truth_y),
+                'yaw': float(message.ground_truth_yaw),
+            },
+            'odom': {
+                'x': float(message.odom_x),
+                'y': float(message.odom_y),
+                'yaw': float(message.odom_yaw),
+            },
+            'linear_x': float(message.linear_x),
+            'angular_z': float(message.angular_z),
+            'command_timed_out': bool(message.command_timed_out),
+            'simulated': bool(message.simulated),
+        }
+        with self.base_state_lock:
+            self.latest_base_state = state
+            self.base_state_received_at = time.monotonic()
+
+    def base_status(self):
+        with self.base_state_lock:
+            state = None if self.latest_base_state is None else dict(self.latest_base_state)
+            received_at = self.base_state_received_at
+        age = None if not received_at else max(0.0, time.monotonic() - received_at)
+        if state is None:
+            state = {
+                'backend': 'unknown',
+                'control_source': 'unknown',
+                'ground_truth': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+                'odom': {'x': 0.0, 'y': 0.0, 'yaw': 0.0},
+                'linear_x': 0.0,
+                'angular_z': 0.0,
+                'command_timed_out': True,
+                'simulated': True,
+            }
+        state['connected'] = age is not None and age < 1.0
+        state['age_seconds'] = None if age is None else round(age, 2)
+        return state
+
+    def on_sim_person_state(self, message):
+        state = {
+            'visible': bool(message.visible),
+            'source': message.source,
+            'target_id': message.target_id,
+            'world_x': float(message.world_x),
+            'world_y': float(message.world_y),
+            'range_m': float(message.range_m),
+            'bearing_rad': float(message.bearing_rad),
+            'image_width': int(message.image_width),
+            'image_height': int(message.image_height),
+            'x1': int(message.x1),
+            'y1': int(message.y1),
+            'x2': int(message.x2),
+            'y2': int(message.y2),
+            'frame_id': message.header.frame_id,
+        }
+        with self.person_state_lock:
+            self.latest_person_state = state
+            self.person_state_received_at = time.monotonic()
+
+    def sim_person_status(self):
+        with self.person_state_lock:
+            state = None if self.latest_person_state is None else dict(self.latest_person_state)
+            received_at = self.person_state_received_at
+        age = None if not received_at else max(0.0, time.monotonic() - received_at)
+        if state is None:
+            state = {
+                'visible': False,
+                'source': 'synthetic_world_projection',
+                'target_id': 'virtual_person_1',
+                'world_x': 2.5,
+                'world_y': 0.8,
+                'range_m': 0.0,
+                'bearing_rad': 0.0,
+                'image_width': 640,
+                'image_height': 360,
+                'x1': 0,
+                'y1': 0,
+                'x2': 0,
+                'y2': 0,
+                'frame_id': '',
+            }
+        state['connected'] = age is not None and age < 0.5
+        state['age_seconds'] = None if age is None else round(age, 2)
+        return state
 
     def on_detection(self, message):
         now = time.monotonic()
@@ -115,8 +312,12 @@ class WebVideoNode(Node):
                    b'Cache-Control: no-cache\r\n\r\n' + frame + b'\r\n')
 
     def create_app(self):
-        template_folder = get_package_share_directory('web_video_server') + '/templates'
-        app = Flask(__name__, template_folder=template_folder)
+        package_share = Path(get_package_share_directory('web_video_server'))
+        template_folder = str(package_share / 'templates')
+        static_folder = package_share / 'static'
+        app = Flask(
+            __name__, template_folder=template_folder,
+            static_folder=str(static_folder), static_url_path='/static')
 
         @app.route('/', methods=['GET'])
         def index():
@@ -135,21 +336,322 @@ class WebVideoNode(Node):
         def status():
             return jsonify(self.store.status())
 
+        @app.route('/api/head/state', methods=['GET'])
+        def head_state():
+            return jsonify(self.head_status())
+
+        @app.route('/api/sim/base/state', methods=['GET'])
+        def sim_base_state():
+            return jsonify(self.base_status())
+
+        @app.route('/api/sim/person', methods=['GET'])
+        def sim_person_state():
+            return jsonify(self.sim_person_status())
+
+        @app.route('/api/head/catalog', methods=['GET'])
+        def head_catalog():
+            return jsonify({
+                'backend': 'sim',
+                'simulated': True,
+                'motions': catalog_payload(),
+            })
+
+        @app.route('/api/head/assets', methods=['GET'])
+        def head_assets():
+            emotion_root = static_folder / 'emotions'
+            expressions = {}
+            for expression in ('正常', '微笑', '睡觉', '苏醒', '兴奋'):
+                directory = emotion_root / expression
+                if not directory.is_dir():
+                    expressions[expression] = []
+                    continue
+                if expression == '兴奋':
+                    paths = [
+                        path for path in directory.rglob('*.jpg')
+                        if any('2可循环动作' in part for part in path.parts)
+                    ]
+                else:
+                    paths = list(directory.rglob('*.jpg'))
+
+                def frame_order(path):
+                    try:
+                        return (0, int(path.stem))
+                    except ValueError:
+                        return (1, path.name.lower())
+
+                paths.sort(key=frame_order)
+                expressions[expression] = [
+                    url_for(
+                        'static',
+                        filename=path.relative_to(static_folder).as_posix(),
+                    )
+                    for path in paths
+                ]
+            return jsonify({'expressions': expressions})
+
+        @app.route('/api/sim/base/cmd', methods=['POST'])
+        def sim_base_command():
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict) or set(payload) != {'linear_x', 'angular_z'}:
+                return jsonify({
+                    'ok': False,
+                    'error': '请求必须且只能包含 linear_x 和 angular_z。',
+                }), 400
+            linear = payload.get('linear_x')
+            angular = payload.get('angular_z')
+            if (isinstance(linear, bool) or not isinstance(linear, (int, float))
+                    or isinstance(angular, bool) or not isinstance(angular, (int, float))):
+                return jsonify({'ok': False, 'error': '速度必须是有限数值。'}), 400
+            linear = float(linear)
+            angular = float(angular)
+            if not math.isfinite(linear) or not math.isfinite(angular):
+                return jsonify({'ok': False, 'error': '速度必须是有限数值。'}), 400
+            if (abs(linear) > self.MAX_SIM_LINEAR
+                    or abs(angular) > self.MAX_SIM_ANGULAR):
+                return jsonify({
+                    'ok': False,
+                    'error': '速度超出仿真上限：linear ±0.25 m/s，angular ±0.8 rad/s。',
+                }), 400
+            state = self.base_status()
+            if not state['connected'] or state['backend'] != 'sim':
+                return jsonify({
+                    'ok': False,
+                    'error': '虚拟底盘仿真节点未在线，请先启动隔离模拟。',
+                }), 503
+            if self.sim_manual_command_publisher.get_subscription_count() == 0:
+                return jsonify({
+                    'ok': False,
+                    'error': '虚拟底盘没有订阅手动仿真命令。',
+                }), 503
+            source = String()
+            source.data = 'manual'
+            self.sim_control_source_publisher.publish(source)
+            command = Twist()
+            command.linear.x = linear
+            command.angular.z = angular
+            self.sim_manual_command_publisher.publish(command)
+            return jsonify({
+                'ok': True,
+                'backend': 'sim',
+                'simulated': True,
+                'linear_x': linear,
+                'angular_z': angular,
+            }), 202
+
+        @app.route('/api/run', methods=['GET'])
+        def run_status():
+            return jsonify({
+                'run_id': self.turns.run_id,
+                'content_logging': False,
+                'event_logging': self.turns.event_logging_enabled,
+            })
+
+        @app.route('/api/turn', methods=['POST'])
+        def submit_turn():
+            payload = request.get_json(silent=True)
+            text = payload.get('text') if isinstance(payload, dict) else None
+            if not isinstance(text, str) or not text.strip():
+                return jsonify({'ok': False, 'error': '请输入文本内容。'}), 400
+            text = text.strip()
+            if len(text) > 4000 or len(text.encode('utf-8')) > 12000:
+                return jsonify({
+                    'ok': False,
+                    'error': '输入过长，请控制在 4000 个字符以内。',
+                }), 413
+
+            if self.turn_request_publisher.get_subscription_count() == 0:
+                return jsonify({
+                    'ok': False,
+                    'error': '本地 Qwen ROS 桥接节点未连接，请确认演示已启动。',
+                }), 503
+
+            turn_id = uuid.uuid4().hex
+            try:
+                turn = self.turns.create_turn(turn_id, text)
+            except TurnInProgressError:
+                return jsonify({
+                    'ok': False,
+                    'error': '上一轮仍在处理中，请等它结束后再发送。',
+                }), 409
+            message = String()
+            message.data = json.dumps({
+                'schema_version': 1,
+                'turn_id': turn_id,
+                'run_id': self.turns.run_id,
+                'text': text,
+            }, ensure_ascii=False)
+            try:
+                self.turn_request_publisher.publish(message)
+            except Exception as error:
+                self.turns.ingest_event({
+                    'turn_id': turn_id,
+                    'run_id': self.turns.run_id,
+                    'stage': 'failed',
+                    'status': 'failed',
+                    'error_code': 'request_publish_failed',
+                    'response_text': '请求没有送入 ROS，请确认服务仍在运行。',
+                })
+                self.get_logger().error(
+                    'failed to publish web turn ({})'.format(
+                        type(error).__name__
+                    )
+                )
+                return jsonify({'ok': False, 'error': '请求提交失败。'}), 503
+            return jsonify({
+                'ok': True,
+                'turn_id': turn_id,
+                'run_id': self.turns.run_id,
+                'turn': turn,
+            }), 202
+
+        @app.route('/api/turn/<turn_id>', methods=['GET'])
+        def get_turn(turn_id):
+            turn = self.turns.get_turn(turn_id)
+            if turn is None:
+                return jsonify({'error': 'unknown turn'}), 404
+            return jsonify(turn)
+
+        @app.route('/api/turn/<turn_id>/audio', methods=['POST'])
+        def request_turn_audio(turn_id):
+            turn = self.turns.get_turn(turn_id)
+            if turn is None:
+                return jsonify({'ok': False, 'error': 'unknown turn'}), 404
+            try:
+                turn, should_publish = self.turns.request_audio(turn_id)
+            except AudioResponseUnavailable:
+                return jsonify({
+                    'ok': False,
+                    'error': '请先等待文字回复完成。',
+                }), 409
+
+            if turn['audio_status'] == 'ready':
+                return jsonify({
+                    'ok': True,
+                    'turn_id': turn_id,
+                    'audio_status': 'ready',
+                }), 200
+            if should_publish:
+                if self.web_tts_publisher.get_subscription_count() == 0:
+                    self.turns.ingest_event({
+                        'turn_id': turn_id,
+                        'run_id': turn['run_id'],
+                        'stage': 'audio',
+                        'status': 'failed',
+                        'audio_status': 'failed',
+                        'error_code': 'voice_node_unavailable',
+                    })
+                    return jsonify({
+                        'ok': False,
+                        'error': '语音合成节点未连接，请检查 robot_voice。',
+                    }), 503
+                message = String()
+                message.data = json.dumps({
+                    'schema_version': 1,
+                    'turn_id': turn_id,
+                    'run_id': turn['run_id'],
+                    'text': turn['response_text'],
+                }, ensure_ascii=False)
+                try:
+                    self.web_tts_publisher.publish(message)
+                except Exception as error:
+                    self.turns.ingest_event({
+                        'turn_id': turn_id,
+                        'run_id': turn['run_id'],
+                        'stage': 'audio',
+                        'status': 'failed',
+                        'audio_status': 'failed',
+                        'error_code': 'audio_request_publish_failed',
+                    })
+                    self.get_logger().error(
+                        'failed to publish browser TTS request ({})'.format(
+                            type(error).__name__
+                        )
+                    )
+                    return jsonify({
+                        'ok': False,
+                        'error': '语音请求提交失败。',
+                    }), 503
+            return jsonify({
+                'ok': True,
+                'turn_id': turn_id,
+                'audio_status': turn['audio_status'],
+            }), 202
+
+        @app.route('/api/turn/<turn_id>/audio', methods=['GET'])
+        def get_turn_audio(turn_id):
+            turn = self.turns.get_turn(turn_id)
+            if turn is None:
+                return jsonify({'error': 'unknown turn'}), 404
+            if not re.fullmatch(r'[0-9a-f]{32}', turn_id):
+                return jsonify({'error': 'invalid turn id'}), 400
+            run_id = turn['run_id']
+            if not re.fullmatch(r'[0-9a-f]{32}', run_id):
+                return jsonify({'error': 'invalid run id'}), 400
+            audio_path = Path(self.audio_dir) / run_id / (turn_id + '.wav')
+            if turn['audio_status'] != 'ready' or not audio_path.is_file():
+                return jsonify({'error': 'audio is not ready'}), 404
+            return send_file(str(audio_path), mimetype='audio/wav')
+
+        @app.route('/api/turn/active', methods=['GET'])
+        def get_active_turn():
+            return jsonify({'turn': self.turns.active_turn()})
+
         @app.route('/api/command', methods=['POST'])
         def command():
-            value = str((request.get_json(silent=True) or {}).get('command', ''))
+            payload = request.get_json(silent=True)
+            value = payload.get('command') if isinstance(payload, dict) else None
+            if not isinstance(value, str):
+                return jsonify({'ok': False, 'error': 'command must be text'}), 400
+            value = value.strip()
             allowed = {'start_camera', 'stop_camera', 'start_tracking',
-                       'stop_tracking', 'status'}
+                       'stop_tracking', 'status', 'head_cancel'} | set(MOTION_CATALOG)
             if value not in allowed:
                 return jsonify({'ok': False, 'error': 'unsupported command'}), 400
+            if self.command_publisher.get_subscription_count() == 0:
+                return jsonify({
+                    'ok': False,
+                    'error': 'Agent 未连接，命令没有被提交。',
+                }), 503
+            base = self.base_status()
+            simulation_online = base['connected'] and base['backend'] == 'sim'
+            if simulation_online and value in ('start_camera', 'stop_camera'):
+                return jsonify({
+                    'ok': False,
+                    'error': '当前是纯合成跟踪仿真，没有真实摄像头可启停。',
+                }), 409
+            if (simulation_online and value == 'start_tracking'
+                    and not self.get_subscriptions_info_by_topic(
+                        '/robot/sim/detections')):
+                return jsonify({
+                    'ok': False,
+                    'error': '仿真跟踪控制器未在线，无法启动闭环跟踪。',
+                }), 503
+            if value in MOTION_CATALOG or value == 'head_cancel':
+                state = self.head_status()
+                if not state['connected'] or state['backend'] != 'sim':
+                    return jsonify({
+                        'ok': False,
+                        'error': '虚拟头部仿真节点未在线，请先启动演示。',
+                    }), 503
             message = String()
             message.data = value
             self.command_publisher.publish(message)
-            return jsonify({'ok': True, 'command': value})
+            return jsonify({
+                'ok': True,
+                'command': value,
+                'simulated': (
+                    simulation_online or value in MOTION_CATALOG
+                    or value == 'head_cancel'
+                ),
+            }), 202
 
         @app.route('/healthz', methods=['GET'])
         def health():
-            return jsonify({'ok': True, 'streams': self.store.status()})
+            return jsonify({
+                'ok': True,
+                'run_id': self.turns.run_id,
+                'streams': self.store.status(),
+            })
 
         return app
 

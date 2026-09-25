@@ -1,0 +1,11 @@
+{
+  "frame_id": "map",
+  "base_frame_id": "base_footprint",
+  "clearance_m": 0.30,
+  "max_search_m": 2.0,
+  "locations": [
+    {"id": "start", "label": "实验起点", "x": -2.0, "y": -0.5, "yaw": 0.0},
+    {"id": "goal_a", "label": "模拟目标 A", "x": 1.5, "y": -0.5, "yaw": 0.0},
+    {"id": "goal_b", "label": "模拟目标 B", "x": 0.0, "y": 2.5, "yaw": 0.0}
+  ]
+}

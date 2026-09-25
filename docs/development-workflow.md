@@ -23,7 +23,7 @@ BASH
 
 ## Hardware demo boundary
 
-`person_tracking_demo.launch.py` starts the camera, image decoder, detector, tracker, Agent, voice front end and acceptance probe. It reads the RKNN model and test WAV from local-only asset paths. Before starting it, check whether the old workspace is using `/dev/video0`; do not start the old and new camera stacks at the same time. The tracking configuration keeps `dry_run: true`; this is not a motor-control or navigation acceptance test.
+`person_tracking_demo.launch.py` starts the camera, image decoder, detector, tracker, Agent and voice front end. The repeatable acceptance probe is opt-in (`./scripts/run-demo.sh --acceptance`); interactive launches do not inject the test WAV or synthetic detections. The detector reads the RKNN model from its local-only asset path. Before starting it, check whether the old workspace is using `/dev/video0`; do not start the old and new camera stacks at the same time. The tracking configuration keeps `dry_run: true`; this is not a motor-control or navigation acceptance test.
 
 ## Git hygiene
 

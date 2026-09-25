@@ -2,7 +2,8 @@
 """Start the local Qwen service and ROS person-tracking demo on Orange Pi."""
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import ipaddress
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ import sys
 import time
 from typing import Mapping, Optional, Sequence
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, build_opener
 
 
@@ -54,6 +56,7 @@ class DemoConfig:
     ros_domain_id: int
     audio_source: str
     run_acceptance_probe: bool
+    nav2_http_endpoint: str
     log_dir: Path
 
 
@@ -70,12 +73,26 @@ def configure_logging() -> None:
 def build_argument_parser() -> argparse.ArgumentParser:
     """Create the command-line interface for the board-side launcher."""
     parser = argparse.ArgumentParser(
-        description=(
-            "检查本地依赖，启动或复用 Qwen，然后前台运行 "
-            "ROS 人物跟踪演示。"
-        ),
+        description="检查本地依赖并启动 Qwen 与 ROS 机器人演示。",
         epilog=(
             "正式运行按 Ctrl-C 停止 ROS；只会清理由本次启动的 Qwen。"
+        ),
+    )
+    demo_mode = parser.add_mutually_exclusive_group()
+    demo_mode.add_argument(
+        "--acceptance",
+        action="store_true",
+        help=(
+            "运行固定 WAV 与合成检测框的软件验收探针；"
+            "默认交互模式不会注入回放数据。"
+        ),
+    )
+    demo_mode.add_argument(
+        "--navigation-sim",
+        action="store_true",
+        help=(
+            "运行 Qwen → 固定地点 Nav2 理想仿真链路；"
+            "不要求摄像头、视觉模型或音频输入。"
         ),
     )
     parser.add_argument(
@@ -144,13 +161,19 @@ def load_config(
         )
 
     probe_text = _environment_value(
-        env, "DEMO_RUN_ACCEPTANCE_PROBE", "true"
+        env, "DEMO_RUN_ACCEPTANCE_PROBE", "false"
     )
     if probe_text not in ("true", "false"):
         raise DemoError(
             "验收探针配置只能是 true 或 false，当前值：{}".format(
                 probe_text
             )
+        )
+
+    run_acceptance_probe = probe_text == "true"
+    if run_acceptance_probe and audio_source != "wav_file":
+        raise DemoError(
+            "固定样本验收探针必须使用 wav_file；实时麦克风请使用普通交互模式。"
         )
 
     model_alias = _environment_value(
@@ -197,7 +220,10 @@ def load_config(
         web_port=web_port,
         ros_domain_id=int(ros_domain_text, 10),
         audio_source=audio_source,
-        run_acceptance_probe=(probe_text == "true"),
+        run_acceptance_probe=run_acceptance_probe,
+        nav2_http_endpoint=_environment_value(
+            env, "DEMO_NAV2_HTTP_ENDPOINT", "http://127.0.0.1:18092"
+        ).strip(),
         log_dir=Path(
             _environment_value(
                 env,
@@ -236,15 +262,18 @@ def _require_nonempty_file(path: Path, description: str) -> None:
         raise DemoError("{} 不存在或为空：{}".format(description, path))
 
 
-def check_local_assets(config: DemoConfig) -> None:
-    """Check model, workspace, audio, and camera assets without loading them."""
+def check_local_assets(
+    config: DemoConfig, *, require_perception: bool = True
+) -> None:
+    """Check only the assets required by the selected demo profile."""
     if not config.llama_bin.is_file() or not os.access(config.llama_bin, os.X_OK):
         raise DemoError(
             "找不到可执行的 llama-server：{}".format(config.llama_bin)
         )
 
     _require_nonempty_file(config.llama_model, "Qwen 模型文件")
-    _require_nonempty_file(config.vision_model, "视觉 RKNN 模型文件")
+    if require_perception:
+        _require_nonempty_file(config.vision_model, "视觉 RKNN 模型文件")
 
     foxy_setup = Path("/opt/ros/foxy/setup.bash")
     workspace_setup = config.workspace / "install" / "setup.bash"
@@ -256,12 +285,13 @@ def check_local_assets(config: DemoConfig) -> None:
             "请先构建工作区。".format(workspace_setup)
         )
 
-    if config.audio_source == "wav_file":
+    if require_perception and config.audio_source == "wav_file":
         _require_nonempty_file(config.voice_wav, "WAV 测试音频")
 
-    camera = Path("/dev/video0")
-    if not camera.exists():
-        raise DemoError("找不到摄像头设备：{}".format(camera))
+    if require_perception:
+        camera = Path("/dev/video0")
+        if not camera.exists():
+            raise DemoError("找不到摄像头设备：{}".format(camera))
 
 
 def _urlopen_without_proxy(url: str, timeout: float):
@@ -365,16 +395,94 @@ def check_ports_and_model(config: DemoConfig) -> bool:
     return True
 
 
-def preflight(config: DemoConfig) -> bool:
+def _validate_nav2_endpoint(endpoint: str) -> str:
+    """Return an HTTP origin only if it is a loopback-only endpoint."""
+    parsed = urlsplit(endpoint)
+    if (
+        parsed.scheme != "http"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DemoError(
+            "Nav2 隧道地址必须是本机 HTTP 地址，例如 http://127.0.0.1:18092。"
+        )
+    try:
+        is_loopback = ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        is_loopback = parsed.hostname.lower() == "localhost"
+    if not is_loopback:
+        raise DemoError("Nav2 隧道只能连接本机回环地址；未连接到远程任意主机。")
+    return endpoint.rstrip("/")
+
+
+def check_nav2_tunnel(endpoint: str) -> None:
+    """Require a healthy gateway and mapped demo destinations."""
+    origin = _validate_nav2_endpoint(endpoint)
+    try:
+        with _urlopen_without_proxy(origin + "/healthz", timeout=2) as response:
+            payload = json.loads(response.read(8192).decode("utf-8"))
+    except (HTTPError, URLError, OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DemoError(
+            "Mac Nav2 反向隧道不可用；请先运行 scripts/open-nav-sim.sh。"
+        ) from error
+    if (
+        not isinstance(payload, dict)
+        or payload.get("ready") is not True
+        or not str(payload.get("backend", "")).startswith("nav2-jazzy-")
+        or payload.get("simulation") != "idealized-loopback-no-physics"
+    ):
+        raise DemoError(
+            "反向隧道已响应，但不是已就绪的 Nav2 loopback 仿真；拒绝发送导航命令。"
+        )
+
+    try:
+        with _urlopen_without_proxy(
+            origin + "/api/v1/navigation/locations", timeout=2
+        ) as response:
+            locations = json.loads(response.read(8192).decode("utf-8"))
+    except (
+        HTTPError,
+        URLError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        raise DemoError("无法读取 Nav2 仿真的固定地点列表。") from error
+
+    entries = locations.get("locations") if isinstance(locations, dict) else None
+    if not isinstance(entries, list):
+        raise DemoError("Nav2 仿真返回了无效的固定地点列表。")
+    available_ids = {
+        item.get("id")
+        for item in entries
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    required_ids = {"goal_a", "goal_b"}
+    if not required_ids.issubset(available_ids):
+        missing = ", ".join(sorted(required_ids - available_ids))
+        raise DemoError(
+            "SLAM 地图尚未探索出可用目标：{}。请先在 Mac 的隔离仿真中"
+            "扩展地图，再启动板端 Nav2 演示。".format(missing)
+        )
+
+
+def preflight(
+    config: DemoConfig, *, navigation_simulation: bool = False
+) -> bool:
     """Run all read-only checks before starting Qwen, ROS, or the camera."""
     LOGGER.info("[1/4] 检查配置值。")
     LOGGER.info("配置值有效。")
 
-    LOGGER.info(
-        "[2/4] 检查系统命令、模型文件、ROS 工作区和摄像头。"
-    )
+    LOGGER.info("[2/4] 检查系统命令、Qwen 与 ROS 工作区。")
     check_dependencies()
-    check_local_assets(config)
+    check_local_assets(config, require_perception=not navigation_simulation)
+    if navigation_simulation:
+        LOGGER.info("[2b/4] 检查 Mac Nav2 反向隧道与仿真健康状态。")
+        check_nav2_tunnel(config.nav2_http_endpoint)
     LOGGER.info("依赖和本地文件齐备。")
 
     LOGGER.info("[3/4] 检查 Qwen 与网页端口。")
@@ -391,7 +499,9 @@ def preflight(config: DemoConfig) -> bool:
     return qwen_ready
 
 
-def report_preflight(config: DemoConfig, qwen_ready: bool) -> None:
+def report_preflight(
+    config: DemoConfig, qwen_ready: bool, *, navigation_simulation: bool = False
+) -> None:
     """Explain what a successful check-only run established."""
     qwen_state = (
         "已运行，正式启动时将复用"
@@ -408,7 +518,11 @@ def report_preflight(config: DemoConfig, qwen_ready: bool) -> None:
             "true" if config.run_acceptance_probe else "false"
         )
     )
-    print("  跟踪安全边界：dry_run=true，不发布底盘运动命令")
+    if navigation_simulation:
+        print("  演示模式：Nav2 loopback 仿真；仅允许 goal_a / goal_b 固定地点")
+        print("  网页入口：Mac 执行 scripts/open-nav-sim.sh 后访问两个本地页面")
+    else:
+        print("  跟踪安全边界：dry_run=true，不发布底盘运动命令")
     print("只检查模式没有启动 Qwen、ROS 节点或摄像头。")
 
 
@@ -635,7 +749,7 @@ def print_access_instructions(config: DemoConfig) -> None:
     """Print the Mac-side SSH tunnel command when Tailscale is available."""
     print(
         "网页只监听板端本机地址。请在 Mac 的另一终端运行 "
-        "scripts/open-ui.sh 建立 SSH 隧道。"
+        "scripts/open-ui.sh 或 scripts/open-nav-sim.sh 建立 SSH 隧道。"
     )
     try:
         result = subprocess.run(
@@ -675,33 +789,55 @@ def print_access_instructions(config: DemoConfig) -> None:
 
 
 def launch_ros(
-    config: DemoConfig, controller: ShutdownController
+    config: DemoConfig,
+    controller: ShutdownController,
+    *,
+    navigation_simulation: bool = False,
 ) -> int:
     """Run the ROS launch in the foreground and shut down its process group."""
     controller.raise_if_requested()
     os.environ["ROS_DOMAIN_ID"] = str(config.ros_domain_id)
 
-    command = [
-        "ros2",
-        "launch",
-        "robot_bringup",
-        "person_tracking_demo.launch.py",
-        "audio_source:={}".format(config.audio_source),
-        "input_wav_path:={}".format(config.voice_wav),
-        "model_path:={}".format(config.vision_model),
-        "run_acceptance_probe:={}".format(
-            "true" if config.run_acceptance_probe else "false"
-        ),
-    ]
+    if navigation_simulation:
+        command = [
+            "ros2", "launch", "robot_bringup", "navigation_sim_demo.launch.py",
+            "llama_endpoint:=http://127.0.0.1:{}/completion".format(
+                config.llama_port
+            ),
+            "nav2_http_endpoint:={}".format(config.nav2_http_endpoint),
+            "web_port:={}".format(config.web_port),
+        ]
+        launch_label = "Qwen → 固定地点 Nav2 仿真"
+    else:
+        command = [
+            "ros2",
+            "launch",
+            "robot_bringup",
+            "person_tracking_demo.launch.py",
+            "audio_source:={}".format(config.audio_source),
+            "input_wav_path:={}".format(config.voice_wav),
+            "model_path:={}".format(config.vision_model),
+            "run_acceptance_probe:={}".format(
+                "true" if config.run_acceptance_probe else "false"
+            ),
+        ]
+        launch_label = "ROS 人物跟踪演示"
 
-    LOGGER.info(
-        "[6/6] 启动 ROS 人物跟踪演示："
-        "domain=%s，音频=%s，验收探针=%s，"
-        "dry_run=true。",
-        config.ros_domain_id,
-        config.audio_source,
-        "true" if config.run_acceptance_probe else "false",
-    )
+    if navigation_simulation:
+        LOGGER.info(
+            "[6/6] 启动%s：ROS_DOMAIN_ID=%s。",
+            launch_label,
+            config.ros_domain_id,
+        )
+    else:
+        LOGGER.info(
+            "[6/6] 启动%s：ROS_DOMAIN_ID=%s，音频=%s，验收探针=%s，"
+            "dry_run=true。",
+            launch_label,
+            config.ros_domain_id,
+            config.audio_source,
+            "true" if config.run_acceptance_probe else "false",
+        )
     print_access_instructions(config)
 
     try:
@@ -722,7 +858,12 @@ def launch_ros(
         stop_owned_process(process, "ROS launch")
 
 
-def _run(config: DemoConfig, check_only: bool) -> int:
+def _run(
+    config: DemoConfig,
+    check_only: bool,
+    *,
+    navigation_simulation: bool = False,
+) -> int:
     """Execute preflight and, unless requested otherwise, run the full demo."""
     controller = ShutdownController()
     previous_sigint = signal.getsignal(signal.SIGINT)
@@ -731,14 +872,19 @@ def _run(config: DemoConfig, check_only: bool) -> int:
     signal.signal(signal.SIGTERM, controller.handle_signal)
 
     try:
-        qwen_ready = preflight(config)
+        qwen_ready = preflight(
+            config, navigation_simulation=navigation_simulation
+        )
         controller.raise_if_requested()
 
         if check_only:
             LOGGER.info(
                 "只检查模式结束；没有启动 Qwen、ROS 节点或摄像头。"
             )
-            report_preflight(config, qwen_ready)
+            report_preflight(
+                config, qwen_ready,
+                navigation_simulation=navigation_simulation,
+            )
             return 0
 
         if qwen_ready:
@@ -747,7 +893,11 @@ def _run(config: DemoConfig, check_only: bool) -> int:
             start_qwen(config, controller)
 
         controller.raise_if_requested()
-        return launch_ros(config, controller)
+        return launch_ros(
+            config,
+            controller,
+            navigation_simulation=navigation_simulation,
+        )
     except ShutdownRequested as error:
         LOGGER.info("演示已按请求停止。")
         return 128 + error.signum
@@ -776,7 +926,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except DemoError as error:
         LOGGER.error("错误：%s", error)
         return 2
-    return _run(config, args.check_only)
+    if args.acceptance:
+        config = replace(
+            config,
+            run_acceptance_probe=True,
+            audio_source="wav_file",
+        )
+    return _run(
+        config,
+        args.check_only,
+        navigation_simulation=args.navigation_sim,
+    )
 
 
 if __name__ == "__main__":

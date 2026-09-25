@@ -60,8 +60,34 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.web_port, 8080)
         self.assertEqual(config.ros_domain_id, 74)
         self.assertEqual(config.audio_source, "wav_file")
-        self.assertTrue(config.run_acceptance_probe)
+        self.assertFalse(config.run_acceptance_probe)
         self.assertEqual(config.llama_model_alias, "qwen3-robot")
+
+    def test_acceptance_flag_selects_deterministic_wav_replay_profile(self):
+        config = make_config(audio_source="microphone")
+        with mock.patch.object(
+            demo_launcher, "load_config", return_value=config
+        ), mock.patch.object(
+            demo_launcher, "_run", return_value=0
+        ) as run_demo:
+            result = demo_launcher.main(["--acceptance"])
+
+        self.assertEqual(result, 0)
+        effective_config = run_demo.call_args.args[0]
+        self.assertTrue(effective_config.run_acceptance_probe)
+        self.assertEqual(effective_config.audio_source, "wav_file")
+
+    def test_navigation_sim_flag_selects_isolated_nav_profile(self):
+        config = make_config()
+        with mock.patch.object(
+            demo_launcher, "load_config", return_value=config
+        ), mock.patch.object(
+            demo_launcher, "_run", return_value=0
+        ) as run_demo:
+            result = demo_launcher.main(["--navigation-sim"])
+
+        self.assertEqual(result, 0)
+        self.assertTrue(run_demo.call_args.kwargs["navigation_simulation"])
 
     def test_invalid_ports_and_duplicate_ports_are_rejected(self):
         cases = (
@@ -84,6 +110,13 @@ class ConfigTests(unittest.TestCase):
         cases = (
             ({"DEMO_AUDIO_SOURCE": "unknown"}, "音频来源"),
             ({"DEMO_RUN_ACCEPTANCE_PROBE": "yes"}, "验收探针"),
+            (
+                {
+                    "DEMO_RUN_ACCEPTANCE_PROBE": "true",
+                    "DEMO_AUDIO_SOURCE": "microphone",
+                },
+                "固定样本验收探针必须使用 wav_file",
+            ),
             ({"ROS_DOMAIN_ID": "7x"}, "ROS_DOMAIN_ID"),
         )
         for environment, message in cases:
@@ -173,6 +206,75 @@ class ModelAndPreflightTests(unittest.TestCase):
         port_check.assert_called_once_with(config.web_port)
         health_check.assert_not_called()
 
+    def test_nav2_preflight_requires_ready_loopback_gateway(self):
+        health = {
+            "ready": True,
+            "backend": "nav2-jazzy-slam-loopback",
+            "simulation": "idealized-loopback-no-physics",
+        }
+        locations = {
+            "locations": [
+                {"id": "start"},
+                {"id": "goal_a"},
+                {"id": "goal_b"},
+            ]
+        }
+        with mock.patch.object(
+            demo_launcher,
+            "_urlopen_without_proxy",
+            side_effect=[
+                io.BytesIO(json.dumps(health).encode("utf-8")),
+                io.BytesIO(json.dumps(locations).encode("utf-8")),
+            ],
+        ) as open_url:
+            demo_launcher.check_nav2_tunnel("http://127.0.0.1:18092")
+        self.assertEqual(
+            open_url.call_args_list,
+            [
+                mock.call("http://127.0.0.1:18092/healthz", timeout=2),
+                mock.call(
+                    "http://127.0.0.1:18092/api/v1/navigation/locations",
+                    timeout=2,
+                ),
+            ],
+        )
+
+    def test_nav2_preflight_rejects_non_loopback_or_wrong_service(self):
+        with self.assertRaisesRegex(demo_launcher.DemoError, "回环地址"):
+            demo_launcher.check_nav2_tunnel("http://192.168.1.12:18092")
+        wrong_service = {
+            "ready": True,
+            "backend": "other-service",
+            "simulation": "idealized-loopback-no-physics",
+        }
+        with mock.patch.object(
+            demo_launcher,
+            "_urlopen_without_proxy",
+            return_value=io.BytesIO(json.dumps(wrong_service).encode("utf-8")),
+        ):
+            with self.assertRaisesRegex(demo_launcher.DemoError, "拒绝发送"):
+                demo_launcher.check_nav2_tunnel("http://localhost:18092")
+
+    def test_nav2_preflight_rejects_unmapped_slam_destinations(self):
+        health = {
+            "ready": True,
+            "backend": "nav2-jazzy-slam-loopback",
+            "simulation": "idealized-loopback-no-physics",
+        }
+        locations = {"locations": [{"id": "start"}]}
+        with mock.patch.object(
+            demo_launcher,
+            "_urlopen_without_proxy",
+            side_effect=[
+                io.BytesIO(json.dumps(health).encode("utf-8")),
+                io.BytesIO(json.dumps(locations).encode("utf-8")),
+            ],
+        ):
+            with self.assertRaisesRegex(
+                demo_launcher.DemoError, "地图尚未探索出可用目标"
+            ):
+                demo_launcher.check_nav2_tunnel("http://127.0.0.1:18092")
+
 
 class ProcessOwnershipTests(unittest.TestCase):
     def test_qwen_starts_on_loopback_and_is_registered_as_owned(self):
@@ -231,6 +333,31 @@ class ProcessOwnershipTests(unittest.TestCase):
         self.assertIn("audio_source:=microphone", command)
         self.assertIn("run_acceptance_probe:=false", command)
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
+
+    def test_navigation_sim_launch_uses_only_local_qwen_and_named_location_api(self):
+        config = make_config(ros_domain_id=31, web_port=8088)
+        controller = demo_launcher.ShutdownController()
+        process = mock.Mock()
+        process.wait.return_value = 0
+
+        with mock.patch.object(
+            demo_launcher.subprocess, "Popen", return_value=process
+        ) as popen, mock.patch.object(
+            demo_launcher, "print_access_instructions"
+        ), mock.patch.object(
+            demo_launcher, "stop_owned_process"
+        ):
+            result = demo_launcher.launch_ros(
+                config, controller, navigation_simulation=True
+            )
+
+        command = popen.call_args.args[0]
+        self.assertEqual(result, 0)
+        self.assertEqual(command[:4], [
+            "ros2", "launch", "robot_bringup", "navigation_sim_demo.launch.py"
+        ])
+        self.assertIn("nav2_http_endpoint:=http://127.0.0.1:18092", command)
+        self.assertIn("web_port:=8088", command)
 
     def test_signal_is_forwarded_only_to_active_ros_launcher(self):
         controller = demo_launcher.ShutdownController()
