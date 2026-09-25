@@ -90,13 +90,10 @@ TUNNEL_PID=$!
 printf '[2/3] 验证网页和板端反向接口……\n'
 ready=false
 for attempt in {1..15}; do
-  if curl --noproxy '*' -fsS --max-time 1 \
-    "http://127.0.0.1:${LOCAL_CHAT_PORT}/healthz" >/dev/null 2>&1; then
-    if ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" \
-      "curl --noproxy '*' -fsS --max-time 2 'http://127.0.0.1:${BOARD_NAV2_TUNNEL_PORT}/healthz' >/dev/null"; then
-      ready=true
-      break
-    fi
+  if ssh "${SSH_OPTIONS[@]}" "$SSH_TARGET" \
+    "curl --noproxy '*' -fsS --max-time 2 'http://127.0.0.1:${BOARD_NAV2_TUNNEL_PORT}/healthz' >/dev/null"; then
+    ready=true
+    break
   fi
   if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
     wait "$TUNNEL_PID" || true

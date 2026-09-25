@@ -418,8 +418,7 @@ llama-server 的 `/metrics` 需要显式启用 `--metrics`；本次板端 help �
 
 性能改进作为各阶段旁路工作：A测出语音瓶颈再做常驻；D测出视觉瓶颈再做MPP/RGA；E发现CPU/内存不足再调整部署。无需先完成全部优化才能推进功能。
 
-**下一步最推荐 A：把现有链路变成真正可交互、可听见、可解释的页面。** 这一步同时解决没有音箱、不会看终端日志、分不清模型/Agent/相机状态的问题；随后 B/C 会让缺少硬件也有明显可见进展。
-> 更新：上方“下一步最推荐 A”是初稿时的建议；阶段 A、B 已实施，当前应按下方状态进入阶段 C。
+**当前主线状态：A–E 已实施，F 的 AMCL/在线 SLAM 软件验证路径已建立。** 继续工作优先做现场浏览器目视验收、把主要操作沉淀为稳定入口；只有确实需要验证碰撞、惯性或动态障碍物时，再扩展 Gazebo/Harmonic 等物理仿真。实体底盘仍需后续实机验收。
 
 
 如果你最想先看“机器人能动”，可以把 C 排到 B 前面；不需要先上3D，也不必等持续语音全部做好。
@@ -442,8 +441,11 @@ llama-server 的 `/metrics` 需要显式启用 `--metrics`；本次板端 help �
 - 阶段 B 的虚拟头部与网页接口已在板端构建并隔离联调；29 个动作、100 帧资源和 HTTP→Agent→Action 状态闭环通过。未完成 URDF/3D，也未真实控制舵机；浏览器视觉检查与真实 Qwen 函数调用仍待现场验收，详见 [阶段 B 记录](phase-b-virtual-head-simulation.md)。
 - 阶段 C/D 的差速虚拟底盘、超时归零、里程计/TF、网页轨迹及虚拟人物投影闭环已经实现并通过板端隔离联调，详见 [阶段 C/D 记录](phase-cd-virtual-base-tracking.md)。
 - C/D 不经过 C270、RKNN/NPU、电机、PWM 或 MCU；不能据此声称真实视觉跟踪/底盘已验收。网页采用合成投影，浏览器目视验收仍待用户现场打开。
-- 当前主线下一步为阶段 E：在 Mac 的独立 ARM64 Linux 虚拟机中运行真实 Nav2 loopback，以有版本边界的 HTTP 网关接入板端 Agent；不依赖 Foxy/Jazzy 跨发行版 DDS。
-- 启动位置：`run-demo.sh` 运行于 Orange Pi；`open-ui.sh` 是 Mac 侧 SSH 隧道入口（须在 Mac 有该仓库工作副本时运行）。在 Mac 没有代码副本时，可手动建立 SSH 本地转发。
+- 阶段 E 已在独立 ARM64 Linux 虚拟机里运行真实 Nav2 Jazzy loopback，并经版本边界明确的 HTTP API/SSH 隧道接入 Orange Pi Foxy Agent；自然语言请求成功提交固定地点导航，已观察到 goal 成功和另一任务取消。不使用跨发行版 DDS。
+- 阶段 F 的 AMCL 与在线 SLAM profile 已实现；SLAM 地图会随虚拟 scan 扩展，地图未覆盖目标时服务会拒绝暴露该目标。板端启动前置检查能够提示该条件。SLAM profile 的生命周期 bond watchdog 有模拟器专用配置；完整物理传感器噪声、动态障碍和刚体动力学尚未实现。
+- 阶段 E/F 详细操作、构建和验收证据见 [阶段 E/F 实施与端到端验收记录](phase-ef-nav2-simulation-implementation.md)。主线操作步骤也记录于 Obsidian：`收件箱/步骤记录/小沫机器人-阶段EF-Nav2与SLAM端到端联调-2026-09-25.md`。
+- 当前一条板端 Qwen 请求耗时约 17.3 秒（单次观察，不是统计 benchmark）；Mac 隔离仿真容器测试时观察到约 381.8 MiB 内存和约 40% CPU 的瞬时占用，也不是正式性能结论。若做优化，应先按多轮固定样本采样并报告中位数/P95。
+- 启动位置：Mac 在独立 Colima `ros-nav2` profile 运行 Nav2；Mac 运行 `scripts/open-nav-sim.sh` 建立双向 SSH 隧道；Orange Pi 运行 `./scripts/run-demo.sh --navigation-sim` 启动 Qwen 与 ROS Agent。Nav2 地图由 Mac 浏览器渲染。停机顺序与端口边界见阶段 E/F 记录。
 
 ## 9. 建议代码边界与仓库管理
 
