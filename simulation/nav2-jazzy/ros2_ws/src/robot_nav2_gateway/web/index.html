@@ -21,7 +21,7 @@ dl{display:grid;grid-template-columns:1fr auto;gap:4px 14px;margin:12px 0}dt{col
 </head>
 <body>
 <main>
-<header><h1>小沫机器人 · 导航原型</h1><span class="badge">真实 Nav2 Action · 理想 loopback 仿真，无物理</span></header>
+<header><h1>小沫机器人 · 导航原型</h1><span class="badge" id="simBadge">真实 Nav2 Action · 理想 loopback 仿真，无物理</span></header>
 <p class="note">ROS 2 Jazzy/Nav2 在 Mac 的 ARM64 Linux 虚拟机运行；地图与任务状态经本地 HTTP 提供，画面由此浏览器渲染。非 Gazebo，不代表实车定位、碰撞或电机性能。</p>
 <div class="layout">
 <section class="panel"><div class="row"><strong>Nav2 地图 / 轨迹</strong><span id="health" class="muted">连接中…</span></div><canvas id="map"></canvas></section>
@@ -30,17 +30,17 @@ dl{display:grid;grid-template-columns:1fr auto;gap:4px 14px;margin:12px 0}dt{col
 <div id="locations" class="locations"></div>
 <div class="row" style="margin-top:18px"><strong>导航任务</strong><button id="cancel" class="cancel" disabled>取消当前任务</button></div>
 <div id="task" class="task">等待 Nav2 地图、初始位姿与 NavigateToPose Action 就绪。</div>
-<dl><dt>后端</dt><dd id="backend">nav2-jazzy-loopback</dd><dt>仿真性质</dt><dd>无惯性 / 无碰撞</dd></dl>
+<dl><dt>后端</dt><dd id="backend">nav2-jazzy-ideal-loopback</dd><dt>仿真性质</dt><dd id="simulationKind">无惯性 / 无碰撞</dd></dl>
 </section>
 </div>
 </main>
 <script>
 const canvas=document.getElementById("map"),ctx=canvas.getContext("2d");
-let grid=null,baseMap=null,locations=[];
+let grid=null,baseMap=null,locations=[],mapVersion=-1,locationMapVersion=-1;
 const health=document.getElementById("health"),taskBox=document.getElementById("task"),cancelButton=document.getElementById("cancel");
 function worldPixel(x,y){return [(x-grid.origin.x)/grid.resolution,grid.height-1-(y-grid.origin.y)/grid.resolution]}
 function paintBaseMap(m){
-  grid=m;canvas.width=m.width;canvas.height=m.height;
+  grid=m;mapVersion=m.map_version??mapVersion+1;canvas.width=m.width;canvas.height=m.height;
   baseMap=document.createElement("canvas");baseMap.width=m.width;baseMap.height=m.height;
   const bctx=baseMap.getContext("2d"),image=bctx.createImageData(m.width,m.height),raw=atob(m.data);
   for(let i=0;i<raw.length;i++){let v=raw.charCodeAt(i);if(v>127)v-=256;
@@ -61,16 +61,22 @@ function showTask(t){if(!t){taskBox.textContent="当前无活动导航任务。"
   taskBox.textContent="地点："+t.location_label+"\\n状态："+t.status+left+(t.error?"\\n错误："+t.error:"");
   cancelButton.disabled=!["running","accepted"].includes(t.status);taskBox.dataset.taskId=t.task_id
 }
+function renderLocations(ready){
+  const box=document.getElementById("locations");box.replaceChildren();
+  for(const loc of locations){const b=document.createElement("button");b.textContent="前往 "+loc.label;
+    b.disabled=!ready;b.onclick=()=>startTask(loc.id);box.appendChild(b)}
+}
 async function refresh(){
   try{
     const h=await fetch("/healthz").then(r=>r.json());
     health.textContent=h.ready?"Nav2 就绪":"Nav2 初始化中";health.style.color=h.ready?"#56c7a5":"#f4c26b";
-    if(!grid&&h.map_ready){const m=await fetch("/api/v1/navigation/map").then(r=>r.json());paintBaseMap(m)}
-    if(h.map_ready&&!locations.length){const d=await fetch("/api/v1/navigation/locations").then(r=>r.json());locations=d.locations||[];
-      const box=document.getElementById("locations");box.replaceChildren();
-      for(const loc of locations){const b=document.createElement("button");b.textContent="前往 "+loc.label;b.disabled=!h.ready;b.onclick=()=>startTask(loc.id);box.appendChild(b)}}
     const s=await fetch("/api/v1/navigation/state").then(r=>r.json());
+    if(h.map_ready&&s.map_version!==mapVersion){const r=await fetch("/api/v1/navigation/map");if(r.ok)paintBaseMap(await r.json())}
+    if(h.map_ready&&s.map_version!==locationMapVersion){const d=await fetch("/api/v1/navigation/locations").then(r=>r.json());
+      locations=d.locations||[];locationMapVersion=s.map_version;renderLocations(h.ready)}
     document.getElementById("backend").textContent=s.backend+" · "+s.simulation;
+    document.getElementById("simBadge").textContent="真实 Nav2 Action · "+s.localization_mode+" · loopback 无物理";
+    document.getElementById("simulationKind").textContent=s.simulation;
     document.getElementById("pose").textContent=s.pose?"x "+s.pose.x.toFixed(2)+" / y "+s.pose.y.toFixed(2)+" / θ "+s.pose.yaw.toFixed(2):"位姿等待中";
     showTask(s.active_task);render(s);
     for(const b of document.querySelectorAll("#locations button"))b.disabled=!h.ready
@@ -87,7 +93,7 @@ cancelButton.onclick=async()=>{
     const d=await r.json();if(!r.ok)throw new Error(d.error||("HTTP "+r.status));showTask(d)}
   catch(e){taskBox.textContent="取消失败："+e.message}
 };
-(async()=>{try{const r=await fetch("/api/v1/navigation/map");if(r.ok)paintBaseMap(await r.json())}catch(e){};refresh();setInterval(refresh,500)})();
+(async()=>{refresh();setInterval(refresh,500)})();
 </script>
 </body>
 </html>

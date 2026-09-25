@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any
 
 from robot_head.catalog import MODEL_FUNCTIONS
+from .navigation_client import NAVIGATION_MODEL_FUNCTIONS
 
 
 class DecisionKind(str, Enum):
@@ -34,6 +35,7 @@ class Decision:
 _ROS_COMMANDS = frozenset(
     {"status", "start_camera", "stop_camera", "start_tracking", "stop_tracking"}
 ) | MODEL_FUNCTIONS
+_ROS_COMMANDS = _ROS_COMMANDS | frozenset(NAVIGATION_MODEL_FUNCTIONS.values())
 _STATUS_QUERY_FUNCTIONS = ("query_camera_status", "query_person_tracking_status")
 _DEFAULT_MAX_BYTES = 16 * 1024
 

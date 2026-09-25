@@ -2,6 +2,7 @@ import json
 import unittest
 
 from robot_agent.llm_adapter import DecisionKind, decide_model_output
+from robot_agent.navigation_client import NAVIGATION_MODEL_FUNCTIONS
 
 
 class TestModelOutputDecision(unittest.TestCase):
@@ -120,6 +121,24 @@ class TestModelOutputDecision(unittest.TestCase):
         self.assertIs(decision.kind, DecisionKind.REJECTED)
         self.assertEqual(decision.reason, "function_not_allowlisted")
         self.assertIsNone(decision.command)
+
+    def test_fixed_navigation_functions_are_denied_by_default(self):
+        decision = decide_model_output(
+            '{"res":"开始导航","fc":["navigate_to_goal_a"]}'
+        )
+
+        self.assertIs(decision.kind, DecisionKind.REJECTED)
+        self.assertEqual(decision.reason, "function_not_allowlisted")
+
+    def test_fixed_navigation_functions_map_only_when_explicitly_enabled(self):
+        for function, command in NAVIGATION_MODEL_FUNCTIONS.items():
+            with self.subTest(function=function):
+                decision = decide_model_output(
+                    json.dumps({"res": "导航仿真", "fc": [function]}),
+                    NAVIGATION_MODEL_FUNCTIONS,
+                )
+                self.assertIs(decision.kind, DecisionKind.COMMAND)
+                self.assertEqual(decision.command, command)
 
 
 if __name__ == "__main__":

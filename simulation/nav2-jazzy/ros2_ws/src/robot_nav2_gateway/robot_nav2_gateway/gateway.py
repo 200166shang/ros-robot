@@ -16,7 +16,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Path
 from rclpy.action import ActionClient
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
@@ -36,18 +36,28 @@ class NavigationGateway(Node):
     def __init__(self):
         super().__init__("robot_nav2_http_gateway")
         self.declare_parameter("http_port", 18091)
+        self.declare_parameter("simulation_mode", "ideal")
+        self.declare_parameter("locations_file", "locations.json")
+        self.declare_parameter("scan_frame_id", "base_scan")
         port = int(self.get_parameter("http_port").value)
+        self._simulation_mode = str(self.get_parameter("simulation_mode").value)
+        self._scan_frame_id = str(self.get_parameter("scan_frame_id").value)
+        if not self._scan_frame_id:
+            raise ValueError("scan_frame_id must not be empty")
         self._lock = threading.RLock()
         self._frame_id = "map"
         self._base_frame_id = "base_footprint"
         self._clearance_m = 0.30
         self._max_search_m = 2.0
         self._location_seeds = []
+        self._initial_pose_seed = None
         self._locations = {}
         self._map = None
+        self._map_version = 0
         self._path = []
         self._pose_initialized = False
         self._initial_pose_published_at = 0.0
+        self._scan_tf_wait_logged = False
         self._tasks = {}
         self._active_task_id = None
         self._goal_handles = {}
@@ -68,7 +78,8 @@ class NavigationGateway(Node):
         self.create_timer(1.0, self._monitor_tasks)
 
         share_dir = get_package_share_directory("robot_nav2_gateway")
-        with open(os.path.join(share_dir, "config", "locations.json"),
+        locations_file = str(self.get_parameter("locations_file").value)
+        with open(os.path.join(share_dir, "config", locations_file),
                   "r", encoding="utf-8") as config_file:
             config = json.load(config_file)
         self._frame_id = str(config["frame_id"])
@@ -78,6 +89,7 @@ class NavigationGateway(Node):
         self._location_seeds = config["locations"]
         if not self._location_seeds or self._location_seeds[0].get("id") != "start":
             raise ValueError("locations.json must begin with the fixed start location")
+        self._initial_pose_seed = config.get("initial_pose", self._location_seeds[0])
 
         self._web_path = os.path.join(share_dir, "web", "index.html")
         self._http_server = ThreadingHTTPServer(("0.0.0.0", port), self._handler_type())
@@ -191,6 +203,7 @@ class NavigationGateway(Node):
     def _on_map(self, message):
         with self._lock:
             self._map = message
+            self._map_version += 1
             self._locations = self._resolve_locations(message)
         if not self._locations:
             self.get_logger().error(
@@ -298,7 +311,12 @@ class NavigationGateway(Node):
         return resolved
 
     def _initial_pose_message(self):
-        start = self._locations.get("start")
+        if self._simulation_mode == "slam":
+            # The truth-map pose used by the scan generator can differ from the
+            # local map-frame origin produced by SLAM.
+            start = self._initial_pose_seed
+        else:
+            start = self._locations.get("start")
         if start is None:
             return None
         message = PoseWithCovarianceStamped()
@@ -318,9 +336,37 @@ class NavigationGateway(Node):
 
     def _initialize_pose(self):
         with self._lock:
-            if (self._map is None or "start" not in self._locations
-                    or self._pose_initialized):
+            if self._pose_initialized:
                 return
+            if self._simulation_mode == "slam":
+                can_publish_initial_pose = bool(self._location_seeds)
+            else:
+                can_publish_initial_pose = (
+                    self._map is not None and "start" in self._locations
+                )
+            if not can_publish_initial_pose:
+                return
+        if self._simulation_mode == "slam":
+            # The loopback simulator stops checking its laser transform after
+            # its first initial pose. Wait here so a startup race cannot leave
+            # every synthetic scan empty for the lifetime of this process.
+            try:
+                self._tf_buffer.lookup_transform(
+                    self._base_frame_id, self._scan_frame_id, rclpy.time.Time()
+                )
+            except Exception:
+                if not self._scan_tf_wait_logged:
+                    self.get_logger().info(
+                        "Waiting for %s -> %s TF before seeding SLAM loopback"
+                        % (self._base_frame_id, self._scan_frame_id)
+                    )
+                    self._scan_tf_wait_logged = True
+                return
+            if self._scan_tf_wait_logged:
+                self.get_logger().info(
+                    "Laser transform is ready; seeding SLAM loopback pose"
+                )
+                self._scan_tf_wait_logged = False
         try:
             self._tf_buffer.lookup_transform(
                 self._frame_id, self._base_frame_id, rclpy.time.Time()
@@ -358,7 +404,8 @@ class NavigationGateway(Node):
         return {
             "schema_version": 1,
             "ready": bool(map_ready and pose_ready and action_ready),
-            "backend": "nav2-jazzy-loopback",
+            "backend": "nav2-jazzy-%s-loopback" % self._simulation_mode,
+            "localization_mode": self._simulation_mode,
             "simulation": "idealized-loopback-no-physics",
             "map_ready": map_ready,
             "initial_pose_ready": pose_ready,
@@ -368,12 +415,14 @@ class NavigationGateway(Node):
     def map_snapshot(self):
         with self._lock:
             grid = self._map
+            map_version = self._map_version
         if grid is None:
             return None
         origin = grid.info.origin
         yaw = self._origin_yaw(origin)
         raw = bytes((int(value) & 0xff) for value in grid.data)
         return {
+            "map_version": map_version,
             "frame_id": grid.header.frame_id,
             "width": grid.info.width,
             "height": grid.info.height,
@@ -414,13 +463,16 @@ class NavigationGateway(Node):
         with self._lock:
             task = self._tasks.get(self._active_task_id) if self._active_task_id else None
             path = [list(item) for item in self._path]
+            map_version = self._map_version
             active_task = None if task is None else {
                 key: value for key, value in task.items() if not key.startswith("_")
             }
         state = {
             "schema_version": 1,
-            "backend": "nav2-jazzy-loopback",
+            "backend": "nav2-jazzy-%s-loopback" % self._simulation_mode,
+            "localization_mode": self._simulation_mode,
             "simulation": "idealized-loopback-no-physics",
+            "map_version": map_version,
             "pose": pose,
             "path": path,
             "active_task": active_task,
@@ -592,7 +644,10 @@ class NavigationGateway(Node):
 def main():
     rclpy.init()
     node = NavigationGateway()
-    executor = MultiThreadedExecutor(num_threads=4)
+    # ROS callbacks only cache short messages or schedule async actions. The HTTP
+    # server has its own thread, so a single executor avoids the measurable
+    # polling overhead of four idle ROS worker threads in this small gateway.
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()

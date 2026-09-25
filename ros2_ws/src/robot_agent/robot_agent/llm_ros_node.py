@@ -12,6 +12,7 @@ from std_msgs.msg import String
 
 from .llama_client import LlamaCompletionClient
 from .llm_adapter import DecisionKind, decide_model_output
+from .navigation_client import NAVIGATION_MODEL_FUNCTIONS
 from robot_head.catalog import MODEL_FUNCTIONS, MOTION_CATALOG
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -22,6 +23,13 @@ DEFAULT_SYSTEM_PROMPT = (
 REJECTION_TEXT = "我理解你的请求，但当前原型不执行设备控制指令。"
 SERVICE_ERROR_TEXT = "本地模型服务暂不可用，请稍后重试。"
 COMMAND_TIMEOUT_TEXT = "Agent 未及时确认命令结果，无法确认是否执行。"
+NAVIGATION_SYSTEM_PROMPT = (
+    "[仅限本次显式启用的导航仿真] 可用函数名只有 "
+    "navigate_to_goal_a、navigate_to_goal_b、cancel_navigation、navigation_status。"
+    "目标是固定地点，禁止生成坐标或其他参数。导航只在 Mac 上的 Nav2 理想仿真中运行，"
+    "不是实体移动；任务提交不等于已经到达。只有用户明确要求前往目标A或目标B时才调用导航，"
+    "只有用户明确要求取消时才调用 cancel_navigation，查询状态使用 navigation_status。"
+)
 APPROVED_FUNCTION_ALLOWLIST = {
     ("query_camera_status", "query_person_tracking_status"): "status",
     "start_receiving_image": "start_camera",
@@ -49,17 +57,25 @@ class LlmRosNode(Node):
         ).value
         n_predict = self.declare_parameter("n_predict", 128).value
         enable_commands = self.declare_parameter("enable_commands", False).value
+        enable_simulated_navigation = bool(
+            self.declare_parameter("enable_simulated_navigation", False).value
+        )
         command_timeout = self.declare_parameter("command_timeout_seconds", 5.0).value
 
-        self._system_prompt = system_prompt
+        self._system_prompt = str(system_prompt)
+        if enable_simulated_navigation:
+            self._system_prompt += NAVIGATION_SYSTEM_PROMPT
         self._client = LlamaCompletionClient(
             endpoint=endpoint,
             timeout_seconds=float(timeout_seconds),
             n_predict=int(n_predict),
         )
-        self._function_allowlist = (
-            APPROVED_FUNCTION_ALLOWLIST if enable_commands else None
+        function_allowlist = dict(
+            APPROVED_FUNCTION_ALLOWLIST if enable_commands else {}
         )
+        if enable_simulated_navigation:
+            function_allowlist.update(NAVIGATION_MODEL_FUNCTIONS)
+        self._function_allowlist = function_allowlist or None
         self._command_timeout = float(command_timeout)
         self._command_condition = threading.Condition()
         self._pending_command = None
@@ -78,7 +94,7 @@ class LlmRosNode(Node):
         self.create_subscription(
             String, "/llm/turn/request", self._on_turn_request, 10
         )
-        if enable_commands:
+        if enable_commands or enable_simulated_navigation:
             self._command_publisher = self.create_publisher(
                 String, "/agent/command", 10
             )
@@ -91,7 +107,12 @@ class LlmRosNode(Node):
                 callback_group=self._agent_response_callback_group,
             )
 
-        command_mode = "enabled" if enable_commands else "disabled"
+        command_modes = []
+        if enable_commands:
+            command_modes.append("approved device/software commands")
+        if enable_simulated_navigation:
+            command_modes.append("fixed-location Nav2 simulation")
+        command_mode = ", ".join(command_modes) if command_modes else "disabled"
         self.get_logger().info(
             "Qwen ROS bridge ready: /llm/user_input -> /llm/response; "
             f"approved command mode={command_mode}"
@@ -290,6 +311,27 @@ class LlmRosNode(Node):
 
     @staticmethod
     def _confirmed_action_text(command, payload):
+        if command in NAVIGATION_MODEL_FUNCTIONS.values():
+            navigation = payload.get("navigation") or {}
+            status = navigation.get("status", "unknown")
+            task_id = navigation.get("task_id")
+            if command.startswith("navigate_to_"):
+                location = navigation.get("location_label") or command[
+                    len("navigate_to_"):
+                ]
+                task_text = "，任务编号 {}".format(task_id) if task_id else ""
+                return (
+                    "已向 Nav2 理想仿真提交前往「{}」的任务{}，当前状态：{}。"
+                    "这是 Mac 上的虚拟导航，不会驱动实体底盘；任务提交不代表已到达。"
+                ).format(location, task_text, status)
+            if command == "cancel_navigation":
+                return "已向 Nav2 仿真发送取消请求，当前状态：{}。取消完成以任务终态为准。".format(
+                    status
+                )
+            return "当前 Nav2 仿真导航状态：{}。{}".format(
+                status,
+                "任务编号 {}。".format(task_id) if task_id else "当前没有导航任务。",
+            )
         if command in MODEL_FUNCTIONS:
             head = payload.get("head_state") or {}
             pitch = head.get("pitch_deg")
