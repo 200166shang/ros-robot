@@ -1,5 +1,7 @@
 # ROS Robot
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 ROS 2 application software for the Orange Pi 3B robot, migrated from the XiaoMo
 project. The board workspace targets Ubuntu 20.04, ROS 2 Foxy, and ARM64.
 
