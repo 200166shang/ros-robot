@@ -13,6 +13,8 @@
 /local-assets/
 /local-data/
 /models/
+# Local research, planning, and working notes. Keep public docs intentional.
+/docs/
 **/*.rknn
 **/*.gguf
 **/*.onnx
