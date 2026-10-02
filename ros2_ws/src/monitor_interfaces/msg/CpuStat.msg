@@ -1,0 +1,9 @@
+string cpu_name
+float32 cpu_percent
+float32 usr_percent
+float32 system_percent
+float32 nice_percent
+float32 idle_percent
+float32 io_wait_percent
+float32 irq_percent
+float32 soft_irq_percent

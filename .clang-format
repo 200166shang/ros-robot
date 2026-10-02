@@ -1,0 +1,19 @@
+Language: Cpp
+BasedOnStyle: Google
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Attach
+PointerAlignment: Left
+SpaceBeforeParens: ControlStatements
+# Boolean syntax is accepted by older clang-format versions.
+SortIncludes: true
+NamespaceIndentation: None
+IndentCaseLabels: true
+AccessModifierOffset: -4
+AlignConsecutiveAssignments: true
+AllowShortLoopsOnASingleLine: false
+BinPackArguments: false
+BinPackParameters: false
