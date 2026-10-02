@@ -1,0 +1,7 @@
+string node_name
+int32 pid
+uint64 process_starttime_ticks
+string registration_id
+---
+bool success
+string message

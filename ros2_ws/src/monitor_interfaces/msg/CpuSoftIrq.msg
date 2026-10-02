@@ -1,0 +1,11 @@
+string cpu_name
+int64 hi
+int64 timer
+int64 net_tx
+int64 net_rx
+int64 block
+int64 irq_poll
+int64 tasklet
+int64 sched
+int64 hrtimer
+int64 rcu
