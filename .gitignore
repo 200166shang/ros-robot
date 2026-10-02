@@ -1,9 +1,13 @@
 # Colcon/CMake output. Keep these in the workspace for local development,
 # but never version generated build trees.
+/build/
+/Testing/
 /ros2_ws/build/
 /ros2_ws/install/
 /ros2_ws/log/
 /ros2_ws/Testing/
+/ros2_ws/*.bag/
+/ros2_ws/*.db3*
 
 # Local-only model and voice assets. Store them outside this repository when possible.
 /local-assets/

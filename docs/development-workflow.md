@@ -28,3 +28,16 @@ BASH
 ## Git hygiene
 
 Review `git status --short` and the staged diff before each commit. Do not use `git add -A` blindly. In particular, verify that no `.rknn`, `.gguf`, `.onnx`, `.wav`, `.m4a`, `rknn_api.h`, ROS build output, credentials or machine-private recordings are staged.
+
+Commit ROS package source, package manifests, launch/configuration files, package
+tests, project documentation, and repository scripts. Keep colcon output, root
+level build output, Python caches, rosbag recordings, model weights, and
+machine-specific editor configuration out of Git. Store bags and private test
+data under `/home/orangepi/local-data/` or another documented path outside the
+checkout. Commit a small test fixture only when it is intentionally selected,
+redistributable, and required to reproduce a test.
+
+The repository root contains project-level documentation and scripts; it is not
+a build workspace. Build ROS packages from `ros2_ws/`, with package source kept
+directly in `ros2_ws/src/<package>/`. Keep runtime files with the package that
+owns them, especially launch files and ROS parameters with `robot_bringup`.

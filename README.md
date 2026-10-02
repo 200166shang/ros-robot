@@ -4,8 +4,28 @@ This repository contains the ROS 2 modules migrated from the XiaoMo robot projec
 
 The ROS workspace is `ros2_ws/`. It contains the application packages listed below; the tutorial-only `cpp_pubsub` talker/listener demo is intentionally excluded.
 
-- `robot_bringup`, `robot_interfaces`, `robot_agent`, `robot_voice`
-- `usb_camera`, `img_decode`, `rknn_yolov6`, `object_track`, `web_video_server`
+- `robot_interfaces`, `monitor_interfaces`: ROS messages and services.
+- `usb_camera`, `img_decode`, `rknn_yolov6`, `object_track`: camera and perception.
+- `robot_agent`, `robot_voice`, `web_video_server`: interaction and application services.
+- `monitor`, `monitor_client`, `robot_bringup`: system monitoring and launch composition.
+
+ROS packages live directly under `ros2_ws/src/`; each package owns its manifest,
+launch files, runtime configuration, and package tests. Colcon output stays under
+`ros2_ws/`. Repository-level scripts, documentation, and script tests stay outside
+the workspace.
+
+```text
+ros-robot/
+├── docs/             # Project design, operation, and migration records
+├── scripts/          # Repository-level developer and demo entry points
+├── tests/            # Tests for repository-level scripts
+└── ros2_ws/
+    └── src/          # ROS 2 packages, one package per directory
+```
+
+If the Jazzy Nav2 experiment is reintroduced, keep it under
+`simulation/nav2-jazzy/` with its own workspace and container configuration;
+do not add its packages to the Orange Pi workspace.
 
 ## Build on Orange Pi
 
@@ -70,3 +90,5 @@ The person-tracking demo opens the camera and launches several ROS nodes. Only r
 - `oragnepi-pratice`: general Orange Pi networking, hardware, SSH and Codex-on-board operating notes.
 - `/home/orangepi/models/` and `/home/orangepi/local-data/`: local model and test assets; keep outside Git.
 - `ros2_ws/build`, `install`, `log`: generated build outputs; keep outside Git tracking.
+- Rosbag recordings and machine-specific editor settings: local-only; keep outside Git.
+- The repository root is not a colcon or CMake build directory. Run colcon from `ros2_ws/`.
