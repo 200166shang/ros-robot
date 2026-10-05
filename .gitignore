@@ -14,7 +14,9 @@
 /local-data/
 /models/
 # Local research, planning, and working notes. Keep public docs intentional.
-/docs/
+/docs/*
+!/docs/agents/
+!/docs/adr/
 **/*.rknn
 **/*.gguf
 **/*.onnx
