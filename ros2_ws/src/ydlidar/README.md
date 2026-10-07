@@ -18,11 +18,13 @@ sudo apt install ros-foxy-rviz2
 ```
 
 当前 Orange Pi 终端使用 Zsh，因此要加载 `.zsh` 环境脚本（Bash 用户请将
-`.zsh` 替换为 `.bash`），然后启动驱动：
+`.zsh` 替换为 `.bash`）。SDK 安装在 `/tmp/ydlidar-sdk-install`，启动驱动前
+还需将它的动态库目录加入搜索路径；如果 SDK 安装在其他位置，请相应替换路径：
 
 ```bash
 source /opt/ros/foxy/setup.zsh
 source ~/code/ros-robot/ros2_ws/install/setup.zsh
+export LD_LIBRARY_PATH="/tmp/ydlidar-sdk-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ros2 launch ydlidar ydlidar.launch.py
 ```
 
@@ -71,9 +73,10 @@ Foxglove 的直接实时连接目前需要 Developer seat（开发者席位）�
 
 ```bash
 ros2 topic hz /scan
-ros2 topic echo /scan --once --field header.frame_id
+ros2 topic echo /scan
 ```
 
+`ros2 topic echo` 会持续输出消息，确认 `header.frame_id` 后按 Ctrl+C 停止。
 如果连接失败，请检查桥接是否正在运行，以及 Mac 是否能通过 TCP `9090` 访问
 Orange Pi。
 
@@ -93,11 +96,14 @@ sudo apt install ros-foxy-rviz2
 ```
 
 The Orange Pi terminal in this setup uses Zsh, so source the `.zsh` setup files
-(Bash users should replace `.zsh` with `.bash`) before starting the driver:
+(Bash users should replace `.zsh` with `.bash`). The SDK is installed under
+`/tmp/ydlidar-sdk-install`, so add its library directory to the loader path before
+starting the driver. If the SDK is installed elsewhere, replace this path:
 
 ```bash
 source /opt/ros/foxy/setup.zsh
 source ~/code/ros-robot/ros2_ws/install/setup.zsh
+export LD_LIBRARY_PATH="/tmp/ydlidar-sdk-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ros2 launch ydlidar ydlidar.launch.py
 ```
 
@@ -150,8 +156,11 @@ Before opening either visualizer, confirm the topic and frame:
 
 ```bash
 ros2 topic hz /scan
-ros2 topic echo /scan --once --field header.frame_id
+ros2 topic echo /scan
 ```
+
+`ros2 topic echo` prints continuously; check `header.frame_id` and press Ctrl+C to
+stop it.
 
 If the connection fails, check that the bridge is running and that the Mac can
 reach the Orange Pi on TCP port `9090`.
