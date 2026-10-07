@@ -38,6 +38,45 @@ rviz2 -d "$(ros2 pkg prefix ydlidar --share)/config/ydlidar.rviz"
 坐标系下，因此这个独立视图不需要额外的 TF 发布器。扫描角度遵循 ROS 约定：
 零弧度朝向 +X，正角度绕 +Z 轴逆时针旋转。
 
+### 没有显示器时，通过 noVNC 查看 RViz2
+
+在 Orange Pi 上安装虚拟显示、VNC 和 noVNC 组件（RViz2 如果尚未安装，请按上面的步骤安装）：
+
+```bash
+sudo apt install xvfb openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri
+```
+
+先按上面的步骤在一个终端启动雷达驱动并保持运行。然后在 Orange Pi 的另一个终端中启动 headless RViz2：
+
+```bash
+cd ~/code/ros-robot
+scripts/rviz2-headless.sh start
+scripts/rviz2-headless.sh status
+```
+
+该脚本会在 `1280x800` 虚拟屏幕中启动 RViz2，并让 VNC 与 noVNC 只监听 Orange Pi 本机回环地址。
+`stop` 会关闭 RViz2 和显示服务，但不会停止雷达驱动；`logs` 可查看启动日志：
+
+```bash
+scripts/rviz2-headless.sh logs
+scripts/rviz2-headless.sh stop
+```
+
+在 Mac 终端中建立 SSH 隧道。使用 `6081` 作为 Mac 本地端口，以免和 Mac 上已有的 noVNC 容器冲突：
+
+```bash
+ssh -N -L 6081:127.0.0.1:6080 orangepi@<ORANGE_PI_IP>
+```
+
+保持 SSH 命令运行，在 Mac 浏览器打开：
+
+```text
+http://localhost:6081/vnc.html?autoconnect=true&host=localhost&port=6081
+```
+
+关闭浏览器或 SSH 隧道不会停止 Orange Pi 上的驱动或 RViz2。重新建立隧道并打开上述地址即可重连。
+noVNC 负责显示 RViz2 桌面；Mac 上的 Foxglove 仍可通过 Rosbridge 直接查看 `/scan` 数据。
+
 ### 在 Mac 浏览器中使用 Foxglove
 
 ROS 2 Foxy 早于当前 Foxglove Bridge 二进制包支持的发行版；旧版 ROS 2 需要
@@ -117,6 +156,51 @@ The view uses `laser_link` as its fixed frame and displays `/scan`. The scan is
 expressed in the lidar frame, so no additional TF publisher is needed for this
 standalone view. Scan angles follow the ROS convention: zero radians points
 along +X and positive angles rotate counterclockwise around +Z.
+
+### View RViz2 through noVNC without a monitor
+
+Install the virtual display, VNC, and noVNC components on the Orange Pi (install
+RViz2 as described above if it is not already present):
+
+```bash
+sudo apt install xvfb openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri
+```
+
+Start the lidar driver in one terminal and leave it running. In another Orange Pi
+terminal, start headless RViz2:
+
+```bash
+cd ~/code/ros-robot
+scripts/rviz2-headless.sh start
+scripts/rviz2-headless.sh status
+```
+
+The script starts RViz2 in a `1280x800` virtual display and binds VNC and noVNC
+to the Orange Pi loopback interface. `stop` shuts down RViz2 and the display
+services without stopping the lidar driver; `logs` shows startup output:
+
+```bash
+scripts/rviz2-headless.sh logs
+scripts/rviz2-headless.sh stop
+```
+
+On the Mac, create an SSH tunnel. The local port is `6081` to avoid a conflict
+with a noVNC container already using port `6080` on the Mac:
+
+```bash
+ssh -N -L 6081:127.0.0.1:6080 orangepi@<ORANGE_PI_IP>
+```
+
+Keep that SSH command running and open this address in the Mac browser:
+
+```text
+http://localhost:6081/vnc.html?autoconnect=true&host=localhost&port=6081
+```
+
+Closing the browser or SSH tunnel does not stop the driver or RViz2 on the
+Orange Pi. Recreate the tunnel and reopen the URL to reconnect. noVNC displays
+the RViz2 desktop; Foxglove on the Mac can still inspect `/scan` directly over
+Rosbridge.
 
 ### Foxglove in a Mac browser
 
