@@ -51,3 +51,12 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Hardware smoke check: the node connected to `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, SDK 1.2.7 reported healthy status, and `/scan` delivered `laser_link` scans with 255 points and 129–133 valid ranges in observed samples. `/stop_scan` yielded zero new scans over the 1-second observation; `/start_scan` resumed publication. On shutdown the node exited and released `/dev/ttyUSB0`.
 - Issue tracker: acceptance criteria were checked, validation evidence was commented, and #6 was closed.
 - Next action: continue with #7's RViz2 and Mac browser visualization slice.
+
+## YDLIDAR visualization checkpoint — 2026-10-07 (Asia/Shanghai)
+
+- Issue: [#7 View YDLIDAR scans in RViz2 and from a Mac browser](https://github.com/200166shang/ros-robot/issues/7). GitHub confirms #7 remains open and its only blocker, #6, is closed.
+- Branch and implementation: `codex/issue-7-rviz2-mac-browser`; added a package README with Orange Pi RViz2 and Foxy `rosbridge_server` + Mac Foxglove steps, and an RViz2 preset using `/scan` and fixed frame `laser_link`. Both views use the existing driver topic; no second acquisition path or custom browser app was added. Foxy uses Rosbridge because current Foxglove Bridge binary packages do not support Foxy; Foxglove documents Rosbridge connections and LaserScan support.
+- Validation: RViz preset parses as YAML and its LaserScan topic/frame values were checked; driver launch Python syntax and `git diff --check` pass. Python suite: 29 passed. ROS workspace suite: 10 passed across 13 packages. No `rviz2` executable is installed in this environment, so the GUI preset and live browser connection remain unverified here. No hardware actuation was performed.
+- Commit: `a0e38f5 docs: add YDLIDAR visualization setup for issue 7`.
+- Review: Standards and Spec reviews found no violations, smells, missing criteria, scope creep, or apparent implementation errors.
+- Next action: install RViz2 on the Orange Pi if needed, then verify the preset and Mac browser connection against a live scan before checking off or closing #7.
