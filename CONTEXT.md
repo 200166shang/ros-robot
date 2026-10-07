@@ -51,3 +51,42 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Hardware smoke check: the node connected to `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, SDK 1.2.7 reported healthy status, and `/scan` delivered `laser_link` scans with 255 points and 129–133 valid ranges in observed samples. `/stop_scan` yielded zero new scans over the 1-second observation; `/start_scan` resumed publication. On shutdown the node exited and released `/dev/ttyUSB0`.
 - Issue tracker: acceptance criteria were checked, validation evidence was commented, and #6 was closed.
 - Next action: continue with #7's RViz2 and Mac browser visualization slice.
+
+## YDLIDAR visualization checkpoint — 2026-10-07 (Asia/Shanghai)
+
+- Issue: [#7 View YDLIDAR scans in RViz2 and from a Mac browser](https://github.com/200166shang/ros-robot/issues/7). GitHub confirms #7 remains open and its only blocker, #6, is closed.
+- Branch and implementation: `codex/issue-7-rviz2-mac-browser`; added a bilingual package README with Orange Pi RViz2 and Foxy `rosbridge_server` + Mac Foxglove steps, and an RViz2 preset using `/scan` and fixed frame `laser_link`. Both views use the existing driver topic; no second acquisition path or custom browser app was added. Foxy uses Rosbridge because current Foxglove Bridge binary packages do not support Foxy; Foxglove documents Rosbridge connections and LaserScan support.
+- Validation: RViz preset parses as YAML and its LaserScan topic/frame values were checked; Python suite: 29 passed and ROS workspace suite: 10 passed across 13 packages. In Zsh, sourcing the Foxy and workspace `setup.zsh` files resolves `ros2` and `ydlidar`. Diagnosed the initial launch failure: `/tmp/ydlidar-sdk-install/lib` was missing from `LD_LIBRARY_PATH`; `ldd` resolves the SDK after adding that path. With the path set, the driver connected to the by-id serial port using SDK 1.2.7, reported healthy status, and `/scan` output had `frame_id: laser_link`; Ctrl+C stopped the scan and node cleanly. The bilingual guide now includes the SDK library path and Foxy-compatible topic echo commands. No `rviz2` executable is installed, so the RViz GUI and Mac browser connection remain unverified; no chassis actuation was performed.
+- Commit: `a0e38f5 docs: add YDLIDAR visualization setup for issue 7`.
+- Review: Standards and Spec reviews found no violations, smells, missing criteria, scope creep, or apparent implementation errors.
+- Next action: install RViz2 on the Orange Pi if needed, then verify the preset and Mac browser connection against a live scan before checking off or closing #7.
+
+## YDLIDAR browser live-view verification — 2026-10-07 (Asia/Shanghai)
+
+- Issue: [#7 View YDLIDAR scans in RViz2 and from a Mac browser](https://github.com/200166shang/ros-robot/issues/7) remains open; #6 is closed.
+- User verification: Foxglove in the Mac browser connected to `ws://192.168.3.101:9090`, displayed live red LaserScan points with frame `laser_link`, and the points changed as an object moved in front of the radar. This confirms the driver → Rosbridge → browser path using the existing `/scan` stream. The Image panel waiting for images is expected because this setup publishes LaserScan, not camera images.
+- Remaining acceptance work: RViz2 GUI display on the Orange Pi has not yet been verified; `rviz2` was not installed in the earlier environment check. Keep #7 open until that criterion is tested.
+- Next action: install or otherwise make RViz2 available on the Orange Pi, load `ydlidar.rviz`, and verify `/scan` renders in `laser_link`.
+
+## Headless RViz2 / noVNC plan evaluation — 2026-10-07 (Asia/Shanghai)
+
+- Related issues: [ros-robot #7](https://github.com/200166shang/ros-robot/issues/7) remains open for RViz2 validation; [robot-docker #6](https://github.com/200166shang/robot-docker/issues/6) is closed and its current implementation is on `robot-docker` commit `7d7a3c76`.
+- Reviewed the `robot-docker` Compose and GUI startup scripts. Its Mac-side noVNC container points to the same project's `sim:5900`; `make sim-rviz` launches ROS 2 Jazzy RViz2 inside that simulation container. The current setup does not display the Orange Pi desktop or subscribe to its Foxy `/scan` by itself.
+- Initial recommendation (superseded by the implementation checkpoint below): reuse only the Mac noVNC browser frontend and route it to a VNC server attached to RViz2 on the board.
+- Research note: `docs/research/novnc-rviz2-headless-evaluation.md` is intentionally ignored by `.gitignore` as a local research note. No Docker daemon on the Mac was available to this session, so repointing the Mac container and measuring performance remain untested. No hardware state was changed.
+- User clarified to borrow the noVNC architecture without modifying `robot-docker`. Updated #7's implementation plan and added pending acceptance criteria for a virtual Orange Pi display, Mac noVNC access over an SSH tunnel, and reconnecting without stopping the driver/RViz2.
+- Next action at that checkpoint: confirm the board has (or can install) RViz2 and choose where the noVNC service should run.
+
+## Headless RViz2 implementation checkpoint — 2026-10-07 (Asia/Shanghai)
+
+- User decision: borrow the noVNC approach from `robot-docker` without modifying that repository; migrate the headless RViz2 path into `ros-robot` and run it on the Orange Pi.
+- Issue: [#7 View YDLIDAR scans in RViz2 and from a Mac browser](https://github.com/200166shang/ros-robot/issues/7) remains open for review. Its implementation plan specifies a board-local virtual display, RViz2, VNC/noVNC services bound to loopback, and a Mac SSH tunnel. All acceptance criteria are now checked.
+- Decision: run Xvfb, Openbox, x11vnc, websockify/noVNC, and Foxy RViz2 natively on the Orange Pi. This avoids changing or depending on `robot-docker`'s Jazzy simulation service and avoids exposing VNC to the LAN. The Mac only opens the tunneled noVNC page. Foxglove remains the verified direct ROS-topic view.
+- Implemented in this checkout: `scripts/rviz2-headless.sh` manages the headless display and RViz2 process, and `ros2_ws/src/ydlidar/README.md` documents the workflow in Chinese and English. The helper's stop operation leaves the lidar driver running. Both VNC and websockify are configured for loopback only.
+- Environment evidence: `rviz2` resolves after sourcing `/opt/ros/foxy/setup.zsh` and `ros2_ws/install/setup.zsh`. The board had `xserver-common` held at `2:1.20.13-1ubuntu1~20.04.8`; pinning `xvfb=2:1.20.8-2ubuntu2` allowed APT to install the requested components and 35 new packages with zero upgrades or removals. The held package was not changed.
+- Runtime validation: started the YDLIDAR driver with the SDK library path and confirmed a live `/scan` subscription in RViz2. RViz2 showed `/scan` in `laser_link`, LaserScan status was OK, and the captured 1280x800 virtual display contained the red scan points. A ROS 2 echo showed `frame_id: laser_link`, 260 ranges, and about 0.165 seconds per scan. `scripts/rviz2-headless.sh start` and `status` succeeded; noVNC returned HTTP 200, VNC sent `RFB 003.008`, and two WebSocket reconnects returned `101 Switching Protocols` while driver/RViz2/VNC/websockify PIDs stayed unchanged. `stop` removed the GUI services and left the driver running; the GUI service and driver were restarted afterward for user access.
+- Validation: `bash -n scripts/rviz2-headless.sh` and `git diff --check` passed. The user confirmed the Mac SSH tunnel/noVNC browser view works and the scan points move with the radar scene. Local checks also confirmed RViz2's live `/scan` rendering, noVNC HTTP/RFB/WebSocket connectivity, and reconnects with service PIDs unchanged. No chassis actuation was performed. Research details remain in the local, ignored `docs/research/novnc-rviz2-headless-evaluation.md` note.
+- Review: Standards review found no documented-rule breaches or clear smells. Spec review found no scope deviations apart from runtime items that were pending at review time; local runtime checks above now cover the Orange Pi display and service reconnect path.
+- Commits: `9d1bca2 feat: add headless RViz2 access over noVNC`; installer guidance and runtime notes are committed. Issue #7 records the implementation plan and all acceptance criteria as complete. `robot-docker` remains unchanged.
+- User verification: Mac browser access through the SSH tunnel works, and the scan points move with the radar scene. Issue #7 was updated with this evidence.
+- Next action: review and merge the PR for Issue #7.

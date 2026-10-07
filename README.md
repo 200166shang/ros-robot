@@ -9,6 +9,7 @@ project. The board workspace targets Ubuntu 20.04, ROS 2 Foxy, and ARM64.
 
 - **Interfaces:** `robot_interfaces`, `monitor_interfaces`
 - **Camera and perception:** `usb_camera`, `img_decode`, `rknn_yolov6`, `object_track`
+- **Radar:** [`ydlidar`](ros2_ws/src/ydlidar/README.md)
 - **Application:** `robot_agent`, `robot_voice`, `web_video_server`
 - **System and launch:** `monitor`, `monitor_client`, `robot_bringup`
 

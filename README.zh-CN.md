@@ -9,6 +9,7 @@
 
 - **接口：** `robot_interfaces`、`monitor_interfaces`
 - **相机与感知：** `usb_camera`、`img_decode`、`rknn_yolov6`、`object_track`
+- **雷达：** [`ydlidar` 可视化说明](ros2_ws/src/ydlidar/README.md)
 - **应用：** `robot_agent`、`robot_voice`、`web_video_server`
 - **系统与启动：** `monitor`、`monitor_client`、`robot_bringup`
 
