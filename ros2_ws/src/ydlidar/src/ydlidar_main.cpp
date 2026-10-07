@@ -8,9 +8,11 @@
 
 namespace {
 
+// 硬件 adapter：把节点配置映射到厂商 SDK，并把 SDK 扫描结果整理成包内 Scan 类型。
 class YdLidarSdkSource final : public ydlidar::LidarSource {
 public:
     bool initialize(const ydlidar::Configuration &configuration) override {
+        // 串口、采样、角度和量程参数在此一次性写入 SDK，然后打开设备连接。
         laser_.setlidaropt(
             LidarPropSerialPort, configuration.port.c_str(), configuration.port.size());
         laser_.setlidaropt(LidarPropIgnoreArray,
@@ -44,6 +46,7 @@ public:
         if (!laser_.doProcessSimple(source)) {
             return false;
         }
+        // 保留 SDK 给出的时间、弧度制扫描元数据和原始点；ROS 消息组装留在节点一侧。
         destination.stamp_ns        = source.stamp;
         destination.angle_min       = source.config.min_angle;
         destination.angle_max       = source.config.max_angle;
@@ -77,6 +80,7 @@ private:
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     try {
+        // 运行链路：ROS 参数 -> YdLidarNode -> SDK adapter -> USB 雷达；节点对外发布 scan。
         auto node = std::make_shared<YdLidarNode>(std::make_unique<YdLidarSdkSource>());
         rclcpp::spin(node);
     } catch (const std::exception &error) {

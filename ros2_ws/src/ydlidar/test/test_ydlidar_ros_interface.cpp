@@ -40,6 +40,7 @@ public:
     }
     bool read(ydlidar::Scan &scan) override {
         ++stats_->reads;
+        // 固定样例让 ROS 接口测试验证元数据、点位映射和低于 range_min 的无效点。
         scan.stamp_ns        = 1234567890ULL;
         scan.angle_min       = 0.0F;
         scan.angle_max       = 0.3F;
@@ -85,7 +86,8 @@ private:
 };
 
 TEST_F(YdLidarRosInterfaceTest, PublishesScansAndHonorsStartStopServices) {
-    auto stats    = std::make_shared<SourceStats>();
+    auto stats = std::make_shared<SourceStats>();
+    // 用模拟 source 驱动真实节点，再从订阅者和 service client 观察公开 ROS 接口。
     auto node     = std::make_shared<YdLidarNode>(std::make_unique<FakeLidarSource>(stats));
     auto observer = std::make_shared<rclcpp::Node>("ydlidar_interface_observer");
     std::mutex message_mutex;

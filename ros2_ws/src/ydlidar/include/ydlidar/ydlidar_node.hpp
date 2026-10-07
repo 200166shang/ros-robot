@@ -9,10 +9,12 @@
 
 class YdLidarNode : public rclcpp::Node {
 public:
+    // 注入扫描数据源：生产入口传 SDK adapter，ROS 接口测试传模拟数据源。
     explicit YdLidarNode(std::unique_ptr<ydlidar::LidarSource> source);
     ~YdLidarNode() override;
 
 private:
+    // 定时读取一帧扫描，映射为 sensor_msgs/LaserScan 后发布到相对话题 scan。
     void publish_scan();
 
     std::unique_ptr<ydlidar::LidarSource> source_;
