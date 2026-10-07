@@ -60,3 +60,10 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Commit: `a0e38f5 docs: add YDLIDAR visualization setup for issue 7`.
 - Review: Standards and Spec reviews found no violations, smells, missing criteria, scope creep, or apparent implementation errors.
 - Next action: install RViz2 on the Orange Pi if needed, then verify the preset and Mac browser connection against a live scan before checking off or closing #7.
+
+## YDLIDAR browser live-view verification — 2026-10-07 (Asia/Shanghai)
+
+- Issue: [#7 View YDLIDAR scans in RViz2 and from a Mac browser](https://github.com/200166shang/ros-robot/issues/7) remains open; #6 is closed.
+- User verification: Foxglove in the Mac browser connected to `ws://192.168.3.101:9090`, displayed live red LaserScan points with frame `laser_link`, and the points changed as an object moved in front of the radar. This confirms the driver → Rosbridge → browser path using the existing `/scan` stream. The Image panel waiting for images is expected because this setup publishes LaserScan, not camera images.
+- Remaining acceptance work: RViz2 GUI display on the Orange Pi has not yet been verified; `rviz2` was not installed in the earlier environment check. Keep #7 open until that criterion is tested.
+- Next action: install or otherwise make RViz2 available on the Orange Pi, load `ydlidar.rviz`, and verify `/scan` renders in `laser_link`.
