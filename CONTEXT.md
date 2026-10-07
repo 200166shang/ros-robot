@@ -34,10 +34,11 @@ This file is a handoff checkpoint. Recheck source, issue state, and the working 
 ## YDLIDAR ROS 2 driver checkpoint — 2026-10-07 (Asia/Shanghai)
 
 - Issue: [#6 ROS 2 driver and LaserScan](https://github.com/200166shang/ros-robot/issues/6).
-- Implemented: added `ros2_ws/src/ydlidar/` with an `ament_cmake` ROS 2 Foxy package, SDK 1.2.7 CMake dependency, configurable X2 settings, `LaserScan` publication on relative `scan`, `start_scan`/`stop_scan` services, shutdown stop/disconnect, and a launch entry point defaulting to the validated USB by-id path.
+- Implemented: added `ros2_ws/src/ydlidar/` with an `ament_cmake` ROS 2 Foxy package, SDK 1.2.7 CMake dependency, configurable X2 settings, `LaserScan` publication on relative `scan`, `start_scan`/`stop_scan` services, shutdown stop/disconnect, and a launch entry point defaulting to the validated USB by-id path. The ROS node accepts an internal scan-source seam so the public ROS interfaces can be tested without hardware.
 - Decisions: retained the reference node's degree-valued SDK angle options, radians from SDK scan metadata, `ceil` point binning, and default zero fill for invalid ranges. Used distinct `lidar_driver_type` and integer SDK `lidar_type` parameters per #5.
-- Validation: launch Python syntax compilation and `git diff --check` passed. Package configuration reached the expected missing external dependency: this host has ROS 2 Foxy but no installed YDLIDAR SDK 1.2.7 CMake package/library; the repository's SDK archive is only a Git LFS pointer in the sibling checkout. No hardware actuation was performed.
-- Next action: complete source review and commit the implementation. Build and hardware scan/service smoke checks remain to run on an environment with SDK 1.2.7 installed and the lidar connected.
+- Validation: the ROS interface gtest passes (1/1), covering LaserScan metadata/data, invalid range fill, auto-start, stop/start service behavior, and shutdown disconnect. The interface/test target built in ROS 2 Foxy with `-DYDLIDAR_BUILD_HARDWARE_NODE=OFF`; launch Python syntax and `git diff --check` passed. The normal hardware-node build remains unverified because this host lacks the SDK 1.2.7 CMake package/library and the sibling repository has only a Git LFS pointer for its SDK archive. No hardware actuation was performed.
+- Review: the Standards and Spec reviews found no remaining issues. Commits: `88df7dc` adds the driver and `50a1f1d` adds the test seam/interface test.
+- Next action: run the full driver build and hardware scan/service smoke checks when SDK 1.2.7 is available, then continue with #7's RViz2 and Mac browser visualization slice.
 
 ## Future checkpoint format
 
