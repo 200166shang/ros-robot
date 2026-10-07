@@ -17,11 +17,12 @@
 sudo apt install ros-foxy-rviz2
 ```
 
-在一个终端中加载 ROS 和工作空间，并启动驱动：
+当前 Orange Pi 终端使用 Zsh，因此要加载 `.zsh` 环境脚本（Bash 用户请将
+`.zsh` 替换为 `.bash`），然后启动驱动：
 
 ```bash
-source /opt/ros/foxy/setup.bash
-source ~/code/ros-robot/ros2_ws/install/setup.bash
+source /opt/ros/foxy/setup.zsh
+source ~/code/ros-robot/ros2_ws/install/setup.zsh
 ros2 launch ydlidar ydlidar.launch.py
 ```
 
@@ -46,8 +47,8 @@ ROS 2 消息，包括 `sensor_msgs/msg/LaserScan`。
 
 ```bash
 sudo apt install ros-foxy-rosbridge-server
-source /opt/ros/foxy/setup.bash
-source ~/code/ros-robot/ros2_ws/install/setup.bash
+source /opt/ros/foxy/setup.zsh
+source ~/code/ros-robot/ros2_ws/install/setup.zsh
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 ```
 
@@ -91,11 +92,12 @@ Install RViz2 if it is not already present:
 sudo apt install ros-foxy-rviz2
 ```
 
-In one terminal, source ROS and the workspace and start the driver:
+The Orange Pi terminal in this setup uses Zsh, so source the `.zsh` setup files
+(Bash users should replace `.zsh` with `.bash`) before starting the driver:
 
 ```bash
-source /opt/ros/foxy/setup.bash
-source ~/code/ros-robot/ros2_ws/install/setup.bash
+source /opt/ros/foxy/setup.zsh
+source ~/code/ros-robot/ros2_ws/install/setup.zsh
 ros2 launch ydlidar ydlidar.launch.py
 ```
 
@@ -123,8 +125,8 @@ in another terminal:
 
 ```bash
 sudo apt install ros-foxy-rosbridge-server
-source /opt/ros/foxy/setup.bash
-source ~/code/ros-robot/ros2_ws/install/setup.bash
+source /opt/ros/foxy/setup.zsh
+source ~/code/ros-robot/ros2_ws/install/setup.zsh
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 ```
 
