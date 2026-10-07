@@ -1,0 +1,38 @@
+cmake_minimum_required(VERSION 3.5)
+project(ydlidar)
+
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 14)
+endif()
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
+option(YDLIDAR_BUILD_HARDWARE_NODE "Build the node linked to YDLIDAR SDK" ON)
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+endif()
+
+if(YDLIDAR_BUILD_HARDWARE_NODE)
+  find_package(ydlidar_sdk 1.2.7 REQUIRED)
+  add_executable(ydlidar_node src/ydlidar_main.cpp src/ydlidar_node.cpp)
+  target_include_directories(ydlidar_node PRIVATE include ${YDLIDAR_SDK_INCLUDE_DIRS})
+  ament_target_dependencies(ydlidar_node rclcpp sensor_msgs std_srvs)
+  target_link_directories(ydlidar_node PRIVATE ${YDLIDAR_SDK_LIBRARY_DIRS})
+  target_link_libraries(ydlidar_node ${YDLIDAR_SDK_LIBRARIES})
+  install(TARGETS ydlidar_node DESTINATION lib/${PROJECT_NAME})
+endif()
+
+if(BUILD_TESTING)
+  ament_add_gtest(test_ydlidar_ros_interface test/test_ydlidar_ros_interface.cpp
+    src/ydlidar_node.cpp)
+  target_include_directories(test_ydlidar_ros_interface PRIVATE include)
+  ament_target_dependencies(test_ydlidar_ros_interface rclcpp sensor_msgs std_srvs)
+endif()
+
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+ament_export_include_directories(include)
+ament_package()
