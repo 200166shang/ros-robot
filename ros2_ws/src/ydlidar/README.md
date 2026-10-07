@@ -43,7 +43,7 @@ rviz2 -d "$(ros2 pkg prefix ydlidar --share)/config/ydlidar.rviz"
 在 Orange Pi 上安装虚拟显示、VNC 和 noVNC 组件（RViz2 如果尚未安装，请按上面的步骤安装）：
 
 ```bash
-sudo apt install xvfb openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri
+sudo apt install xvfb=2:1.20.8-2ubuntu2 openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri
 ```
 
 先按上面的步骤在一个终端启动雷达驱动并保持运行。然后在 Orange Pi 的另一个终端中启动 headless RViz2：
@@ -163,7 +163,7 @@ Install the virtual display, VNC, and noVNC components on the Orange Pi (install
 RViz2 as described above if it is not already present):
 
 ```bash
-sudo apt install xvfb openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri
+sudo apt install xvfb=2:1.20.8-2ubuntu2 openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri
 ```
 
 Start the lidar driver in one terminal and leave it running. In another Orange Pi

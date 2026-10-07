@@ -42,7 +42,7 @@ check_dependencies() {
 
   if (( ${#missing[@]} > 0 )); then
     printf 'Missing headless RViz2 dependencies: %s\n' "${missing[*]}" >&2
-    printf 'Install them with: sudo apt install xvfb openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri\n' >&2
+    printf 'Install them with: sudo apt install xvfb=2:1.20.8-2ubuntu2 openbox x11vnc novnc websockify x11-utils iproute2 libgl1-mesa-dri\n' >&2
     return 1
   fi
 
