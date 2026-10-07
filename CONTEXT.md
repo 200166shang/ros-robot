@@ -43,3 +43,11 @@ This file is a handoff checkpoint. Recheck source, issue state, and the working 
 ## Future checkpoint format
 
 Record the active issue URL, resolved decisions or ADR links, completed work, validation evidence, open questions, and next action. Replace stale checkpoint details when work advances.
+
+## YDLIDAR SDK and hardware validation checkpoint — 2026-10-07 (Asia/Shanghai)
+
+- Issue: [#6 ROS 2 driver and LaserScan](https://github.com/200166shang/ros-robot/issues/6), now closed after all acceptance criteria were verified.
+- SDK/build: fetched the official SDK V1.2.7 release archive; its SHA-256 matched the repository's pinned Git LFS OID. Built and installed the SDK under `/tmp`, then built package `ydlidar` in ROS 2 Foxy with `YDLIDAR_BUILD_HARDWARE_NODE=ON`. The package test passed (1/1); generated SDK/build output remains outside source commits.
+- Hardware smoke check: the node connected to `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, SDK 1.2.7 reported healthy status, and `/scan` delivered `laser_link` scans with 255 points and 129–133 valid ranges in observed samples. `/stop_scan` yielded zero new scans over the 1-second observation; `/start_scan` resumed publication. On shutdown the node exited and released `/dev/ttyUSB0`.
+- Issue tracker: acceptance criteria were checked, validation evidence was commented, and #6 was closed.
+- Next action: continue with #7's RViz2 and Mac browser visualization slice.
