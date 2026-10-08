@@ -90,3 +90,11 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Commits: `9d1bca2 feat: add headless RViz2 access over noVNC`; installer guidance and runtime notes are committed. Issue #7 records the implementation plan and all acceptance criteria as complete. `robot-docker` remains unchanged.
 - User verification: Mac browser access through the SSH tunnel works, and the scan points move with the radar scene. Issue #7 was updated with this evidence.
 - Next action: review and merge the PR for Issue #7.
+
+## YDLIDAR visualization completion and branch cleanup — 2026-10-07 (Asia/Shanghai)
+
+- Issue: [#7 View YDLIDAR scans in RViz2 and from a Mac browser](https://github.com/200166shang/ros-robot/issues/7) is closed. GitHub shows all 7 acceptance criteria checked; the user verified Mac noVNC access and live scan motion.
+- Merge: [PR #9](https://github.com/200166shang/ros-robot/pull/9) merged into `main` at `875a4e4`.
+- Cleanup: synchronized local `main` to `origin/main` with fast-forward; deleted the merged local and remote branch `codex/issue-7-rviz2-mac-browser`.
+- Validation: GitHub confirms #7 closed and PR #9 merged. Working tree is clean on `main`; no implementation tests were needed for this repository synchronization and branch cleanup task.
+- Next action: none for YDLIDAR bring-up and visualization; continue with a new issue when needed.
