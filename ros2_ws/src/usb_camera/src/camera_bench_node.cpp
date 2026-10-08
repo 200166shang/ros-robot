@@ -46,6 +46,7 @@ public:
                 const rclcpp::Time end(end_ros_ns_.load(), clock_type);
                 if (start_ros_ns_.load() != 0 && stamp >= start && stamp < end) {
                     const double latency = (now() - stamp).seconds() * 1000.0;
+                    last_receive_steady_ns_.store(steady_now_ns());
                     std::lock_guard<std::mutex> lock(metrics_mutex_);
                     metrics_->observe_receive(latency);
                 }
@@ -65,6 +66,11 @@ public:
 private:
     using Clock = std::chrono::steady_clock;
 
+    static int64_t steady_now_ns() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch())
+            .count();
+    }
+
     void capture_run() {
         std::string error;
         if (!camera_.open_device(
@@ -82,13 +88,17 @@ private:
                     actual_height);
         const auto warmup_end = Clock::now() + std::chrono::seconds(2);
         std::vector<uint8_t> jpeg;
-        uint32_t sequence = 0;
+        uint32_t sequence      = 0;
+        uint64_t warmup_frames = 0;
         while (Clock::now() < warmup_end && !stopping_.load()) {
             if (!camera_.capture(jpeg, 2000, error)) {
-                if (Clock::now() >= warmup_end && error == "capture timeout") break;
+                if (warmup_frames > 0 && Clock::now() >= warmup_end && error == "capture timeout") {
+                    break;
+                }
                 fail_capture(error);
                 return;
             }
+            ++warmup_frames;
         }
         if (stopping_.load()) return;
 
@@ -101,9 +111,13 @@ private:
         end_ros_ns_.store(ros_start.nanoseconds() +
                           static_cast<int64_t>(config_.duration_seconds * 1.0e9));
         RCLCPP_INFO(get_logger(), "measuring for %.2f seconds", config_.duration_seconds);
+        uint64_t measurement_frames = 0;
         while (Clock::now() < measurement_end && !stopping_.load()) {
             if (!camera_.capture(jpeg, 2000, error, &sequence)) {
-                if (Clock::now() >= measurement_end && error == "capture timeout") break;
+                if (measurement_frames > 0 && Clock::now() >= measurement_end &&
+                    error == "capture timeout") {
+                    break;
+                }
                 fail_capture(error);
                 return;
             }
@@ -122,10 +136,12 @@ private:
                 metrics_->observe_publish();
             }
             publisher_->publish(std::move(message));
+            ++measurement_frames;
         }
         actual_width_.store(actual_width);
         actual_height_.store(actual_height);
         finished_at_ = Clock::now();
+        last_receive_steady_ns_.store(steady_now_ns());
         finished_.store(true);
         camera_.close_device();
     }
@@ -143,11 +159,21 @@ private:
             rclcpp::shutdown();
             return;
         }
-        if (!finished_.load() || Clock::now() - finished_at_ < std::chrono::seconds(1)) return;
+        if (!finished_.load()) return;
+        const auto current = Clock::now();
+        if (current - finished_at_ < std::chrono::milliseconds(250)) return;
+        const auto quiet_since = Clock::time_point(
+            Clock::duration(std::chrono::nanoseconds(last_receive_steady_ns_.load())));
         usb_camera::CameraBenchSummary summary;
         {
             std::lock_guard<std::mutex> lock(metrics_mutex_);
             summary = metrics_->summarize(actual_width_.load(), actual_height_.load());
+        }
+        // If delivery is incomplete, wait for the receiver to remain quiet for a full second.
+        // Each late callback restarts this drain window before the aggregate difference is read.
+        if (summary.receive_count < summary.publish_count &&
+            current - quiet_since < std::chrono::seconds(1)) {
+            return;
         }
         struct stat info {};
         const bool has_content = stat(csv_path_.c_str(), &info) == 0 && info.st_size > 0;
@@ -182,6 +208,7 @@ private:
     std::mutex metrics_mutex_;
     std::atomic<bool> stopping_{false}, failed_{false}, finished_{false};
     std::atomic<int64_t> start_ros_ns_{0}, end_ros_ns_{0};
+    std::atomic<int64_t> last_receive_steady_ns_{0};
     std::atomic<uint32_t> actual_width_{0}, actual_height_{0};
     std::string failure_;
     Clock::time_point finished_at_{};

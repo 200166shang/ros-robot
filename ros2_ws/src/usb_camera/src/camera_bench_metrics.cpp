@@ -67,27 +67,30 @@ std::string CameraBenchMetrics::csv_header() {
            "publish_receive_difference,average_latency_ms,average_jpeg_bytes";
 }
 
-std::string CameraBenchMetrics::csv_row(const CameraBenchSummary &s) {
+std::string CameraBenchMetrics::csv_row(const CameraBenchSummary &summary) {
     std::ostringstream out;
-    out << std::setprecision(10) << csv_escape(s.config.device) << ',' << s.config.width << ','
-        << s.config.height << ',' << s.actual_width << ',' << s.actual_height << ','
-        << s.config.requested_fps << ',' << s.config.duration_seconds << ',' << s.capture_count
-        << ',' << s.capture_fps << ',' << s.publish_count << ',' << s.publish_fps << ','
-        << s.receive_count << ',' << s.receive_fps << ',' << s.sequence_gaps << ','
-        << s.publish_receive_difference << ',' << s.average_latency_ms << ','
-        << s.average_jpeg_bytes;
+    out << std::setprecision(10) << csv_escape(summary.config.device) << ',' << summary.config.width
+        << ',' << summary.config.height << ',' << summary.actual_width << ','
+        << summary.actual_height << ',' << summary.config.requested_fps << ','
+        << summary.config.duration_seconds << ',' << summary.capture_count << ','
+        << summary.capture_fps << ',' << summary.publish_count << ',' << summary.publish_fps << ','
+        << summary.receive_count << ',' << summary.receive_fps << ',' << summary.sequence_gaps
+        << ',' << summary.publish_receive_difference << ',' << summary.average_latency_ms << ','
+        << summary.average_jpeg_bytes;
     return out.str();
 }
 
-std::string CameraBenchMetrics::console_summary(const CameraBenchSummary &s) {
+std::string CameraBenchMetrics::console_summary(const CameraBenchSummary &summary) {
     std::ostringstream out;
-    out << std::fixed << std::setprecision(2) << s.config.device << ' ' << s.actual_width << 'x'
-        << s.actual_height << " requested " << s.config.requested_fps << " fps, "
-        << s.config.duration_seconds << " s | capture " << s.capture_count << " (" << s.capture_fps
-        << " fps), publish " << s.publish_count << " (" << s.publish_fps << " fps), receive "
-        << s.receive_count << " (" << s.receive_fps << " fps), gaps " << s.sequence_gaps
-        << ", pub-recv " << s.publish_receive_difference << ", latency " << s.average_latency_ms
-        << " ms, JPEG " << s.average_jpeg_bytes << " B";
+    out << std::fixed << std::setprecision(2) << summary.config.device << ' '
+        << summary.actual_width << 'x' << summary.actual_height << " requested "
+        << summary.config.requested_fps << " fps, " << summary.config.duration_seconds
+        << " s | capture " << summary.capture_count << " (" << summary.capture_fps
+        << " fps), publish " << summary.publish_count << " (" << summary.publish_fps
+        << " fps), receive " << summary.receive_count << " (" << summary.receive_fps
+        << " fps), gaps " << summary.sequence_gaps << ", pub-recv "
+        << summary.publish_receive_difference << ", latency " << summary.average_latency_ms
+        << " ms, JPEG " << summary.average_jpeg_bytes << " B";
     return out.str();
 }
 
