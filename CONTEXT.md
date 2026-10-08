@@ -119,3 +119,15 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Validation after the drain fix: package build and full workspace tests passed (14 tests, 0 failures). A repeated ROS hardware run timed out during warm-up; `v4l2-ctl` still streams at 30 fps, but a direct probe of both the changed and baseline `V4l2Camera` also timed out. The earlier end-to-end ROS run and CSV append check succeeded before the reporting-only drain adjustment.
 - Tracker: acceptance criteria were checked, implementation/review/validation evidence and the repeated hardware-run limitation were posted in [the #12 implementation comment](https://github.com/200166shang/ros-robot/issues/12#issuecomment-6056446572), and #12 was closed on 2026-10-08 (Asia/Shanghai).
 - Next action: none for Issue #12.
+
+## Development workflow Chinese annotations — 2026-10-08 (Asia/Shanghai)
+
+- Updated [docs/development-workflow.md](docs/development-workflow.md) with Chinese notes for the source-of-truth and responsibility chain, build/test commands, hardware demo boundary, and Git hygiene checks. Commands and existing safety settings were left unchanged.
+- Validation: `git diff --check` passed; this documentation-only edit does not require a build or runtime test.
+- Next action: none.
+
+## Camera benchmark Chinese code comments — 2026-10-08 (Asia/Shanghai)
+
+- Added Chinese comments to the camera benchmark ROS node, metrics Interface/Implementation, unit-test cases, and CMake target/test declarations. The comments explain the worker/executor split, warm-up and measurement clocks, intentional end-of-window frame skips, metrics accounting, receiver drain, CSV failure handling, and test intent. No runtime behavior changed.
+- Validation: `clang-format --dry-run --Werror` and `git diff --check` passed; no tests were run for this comments-only change.
+- Next action: none.

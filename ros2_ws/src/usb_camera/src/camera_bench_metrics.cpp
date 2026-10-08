@@ -8,6 +8,7 @@ namespace {
 std::string csv_escape(const std::string &value) {
     std::string escaped = "\"";
     for (const char character : value) {
+        // CSV 字段中的双引号需要重复转义。
         if (character == '"') escaped += '"';
         escaped += character;
     }
@@ -19,6 +20,7 @@ CameraBenchMetrics::CameraBenchMetrics(CameraBenchConfig config) : config_(std::
 
 void CameraBenchMetrics::observe_capture(uint32_t sequence, uint64_t jpeg_bytes) {
     if (has_previous_sequence_) {
+        // 无符号差值也能正确处理 V4L2 的 32 位序号回绕。
         const uint32_t difference = sequence - previous_sequence_;
         if (difference > 1) sequence_gaps_ += difference - 1;
     }
@@ -47,6 +49,7 @@ CameraBenchSummary CameraBenchMetrics::summarize(uint32_t actual_width,
     result.sequence_gaps = sequence_gaps_;
     result.publish_receive_difference =
         static_cast<int64_t>(publish_count_) - static_cast<int64_t>(receive_count_);
+    // 帧率统一按配置的测量窗口计算，避免受收尾排空时间影响。
     const double duration = config_.duration_seconds;
     if (duration > 0.0) {
         result.capture_fps = capture_count_ / duration;

@@ -20,6 +20,7 @@
 class CameraBenchNode : public rclcpp::Node {
 public:
     CameraBenchNode() : Node("camera_bench") {
+        // 基准配置从 ROS 参数读取；先用有符号整数校验，避免负数转换成超大的无符号值。
         config_.device             = declare_parameter<std::string>("device", "/dev/video0");
         const int requested_width  = declare_parameter<int>("width", 1280);
         const int requested_height = declare_parameter<int>("height", 720);
@@ -34,7 +35,8 @@ public:
         config_.height        = static_cast<uint32_t>(requested_height);
         config_.requested_fps = static_cast<uint32_t>(requested_fps);
         metrics_              = std::make_unique<usb_camera::CameraBenchMetrics>(config_);
-        publisher_            = create_publisher<sensor_msgs::msg::CompressedImage>(
+        // 发布者和接收者共用私有话题，确保统计的是 ROS 消息链路而非直接函数调用。
+        publisher_ = create_publisher<sensor_msgs::msg::CompressedImage>(
             "~/benchmark/image/compressed", rclcpp::QoS(10).reliable());
         receiver_ = create_subscription<sensor_msgs::msg::CompressedImage>(
             "~/benchmark/image/compressed",
@@ -45,12 +47,15 @@ public:
                 const rclcpp::Time start(start_ros_ns_.load(), clock_type);
                 const rclcpp::Time end(end_ros_ns_.load(), clock_type);
                 if (start_ros_ns_.load() != 0 && stamp >= start && stamp < end) {
+                    // 使用消息时间戳计算发布到接收延迟，只统计测量窗口内的消息。
                     const double latency = (now() - stamp).seconds() * 1000.0;
+                    // 单调时钟用于接收端静默期判断，不受系统时间校准影响。
                     last_receive_steady_ns_.store(steady_now_ns());
                     std::lock_guard<std::mutex> lock(metrics_mutex_);
                     metrics_->observe_receive(latency);
                 }
             });
+        // ROS 回调由 executor 处理；采集放到工作线程，避免阻塞接收回调。
         timer_  = create_wall_timer(std::chrono::milliseconds(100), [this] { check_finish(); });
         worker_ = std::thread([this] { capture_run(); });
     }
@@ -73,6 +78,7 @@ private:
 
     void capture_run() {
         std::string error;
+        // 相机初始化失败时只报告错误，不生成看似成功的 CSV 记录。
         if (!camera_.open_device(
                 config_.device, config_.width, config_.height, config_.requested_fps, error)) {
             failure_ = "camera setup failed: " + error;
@@ -90,6 +96,7 @@ private:
         std::vector<uint8_t> jpeg;
         uint32_t sequence      = 0;
         uint64_t warmup_frames = 0;
+        // 预热期间只让相机进入稳定状态，不把帧计入任何基准指标。
         while (Clock::now() < warmup_end && !stopping_.load()) {
             if (!camera_.capture(jpeg, 2000, error)) {
                 if (warmup_frames > 0 && Clock::now() >= warmup_end && error == "capture timeout") {
@@ -102,6 +109,7 @@ private:
         }
         if (stopping_.load()) return;
 
+        // 用单调时钟控制真实测量时长，ROS 时钟只用于消息时间戳和延迟计算。
         const auto measurement_start = Clock::now();
         const auto measurement_end =
             measurement_start + std::chrono::duration_cast<Clock::duration>(
@@ -121,8 +129,7 @@ private:
                 fail_capture(error);
                 return;
             }
-            // A frame completed after the window is deliberately discarded and excluded from
-            // both capture totals and V4L2 gap accounting.
+            // 测量截止后才完成的帧属于有意跳过，不计入采集数，也不算作 V4L2 丢帧。
             if (Clock::now() >= measurement_end) break;
             const rclcpp::Time stamp = now();
             sensor_msgs::msg::CompressedImage message;
@@ -131,6 +138,7 @@ private:
             message.format          = "jpeg";
             message.data            = jpeg;
             {
+                // 记录本帧采集和发布调用；接收数由订阅回调独立累计。
                 std::lock_guard<std::mutex> lock(metrics_mutex_);
                 metrics_->observe_capture(sequence, jpeg.size());
                 metrics_->observe_publish();
@@ -147,6 +155,7 @@ private:
     }
 
     void fail_capture(const std::string &error) {
+        // 统一关闭设备并标记失败，后续收尾逻辑不会写入完成记录。
         failure_ = "camera capture failed: " + error;
         failed_.store(true);
         camera_.close_device();
@@ -169,8 +178,8 @@ private:
             std::lock_guard<std::mutex> lock(metrics_mutex_);
             summary = metrics_->summarize(actual_width_.load(), actual_height_.load());
         }
-        // If delivery is incomplete, wait for the receiver to remain quiet for a full second.
-        // Each late callback restarts this drain window before the aggregate difference is read.
+        // 数量一致时已收齐；数量不一致时，等接收端连续静默一秒，让排队回调有机会完成。
+        // 每次迟到的接收回调都会重置静默窗口，再计算发布与接收的总数差。
         if (summary.receive_count < summary.publish_count &&
             current - quiet_since < std::chrono::seconds(1)) {
             return;

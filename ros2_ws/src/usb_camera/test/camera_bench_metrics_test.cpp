@@ -6,6 +6,7 @@ namespace usb_camera {
 namespace {
 CameraBenchMetrics metrics() { return CameraBenchMetrics({"/dev/video\"2", 640, 480, 30, 2.0}); }
 
+// 连续帧场景验证三段计数、帧率和平均值。
 TEST(CameraBenchMetricsTest, ReportsSteadyDeliveryAndAverages) {
     auto subject = metrics();
     for (uint32_t sequence = 10; sequence < 16; ++sequence) {
@@ -26,6 +27,7 @@ TEST(CameraBenchMetricsTest, ReportsSteadyDeliveryAndAverages) {
     EXPECT_DOUBLE_EQ(result.average_jpeg_bytes, 1000.0);
 }
 
+// 序号跳变与接收不足场景验证丢帧数和发布/接收总数差。
 TEST(CameraBenchMetricsTest, CountsSequenceGapsAndAggregateDeliveryDifference) {
     auto subject = metrics();
     subject.observe_capture(100, 500);
@@ -45,6 +47,7 @@ TEST(CameraBenchMetricsTest, CountsSequenceGapsAndAggregateDeliveryDifference) {
     EXPECT_EQ(result.actual_height, 600u);
 }
 
+// 序列化场景验证 CSV 转义、配置字段和简洁终端摘要。
 TEST(CameraBenchMetricsTest, SerializesCsvAndConciseSummary) {
     auto subject = metrics();
     subject.observe_capture(7, 1024);

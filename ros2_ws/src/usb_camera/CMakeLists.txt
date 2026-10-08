@@ -18,6 +18,7 @@ add_executable(usb_camera_node
 target_include_directories(usb_camera_node PRIVATE include)
 ament_target_dependencies(usb_camera_node rclcpp sensor_msgs std_msgs)
 
+# 独立基准程序复用 V4L2 适配器，不改生产相机节点的运行链路。
 add_executable(camera_bench
   src/camera_bench_node.cpp
   src/camera_bench_metrics.cpp
@@ -27,6 +28,7 @@ target_include_directories(camera_bench PRIVATE include)
 ament_target_dependencies(camera_bench rclcpp sensor_msgs)
 
 if(BUILD_TESTING)
+  # 指标接口不依赖相机硬件，可在普通构建环境中确定性测试。
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(camera_bench_metrics_test
     test/camera_bench_metrics_test.cpp

@@ -29,8 +29,7 @@ struct CameraBenchSummary {
     double average_jpeg_bytes{0.0};
 };
 
-// Deterministic observation seam: the benchmark supplies capture, publish, and receive facts;
-// this module owns gap accounting, averages, rates, and serialization.
+// 确定性指标接口：基准程序传入采集、发布和接收观测，本模块负责计算丢帧、均值、帧率及序列化。
 class CameraBenchMetrics {
 public:
     explicit CameraBenchMetrics(CameraBenchConfig config);
