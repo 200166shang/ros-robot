@@ -4,7 +4,7 @@ IndentWidth: 4
 ContinuationIndentWidth: 4
 TabWidth: 4
 UseTab: Never
-ColumnLimit: 100
+ColumnLimit: 160
 BreakBeforeBraces: Attach
 PointerAlignment: Left
 SpaceBeforeParens: ControlStatements
