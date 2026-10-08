@@ -215,3 +215,11 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - At merge time, post-PR changes in `.clang-format`, `AGENTS.md`, `ros2_ws/src/usb_camera/src/camera_bench_node.cpp`, and `ros2_ws/src/usb_camera/README.md` were preserved for a follow-up branch. Generated `install/` and `log/` output remains local and uncommitted.
 - The user plans to discuss CSV-to-HTML visualization separately. No new issue or implementation was started here.
 - Next action: none for Issue #12; continue the visualization discussion in the user's new thread.
+
+## Camera benchmark readability and usage follow-up — 2026-10-08 (Asia/Shanghai)
+
+- Follow-up to merged [PR #13](https://github.com/200166shang/ros-robot/pull/13): moved the preserved local camera benchmark changes onto `codex/camera-bench-readability-followup` and committed them as `dbde98d`.
+- The commit includes the named capture/startup/report stages and Chinese lifecycle comments in `camera_bench_node.cpp`, a 15-second bounded first-frame wait, the `usb_camera` usage README, the repository C++ readability guidance, and the updated clang-format column limit. Generated `install/` and `log/` output is excluded.
+- Validation evidence from this code state: ROS Foxy package build passed; package tests passed (3/3); the configured 640x480, requested 30 FPS, 3-second hardware run completed 5/5 times. `clang-format --dry-run --Werror` and `git diff --check` passed again for the follow-up commit.
+- Opened [PR #14](https://github.com/200166shang/ros-robot/pull/14), targeting `main`; GitHub reports it mergeable with no configured checks.
+- Next action: merge PR #14 and clean up the follow-up branch; handle CSV-to-HTML visualization in the separate discussion the user plans to open.
