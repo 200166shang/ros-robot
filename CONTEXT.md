@@ -131,3 +131,9 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Added Chinese comments to the camera benchmark ROS node, metrics Interface/Implementation, unit-test cases, and CMake target/test declarations. The comments explain the worker/executor split, warm-up and measurement clocks, intentional end-of-window frame skips, metrics accounting, receiver drain, CSV failure handling, and test intent. No runtime behavior changed.
 - Validation: `clang-format --dry-run --Werror` and `git diff --check` passed; no tests were run for this comments-only change.
 - Next action: none.
+
+## Camera benchmark pull request — 2026-10-08 (Asia/Shanghai)
+
+- Submitted [PR #13](https://github.com/200166shang/ros-robot/pull/13) from `codex/camera-module` to `main`. The PR includes the standalone camera benchmark, its validation and review evidence, and Chinese comments for the code flow.
+- The Chinese annotations in `docs/development-workflow.md` remain local because that path is ignored by the repository; it was not force-added to the PR.
+- Next action: review and merge PR #13.
