@@ -98,3 +98,21 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Cleanup: synchronized local `main` to `origin/main` with fast-forward; deleted the merged local and remote branch `codex/issue-7-rviz2-mac-browser`.
 - Validation: GitHub confirms #7 closed and PR #9 merged. Working tree is clean on `main`; no implementation tests were needed for this repository synchronization and branch cleanup task.
 - Next action: none for YDLIDAR bring-up and visualization; continue with a new issue when needed.
+
+## Camera module preparation — 2026-10-08 (Asia/Shanghai)
+
+- Spec: [#11 Add a repeatable USB camera performance benchmark](https://github.com/200166shang/ros-robot/issues/11), published with the `ready-for-agent` label after the user confirmed the test seam.
+- Implementation ticket: [#12 Add a standalone camera capture-to-ROS benchmark](https://github.com/200166shang/ros-robot/issues/12), a single child ticket with no blockers, also labeled `ready-for-agent`.
+- Branch: created `codex/camera-module` from clean `main` at `95b245f`.
+- Decisions: add a standalone `camera_bench` executable in `usb_camera`; reuse `V4l2Camera`; measure capture, publish, and receive FPS/counts, V4L2 sequence gaps, aggregate publish/receive count difference, average publish-to-receive latency, and average JPEG size. Defaults are 2 seconds warm-up and 30 seconds measurement; print a concise summary and append CSV. The confirmed test seam is deterministic observations into the metrics/report interface, with hardware validation as a separate manual run.
+- Preparation changes: formatted the three C++ files in `ros2_ws/src/usb_camera/` with repository `.clang-format`; added Chinese comments for V4L2 setup, MMAP ownership/queue flow, copying, cleanup, and ROS capture/publish. Added the root glossary terms used by the spec. No runtime behavior was changed.
+- Validation: the issue body and `ready-for-agent` label were verified on GitHub; `clang-format --dry-run --Werror` and `git diff --check` passed. No tests or hardware validation were run.
+- Next action: implement Issue #12 when implementation work begins.
+
+## Camera benchmark implementation — 2026-10-08 (Asia/Shanghai)
+
+- Issue: [#12 Add a standalone camera capture-to-ROS benchmark](https://github.com/200166shang/ros-robot/issues/12), still open pending review and tracker completion.
+- Implemented: added a separate `camera_bench` ROS 2 executable that reuses `V4l2Camera`, publishes compressed frames on its private benchmark topic, and receives them through a ROS subscription. It uses a fixed 2-second warm-up, defaults to a 30-second measurement window, reports capture/publish/receive counts and rates, V4L2 sequence gaps, publish/receive count difference, average latency and JPEG size, and appends completed runs to CSV. Setup, capture, and CSV failures do not produce a completed row.
+- Design: `CameraBenchMetrics` is the deterministic observation/report interface and has no ROS or camera dependency. V4L2 sequence metadata is optional for existing camera callers; `usb_camera_node` runtime behavior remains unchanged.
+- Validation: ROS 2 Foxy package build succeeded; the full workspace test run passed (14 tests, 0 failures); `clang-format --dry-run --Werror` and `git diff --check` passed. Hardware run on `/dev/video0` at 640x480, requested 30 fps: 64 captured/published/received frames over 3 seconds, zero sequence gaps and count difference, 0.65 ms average latency, 26.2 kB average JPEG. A second 1-second run appended a second CSV row without duplicating the header. No chassis actuation was performed.
+- Next action: run Standards and Spec review, record the outcome on #12, and close the ticket if review is clean.
