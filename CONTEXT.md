@@ -136,4 +136,82 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 
 - Submitted [PR #13](https://github.com/200166shang/ros-robot/pull/13) from `codex/camera-module` to `main`. The PR includes the standalone camera benchmark, its validation and review evidence, and Chinese comments for the code flow.
 - The Chinese annotations in `docs/development-workflow.md` remain local because that path is ignored by the repository; it was not force-added to the PR.
-- Next action: review and merge PR #13.
+- PR #13 was merged into `main` on 2026-10-08; see the merge checkpoint below.
+
+## Camera benchmark capture flow refactor — 2026-10-08 (Asia/Shanghai)
+
+- Request: review and reduce cognitive load in the USB camera C++ flow while preserving behavior.
+- Changed `ros2_ws/src/usb_camera/src/camera_bench_node.cpp`: kept `capture_run()` as the stage orchestrator; removed width/height and V4L2 sequence from cross-stage parameters; separated receiver-drain criteria, report writing, and ROS shutdown from the timer callback; documented thread shutdown/join and cross-thread state purpose. The reusable JPEG buffer and existing capture adapter lifecycle remain unchanged.
+- Review scope: checked `CameraBenchNode`, its `V4l2Camera` use and cleanup contract, and `UsbCameraNode`'s worker lifecycle. No changes were needed in the shared V4L2 adapter or normal camera node.
+- Behavior: capture/publish/receive accounting, measurement and ROS timestamp windows, 250 ms grace period, one-second receiver quiet window, CSV output, and error exit behavior are unchanged.
+- Validation: `clang-format --dry-run --Werror` and `git diff --check` passed. No build or tests were run.
+- PR #13 remains open on GitHub, targeting `main`; these changes are uncommitted in the working tree.
+- Next action: user reviews the refactor, then decide whether to update PR #13.
+
+## Camera benchmark onboarding readability follow-up — 2026-10-08 (Asia/Shanghai)
+
+- User approved a further readability pass limited to the performance benchmark node.
+- Extracted the in-line subscriber logic to `on_image_received()` and per-frame message creation/accounting/publication to `publish_benchmark_frame()`. Added Chinese explanations for JPEG copying, reusable frame-buffer capacity, and why dimensions are saved before `close_device()` resets them. The normal camera node and V4L2 adapter remain unchanged.
+- Preserved the existing capture and receive windows, counters, lock scope, and publication order.
+- Validation: `clang-format --dry-run --Werror` and `git diff --check` passed; no build or tests were run.
+- Changes remain uncommitted; PR #13 has not been updated.
+- Next action: user reviews the onboarding readability pass.
+
+## Camera benchmark source organization — 2026-10-08 (Asia/Shanghai)
+
+- User approved a layout-only pass to make related code easier to scan.
+- Grouped `CameraBenchNode` methods by execution path: the capture worker stages are contiguous, followed by ROS executor callbacks and report/drain helpers. Added visible setup phases in the constructor and grouped fields by configuration, capture/metrics ownership, thread state, timing/results, and ROS handles.
+- No behavior or interface changes were intended.
+- Re-applied clang-format after the user changed `.clang-format`'s column limit to 160.
+- Validation: `clang-format --dry-run --Werror` and `git diff --check` passed. No build or tests were run.
+- Changes remain uncommitted; PR #13 has not been updated.
+- Next action: user reviews the source layout.
+
+## Camera benchmark function comments — 2026-10-08 (Asia/Shanghai)
+
+- Added a concise Chinese function-header comment to each named function in `camera_bench_node.cpp`; clarified `capture_run()` as the orchestration point and retained only key inline comments for handoffs and constraints.
+- Split constructor validation into named camera-setting and duration checks so the two parameter groups are easier to scan.
+- Applied the user's updated `.clang-format` (160-column limit) to the file.
+- Validation: `clang-format --dry-run --Werror` and `git diff --check` passed; no build or tests were run.
+
+## Camera benchmark visual block spacing — 2026-10-08 (Asia/Shanghai)
+
+- Added blank lines at the parameter-read/validation/conversion transitions, camera setup success path, measurement setup/loop transition, per-frame message/metrics/publish steps, finish-state gates/summary handoff, and CSV-write/log transition in `camera_bench_node.cpp`.
+- No statements, control flow, or runtime behavior changed.
+- Validation: formatted with the current `.clang-format`; `clang-format --dry-run --Werror` and `git diff --check` passed. No build or tests were run.
+
+## C++ readability guidance — 2026-10-08 (Asia/Shanghai)
+
+- Added a `C++ readability and review` subsection to root `AGENTS.md`, covering call-chain and member grouping, semantic blank lines, Chinese function comments, named validation concepts, and domain-based function splitting.
+- Kept the guidance in the repository instructions so it applies automatically; no separate Skill or RULE file was added.
+- Validation: `git diff --check` passed. Documentation-only change; no build or tests apply.
+
+## Camera benchmark intermittent startup timeout — 2026-10-08 (Asia/Shanghai)
+
+- Reproduced the reported `/dev/video0` 640x480, requested 30 FPS run with a 3-second measurement five times: one run logged `camera capture failed: capture timeout`; four runs completed with 89 capture/publish/receive frames, zero sequence gaps, and about 29.67 FPS.
+- Source check: the error comes from `select()` timing out in `V4l2Camera::capture()`. The reported log stops before `measuring`, so the timeout is in `warm_up_camera()`'s first frame wait. If no warm-up frame arrives within its 2-second capture timeout, it aborts the run.
+- Follow-up on the repeated timeout: a standalone probe linked directly to `V4l2Camera` reproduced the failure without ROS (1 timeout in 5 starts); successful first-frame waits took about 1.74–1.75 seconds. A `v4l2-ctl` one-frame probe took 3.75 seconds once and exceeded a 10-second diagnostic limit on another attempt.
+- Device/kernel evidence: `/dev/video0` is a Logitech UVC camera (`046d:0825`) using `uvcvideo` on kernel 5.10.160. Kernel logs show repeated resets of USB device `5-1`; one reset at 14:20:56 followed the reported 14:20:54 capture timeout. A later `fuser` check found no process holding the device.
+- Conclusion: the bench's 2-second first-frame deadline explains the error message, while direct V4L2 and kernel evidence point to an unstable USB camera stream/reset as the underlying cause. Extending the bench wait alone may only hide the symptom. No source behavior was changed in this diagnosis. GitHub confirms Issue #12 remains closed and its prior comment also records intermittent warm-up timeouts.
+- Next action: test the camera on another USB port/cable or a powered hub and watch kernel USB/UVC logs; revisit a bounded first-frame startup policy only after the device stream is stable.
+
+## Camera benchmark bounded first-frame wait — 2026-10-08 (Asia/Shanghai)
+
+- User authorized raising the startup wait and continuing hardware validation. In `ros2_ws/src/usb_camera/src/camera_bench_node.cpp`, first-frame acquisition now retries in at-most-2-second waits for up to 15 seconds; shutdown remains responsive at each retry. The existing 2-second warm-up now starts after the first frame, and the measurement window and normal capture timeout remain unchanged.
+- Validation: root `install/` overlay build succeeded; package test summary is 3 passed, 0 failed; `clang-format --dry-run --Werror` and `git diff --check` passed. The exact 640x480, requested 30 FPS, 3-second bench command completed 5/5 times. First-frame arrival took 1.75–3.25 seconds; each measurement recorded 45 capture/publish/receive frames (15 FPS), zero sequence gaps, and zero publish/receive difference.
+- Device observation: `v4l2-ctl --all` reports the MJPEG stream interval as 30 FPS while `exposure_auto_priority` is enabled and exposure is 667; this may explain the 15 FPS measured rate and needs separate confirmation. No USB reset appeared during the five-run interval; a USB reset was logged at 14:35:42 afterward, so hardware link stability remains an open concern.
+- No camera control settings were changed. Next action: if 30 FPS is required, investigate exposure/lighting separately; test a different cable/port or powered hub if USB resets continue.
+
+## Camera package usage documentation — 2026-10-08 (Asia/Shanghai)
+
+- Added `ros2_ws/src/usb_camera/README.md` with package build/environment setup, normal camera publisher launch, and `camera_bench` usage. It documents parameter defaults, the 15-second first-frame wait and 2-second warm-up, CSV append behavior, measured metrics, requested-versus-actual FPS, and USB/device troubleshooting.
+- Checked the documented launch target, topic, defaults, bench parameter defaults, and metric names against package source. README whitespace/newline validation and `git diff --check` passed. No executable code changed in this documentation step.
+- Next action: none for the documentation request.
+
+## Camera benchmark PR merge and branch cleanup — 2026-10-08 (Asia/Shanghai)
+
+- Merged [PR #13](https://github.com/200166shang/ros-robot/pull/13) into `main` as merge commit `5875601e2602451c75973cd54b31ad722c9f17b7`; Issue [#12](https://github.com/200166shang/ros-robot/issues/12) is closed.
+- Deleted the remote and local `codex/camera-module` branches. The local `main` is synchronized with `origin/main`.
+- At merge time, post-PR changes in `.clang-format`, `AGENTS.md`, `ros2_ws/src/usb_camera/src/camera_bench_node.cpp`, and `ros2_ws/src/usb_camera/README.md` were preserved for a follow-up branch. Generated `install/` and `log/` output remains local and uncommitted.
+- The user plans to discuss CSV-to-HTML visualization separately. No new issue or implementation was started here.
+- Next action: none for Issue #12; continue the visualization discussion in the user's new thread.
