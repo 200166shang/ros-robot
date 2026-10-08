@@ -98,3 +98,42 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Cleanup: synchronized local `main` to `origin/main` with fast-forward; deleted the merged local and remote branch `codex/issue-7-rviz2-mac-browser`.
 - Validation: GitHub confirms #7 closed and PR #9 merged. Working tree is clean on `main`; no implementation tests were needed for this repository synchronization and branch cleanup task.
 - Next action: none for YDLIDAR bring-up and visualization; continue with a new issue when needed.
+
+## Camera module preparation — 2026-10-08 (Asia/Shanghai)
+
+- Spec: [#11 Add a repeatable USB camera performance benchmark](https://github.com/200166shang/ros-robot/issues/11), published with the `ready-for-agent` label after the user confirmed the test seam.
+- Implementation ticket: [#12 Add a standalone camera capture-to-ROS benchmark](https://github.com/200166shang/ros-robot/issues/12), a single child ticket with no blockers, also labeled `ready-for-agent`.
+- Branch: created `codex/camera-module` from clean `main` at `95b245f`.
+- Decisions: add a standalone `camera_bench` executable in `usb_camera`; reuse `V4l2Camera`; measure capture, publish, and receive FPS/counts, V4L2 sequence gaps, aggregate publish/receive count difference, average publish-to-receive latency, and average JPEG size. Defaults are 2 seconds warm-up and 30 seconds measurement; print a concise summary and append CSV. The confirmed test seam is deterministic observations into the metrics/report interface, with hardware validation as a separate manual run.
+- Preparation changes: formatted the three C++ files in `ros2_ws/src/usb_camera/` with repository `.clang-format`; added Chinese comments for V4L2 setup, MMAP ownership/queue flow, copying, cleanup, and ROS capture/publish. Added the root glossary terms used by the spec. No runtime behavior was changed.
+- Validation: the issue body and `ready-for-agent` label were verified on GitHub; `clang-format --dry-run --Werror` and `git diff --check` passed. No tests or hardware validation were run.
+- Next action: implement Issue #12 when implementation work begins.
+
+## Camera benchmark implementation — 2026-10-08 (Asia/Shanghai)
+
+- Issue: [#12 Add a standalone camera capture-to-ROS benchmark](https://github.com/200166shang/ros-robot/issues/12), still open pending review and tracker completion.
+- Implemented: added a separate `camera_bench` ROS 2 executable that reuses `V4l2Camera`, publishes compressed frames on its private benchmark topic, and receives them through a ROS subscription. It uses a fixed 2-second warm-up, defaults to a 30-second measurement window, reports capture/publish/receive counts and rates, V4L2 sequence gaps, publish/receive count difference, average latency and JPEG size, and appends completed runs to CSV. Setup, capture, and CSV failures do not produce a completed row.
+- Design: `CameraBenchMetrics` is the deterministic observation/report interface and has no ROS or camera dependency. V4L2 sequence metadata is optional for existing camera callers; `usb_camera_node` runtime behavior remains unchanged.
+- Validation: ROS 2 Foxy package build succeeded; the full workspace test run passed (14 tests, 0 failures); `clang-format --dry-run --Werror` and `git diff --check` passed. Hardware run on `/dev/video0` at 640x480, requested 30 fps: 64 captured/published/received frames over 3 seconds, zero sequence gaps and count difference, 0.65 ms average latency, 26.2 kB average JPEG. A second 1-second run appended a second CSV row without duplicating the header. No chassis actuation was performed.
+- Review: Standards review found no documented-rule breaches; its minor unclear `s` summary parameter finding was fixed. Spec review found all requested behavior, and its fixed post-run wait concern was addressed with count-equality detection plus a one-second quiet drain window when counts differ. The quiet window is a bounded practical drain policy; it cannot prove middleware queues empty under arbitrarily delayed delivery.
+- Validation after the drain fix: package build and full workspace tests passed (14 tests, 0 failures). A repeated ROS hardware run timed out during warm-up; `v4l2-ctl` still streams at 30 fps, but a direct probe of both the changed and baseline `V4l2Camera` also timed out. The earlier end-to-end ROS run and CSV append check succeeded before the reporting-only drain adjustment.
+- Tracker: acceptance criteria were checked, implementation/review/validation evidence and the repeated hardware-run limitation were posted in [the #12 implementation comment](https://github.com/200166shang/ros-robot/issues/12#issuecomment-6056446572), and #12 was closed on 2026-10-08 (Asia/Shanghai).
+- Next action: none for Issue #12.
+
+## Development workflow Chinese annotations — 2026-10-08 (Asia/Shanghai)
+
+- Updated [docs/development-workflow.md](docs/development-workflow.md) with Chinese notes for the source-of-truth and responsibility chain, build/test commands, hardware demo boundary, and Git hygiene checks. Commands and existing safety settings were left unchanged.
+- Validation: `git diff --check` passed; this documentation-only edit does not require a build or runtime test.
+- Next action: none.
+
+## Camera benchmark Chinese code comments — 2026-10-08 (Asia/Shanghai)
+
+- Added Chinese comments to the camera benchmark ROS node, metrics Interface/Implementation, unit-test cases, and CMake target/test declarations. The comments explain the worker/executor split, warm-up and measurement clocks, intentional end-of-window frame skips, metrics accounting, receiver drain, CSV failure handling, and test intent. No runtime behavior changed.
+- Validation: `clang-format --dry-run --Werror` and `git diff --check` passed; no tests were run for this comments-only change.
+- Next action: none.
+
+## Camera benchmark pull request — 2026-10-08 (Asia/Shanghai)
+
+- Submitted [PR #13](https://github.com/200166shang/ros-robot/pull/13) from `codex/camera-module` to `main`. The PR includes the standalone camera benchmark, its validation and review evidence, and Chinese comments for the code flow.
+- The Chinese annotations in `docs/development-workflow.md` remain local because that path is ignored by the repository; it was not force-added to the PR.
+- Next action: review and merge PR #13.
