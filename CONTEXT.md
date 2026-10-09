@@ -224,6 +224,15 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Opened [PR #14](https://github.com/200166shang/ros-robot/pull/14), targeting `main`; GitHub reports it mergeable with no configured checks.
 - Next action: merge PR #14 and clean up the follow-up branch; handle CSV-to-HTML visualization in the separate discussion the user plans to open.
 
+## Standalone JPEG encoder implementation — 2026-10-09 (Asia/Shanghai)
+
+- Issue: [#18 Add standalone ROS 2 JPEG encoder with OpenCV and MPP/RGA backends](https://github.com/200166shang/ros-robot/issues/18), implemented on independent branch `codex/issue-18-jpeg-encoder`.
+- Added `ros2_ws/src/img_encode/`: a ROS 2 C++ `Image` to `CompressedImage` node, configurable topics and JPEG quality, header preservation, JPEG format metadata, OpenCV software encoding, and RGA RGB-to-YUV plus Rockchip MPP JPEG encoding. CMake `IMG_ENCODE_BACKEND=AUTO` chooses MPP on AArch64 and OpenCV elsewhere; explicit `OPENCV` and `MPP` selections are supported.
+- The `img_encode` topic test publishes an RGB image through ROS, checks the compressed output header and `jpeg` format, and decodes the JPEG to verify its dimensions. It passed on Orange Pi in both MPP and explicit OpenCV builds. The MPP test exercised RGA and MPP with test-generated input; no camera acquisition or robot actuation was used.
+- Validation: both backend builds and package topic tests passed. The available full workspace suite passed 16 tests across 13 packages; `rknn_yolov6` was excluded because its external `rknn_api.h` SDK header is unavailable in this environment. `clang-format --dry-run --Werror` and `git diff --check` passed.
+- Review: Standards found no hard breaches; its optional PIMPL suggestion is non-blocking. Spec review found no remaining gaps after mapping MPP quality 100 to its supported maximum `q_factor` of 99. PR [#22](https://github.com/200166shang/ros-robot/pull/22) is open from `codex/issue-18-jpeg-encoder` to `main`; it was behind `main` before this synchronization.
+- Next action: user review the synchronized PR #22; Issue #19 remains the later live camera integration and preview verification step.
+
 ## ROS 2 camera capture and frame divider — 2026-10-09 (Asia/Shanghai)
 
 - Issue: [#16 Migrate V4L2 camera capture and frame divider to ROS 2](https://github.com/200166shang/ros-robot/issues/16), part of [#15](https://github.com/200166shang/ros-robot/issues/15).
@@ -256,4 +265,17 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 
 - Added Chinese and English `ydlidar/README.md` instructions for the ROS interface test and production hardware-node build. The guide explains that the test uses a fake scan source, needs no physical lidar or vendor SDK, and requires `YDLIDAR_BUILD_HARDWARE_NODE=OFF` because the hardware node is enabled by default. It also documents exposing an installed SDK's CMake config and shared libraries.
 - Validation on the Orange Pi: built `ydlidar` with `-DYDLIDAR_BUILD_HARDWARE_NODE=OFF`; `test_ydlidar_ros_interface` passed (1/1), covering scan publication and start/stop services. No physical radar was used. `git diff --check` passed.
-- Next action: open a documentation PR for user review.
+- Opened [PR #23](https://github.com/200166shang/ros-robot/pull/23) to publish the README update for review.
+
+## JPEG encoder backend separation — 2026-10-09 (UTC)
+
+- Follow-up to [PR #22](https://github.com/200166shang/ros-robot/pull/22): separated ROS image validation/RGB normalization from JPEG encoding behind a private `JpegEncoderBackend` virtual interface. OpenCV and MPP/RGA adapters now live in separate source files; CMake compiles only the adapter selected by `IMG_ENCODE_BACKEND`. The ROS topic interface and build-time backend choice are unchanged.
+- Added Chinese responsibility comments to the interface and named functions, plus a short README architecture note. Removed the generated backend config header, which is no longer needed after CMake selects the adapter source directly.
+- Validation: OpenCV build and topic test passed (1/1); MPP/RGA build and topic test passed (1/1); `clang-format --dry-run --Werror` and `git diff --check` passed. A full workspace build was attempted but did not complete: `ydlidar` needs an unavailable `ydlidar_sdkConfig.cmake`; `monitor_interfaces` and `usb_camera` were aborted when the overall build reached its five-minute limit. `rknn_yolov6` also remains excluded from available workspace validation because its external `rknn_api.h` is unavailable.
+- Review: Standards found no documented violations or supported smells; Spec found no missing Issue #18 requirements or unasked behavior. Commit `6d3ab6c` contains the refactor. PR [#22](https://github.com/200166shang/ros-robot/pull/22) was merged into `main` as `8d6bc42`, closing Issue #18. No tracking actuation or live camera capture was performed.
+
+## JPEG encoder test instructions — 2026-10-09 (UTC)
+
+- Follow-up to [PR #22](https://github.com/200166shang/ros-robot/pull/22): documented the synthetic ROS topic-interface test and exact OpenCV and MPP/RGA build/test commands in `ros2_ws/src/img_encode/README.md`. The test needs no camera; the MPP/RGA configuration still requires the Rockchip headers and libraries and exercises that hardware encoder path.
+- Validation on Orange Pi: the documented package build and topic test passed for OpenCV (1/1) and MPP/RGA (1/1). `git diff --check` passed.
+- PR [#22](https://github.com/200166shang/ros-robot/pull/22) was merged into `main` as `8d6bc42`; Issue #18 is closed.
