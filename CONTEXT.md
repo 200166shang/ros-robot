@@ -223,3 +223,11 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Validation evidence from this code state: ROS Foxy package build passed; package tests passed (3/3); the configured 640x480, requested 30 FPS, 3-second hardware run completed 5/5 times. `clang-format --dry-run --Werror` and `git diff --check` passed again for the follow-up commit.
 - Opened [PR #14](https://github.com/200166shang/ros-robot/pull/14), targeting `main`; GitHub reports it mergeable with no configured checks.
 - Next action: merge PR #14 and clean up the follow-up branch; handle CSV-to-HTML visualization in the separate discussion the user plans to open.
+
+## Standalone JPEG encoder implementation — 2026-10-09 (Asia/Shanghai)
+
+- Issue: [#18 Add standalone ROS 2 JPEG encoder with OpenCV and MPP/RGA backends](https://github.com/200166shang/ros-robot/issues/18), implemented on independent branch `codex/issue-18-jpeg-encoder`.
+- Added `ros2_ws/src/img_encode/`: a ROS 2 C++ `Image` to `CompressedImage` node, configurable topics and JPEG quality, header preservation, JPEG format metadata, OpenCV software encoding, and RGA RGB-to-YUV plus Rockchip MPP JPEG encoding. CMake `IMG_ENCODE_BACKEND=AUTO` chooses MPP on AArch64 and OpenCV elsewhere; explicit `OPENCV` and `MPP` selections are supported.
+- The `img_encode` topic test publishes an RGB image through ROS, checks the compressed output header and `jpeg` format, and decodes the JPEG to verify its dimensions. It passed on Orange Pi in both MPP and explicit OpenCV builds. The MPP test exercised RGA and MPP with test-generated input; no camera acquisition or robot actuation was used.
+- Validation: both backend builds and package topic tests passed. The available full workspace suite passed 16 tests across 13 packages; `rknn_yolov6` was excluded because its external `rknn_api.h` SDK header is unavailable in this environment. `clang-format --dry-run --Werror` and `git diff --check` passed.
+- Next action: complete Standards and Spec review, push the branch, and open a PR for user review. Issue #19 remains the later integration and live-preview verification step.

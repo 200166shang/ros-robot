@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>img_encode</name>
+  <version>0.1.0</version>
+  <description>Standalone ROS 2 image-to-JPEG encoder with OpenCV and Rockchip backends.</description>
+  <maintainer email="robot@example.com">robot</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>opencv</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
