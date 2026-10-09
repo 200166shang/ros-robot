@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <limits>
+#include <opencv2/core/fast_math.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -30,8 +31,8 @@ public:
 
         cv::Mat rgb;
         cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-        const int output_width  = std::max(1, static_cast<int>(rgb.cols * scale));
-        const int output_height = std::max(1, static_cast<int>(rgb.rows * scale));
+        const int output_width  = std::max(1, cvRound(rgb.cols * scale));
+        const int output_height = std::max(1, cvRound(rgb.rows * scale));
         if (output_width != rgb.cols || output_height != rgb.rows) {
             cv::resize(rgb, rgb, cv::Size(output_width, output_height), 0.0, 0.0, cv::INTER_AREA);
         }

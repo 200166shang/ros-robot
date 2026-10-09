@@ -32,7 +32,7 @@ private:
 
 // 中文：生成带固定 header 的 JPEG 样本供公开 topic 接口测试使用。
 sensor_msgs::msg::CompressedImage make_jpeg_message() {
-    cv::Mat bgr(240, 320, CV_8UC3, cv::Scalar(20, 80, 180));
+    cv::Mat bgr(243, 323, CV_8UC3, cv::Scalar(20, 80, 180));
     std::vector<uint8_t> jpeg;
     EXPECT_TRUE(cv::imencode(".jpg", bgr, jpeg));
 
@@ -66,6 +66,7 @@ protected:
     static void TearDownTestCase() { rclcpp::shutdown(); }
 };
 
+// 中文：验证默认缩放、RGB 输出布局与输入 header 保留行为。
 TEST_F(ImgDecodeRosInterfaceTest, PublishesHalfScaleRgbImageAndPreservesHeader) {
     rclcpp::NodeOptions options;
     options.parameter_overrides({
@@ -103,14 +104,15 @@ TEST_F(ImgDecodeRosInterfaceTest, PublishesHalfScaleRgbImageAndPreservesHeader) 
     EXPECT_EQ(received->header.stamp.nanosec, 345678901U);
     EXPECT_EQ(received->header.frame_id, "camera_optical_frame");
     EXPECT_EQ(received->encoding, "rgb8");
-    EXPECT_EQ(received->width, 160U);
-    EXPECT_EQ(received->height, 120U);
+    EXPECT_EQ(received->width, 162U);
+    EXPECT_EQ(received->height, 122U);
     EXPECT_EQ(received->step, received->width * 3U);
     EXPECT_EQ(received->data.size(), static_cast<size_t>(received->step) * received->height);
     ASSERT_GE(received->data.size(), 3U);
     EXPECT_GT(received->data[0], received->data[2]);
 }
 
+// 中文：验证配置缩放比例和每 N 帧处理一次的行为。
 TEST_F(ImgDecodeRosInterfaceTest, AppliesConfiguredScaleAndEveryNthInputDivider) {
     rclcpp::NodeOptions options;
     options.parameter_overrides({
@@ -152,8 +154,8 @@ TEST_F(ImgDecodeRosInterfaceTest, AppliesConfiguredScaleAndEveryNthInputDivider)
         std::unique_lock<std::mutex> lock(message_mutex);
         ASSERT_TRUE(message_ready.wait_for(lock, std::chrono::seconds(4), [&received]() { return !received.empty(); }));
         ASSERT_EQ(received.size(), 1U);
-        EXPECT_EQ(received.front()->width, 80U);
-        EXPECT_EQ(received.front()->height, 60U);
+        EXPECT_EQ(received.front()->width, 81U);
+        EXPECT_EQ(received.front()->height, 61U);
     }
 }
 

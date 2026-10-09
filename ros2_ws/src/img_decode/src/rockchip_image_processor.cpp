@@ -15,6 +15,7 @@
 #include <rockchip/rk_mpi_cmd.h>
 
 #include <algorithm>
+#include <opencv2/core/fast_math.hpp>
 #include <stdexcept>
 #include <string>
 
@@ -167,14 +168,22 @@ private:
             return false;
         }
 
-        image.width  = std::max(1U, static_cast<uint32_t>(width * scale));
-        image.height = std::max(1U, static_cast<uint32_t>(height * scale));
+        image.width  = static_cast<uint32_t>(std::max(1, cvRound(width * scale)));
+        image.height = static_cast<uint32_t>(std::max(1, cvRound(height * scale)));
         image.rgb.resize(static_cast<size_t>(image.width) * image.height * 3);
+
+        const uint32_t destination_stride = (image.width + 3U) & ~3U;
+        std::vector<uint8_t> padded_rgb;
+        uint8_t *destination_data = image.rgb.data();
+        if (destination_stride != image.width) {
+            padded_rgb.resize(static_cast<size_t>(destination_stride) * image.height * 3);
+            destination_data = padded_rgb.data();
+        }
 
         rga_buffer_t source =
             wrapbuffer_virtualaddr(pixels, width, height, RK_FORMAT_RGB_888, static_cast<int>(horizontal_stride), static_cast<int>(vertical_stride));
         rga_buffer_t destination = wrapbuffer_virtualaddr(
-            image.rgb.data(), image.width, image.height, RK_FORMAT_RGB_888, static_cast<int>(image.width), static_cast<int>(image.height));
+            destination_data, image.width, image.height, RK_FORMAT_RGB_888, static_cast<int>(destination_stride), static_cast<int>(image.height));
         im_rect source_rect{};
         im_rect destination_rect{};
         IM_STATUS status = imcheck(source, destination, source_rect, destination_rect, IM_SYNC);
@@ -186,6 +195,13 @@ private:
             error = std::string("RGA resize failed: ") + imStrError(status);
             image = DecodedImage{};
             return false;
+        }
+        if (destination_stride != image.width) {
+            const size_t output_row_bytes = static_cast<size_t>(image.width) * 3;
+            const size_t padded_row_bytes = static_cast<size_t>(destination_stride) * 3;
+            for (uint32_t row = 0; row < image.height; ++row) {
+                std::copy_n(padded_rgb.data() + row * padded_row_bytes, output_row_bytes, image.rgb.data() + row * output_row_bytes);
+            }
         }
         return true;
     }
