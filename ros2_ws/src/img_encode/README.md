@@ -24,7 +24,7 @@ Choose the OpenCV backend explicitly with:
 colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=OPENCV
 ```
 
-The MPP backend requires the Rockchip MPP headers/library and RGA headers/library. It uses RGA for RGB-to-YUV420P conversion and MPP's JPEG `q_factor` setting for quality. Build it with `-DIMG_ENCODE_BACKEND=MPP`.
+The MPP backend requires the Rockchip MPP headers/library and RGA headers/library. It uses RGA for RGB-to-YUV420P conversion and MPP's JPEG `q_factor` setting for quality; quality 100 maps to MPP's maximum `q_factor` of 99. Build it with `-DIMG_ENCODE_BACKEND=MPP`.
 
 ## Run
 

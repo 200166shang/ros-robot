@@ -1,6 +1,5 @@
 #include "img_encode/image_encode_node.hpp"
 
-#include <stdexcept>
 #include <utility>
 
 namespace img_encode {
@@ -10,10 +9,6 @@ ImageEncodeNode::ImageEncodeNode() : Node("img_encode") {
     input_topic_      = declare_parameter<std::string>("input_topic", "/camera/image_raw");
     output_topic_     = declare_parameter<std::string>("output_topic", "/camera/image_raw/compressed");
     const int quality = declare_parameter<int>("jpeg_quality", 80);
-
-    if (quality < 1 || quality > 100) {
-        throw std::invalid_argument("jpeg_quality must be in [1, 100]");
-    }
 
     encoder_       = std::make_unique<JpegEncoder>(quality);
     const auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();

@@ -41,16 +41,21 @@ ament_target_dependencies(img_encode_core rclcpp sensor_msgs)
 target_link_libraries(img_encode_core ${OpenCV_LIBRARIES})
 
 if(IMG_ENCODE_BACKEND STREQUAL "MPP")
-  target_compile_definitions(img_encode_core PUBLIC IMG_ENCODE_USE_MPP=1)
   target_include_directories(img_encode_core PRIVATE ${MPP_INCLUDE_DIR} ${RGA_INCLUDE_DIR})
   target_link_libraries(img_encode_core ${MPP_LIBRARY} ${RGA_LIBRARY})
-  set(IMG_ENCODE_MPP_DEFINE 1)
+  set(IMG_ENCODE_USE_MPP 1)
   set(IMG_ENCODE_EXPORT_LIBRARIES img_encode_core ${MPP_LIBRARY} ${RGA_LIBRARY})
 else()
-  target_compile_definitions(img_encode_core PUBLIC IMG_ENCODE_USE_MPP=0)
-  set(IMG_ENCODE_MPP_DEFINE 0)
+  set(IMG_ENCODE_USE_MPP 0)
   set(IMG_ENCODE_EXPORT_LIBRARIES img_encode_core)
 endif()
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/img_encode")
+configure_file(
+  cmake/backend_config.hpp.in
+  "${CMAKE_CURRENT_BINARY_DIR}/include/img_encode/backend_config.hpp"
+  @ONLY)
+target_include_directories(img_encode_core PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/include")
 
 add_executable(img_encode_node src/img_encode_main.cpp)
 ament_target_dependencies(img_encode_node rclcpp sensor_msgs)
@@ -61,6 +66,8 @@ install(TARGETS img_encode_core img_encode_node
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/img_encode/backend_config.hpp"
+  DESTINATION include/img_encode)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
@@ -71,7 +78,6 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_include_directories(include)
-ament_export_definitions(IMG_ENCODE_USE_MPP=${IMG_ENCODE_MPP_DEFINE})
 ament_export_libraries(${IMG_ENCODE_EXPORT_LIBRARIES})
 ament_export_dependencies(rclcpp sensor_msgs OpenCV)
 ament_package()

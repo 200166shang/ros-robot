@@ -77,6 +77,12 @@ public:
 private:
     // 根据当前分辨率配置 RGA 输出面、MPP 输入 frame 和 JPEG 质量。
     bool initialize(int width, int height, std::string &error) {
+        const auto fail = [this, &error](const char *message) {
+            error = message;
+            release();
+            return false;
+        };
+
         width_      = width;
         height_     = height;
         hor_stride_ = MPP_ALIGN(width_, 16);
@@ -85,23 +91,17 @@ private:
 
         MPP_RET result = mpp_buffer_get(nullptr, &frame_buffer_, frame_size_);
         if (result != MPP_OK) {
-            error = "MPP input buffer allocation failed";
-            release();
-            return false;
+            return fail("MPP input buffer allocation failed");
         }
 
         result = mpp_create(&context_, &api_);
         if (result != MPP_OK) {
-            error = "MPP context creation failed";
-            release();
-            return false;
+            return fail("MPP context creation failed");
         }
 
         result = mpp_init(context_, MPP_CTX_ENC, MPP_VIDEO_CodingMJPEG);
         if (result != MPP_OK) {
-            error = "MPP JPEG encoder initialization failed";
-            release();
-            return false;
+            return fail("MPP JPEG encoder initialization failed");
         }
 
         MppEncPrepCfg prep{};
@@ -113,29 +113,25 @@ private:
         prep.format     = MPP_FMT_YUV420P;
         result          = api_->control(context_, MPP_ENC_SET_PREP_CFG, &prep);
         if (result != MPP_OK) {
-            error = "MPP JPEG input format setup failed";
-            release();
-            return false;
+            return fail("MPP JPEG input format setup failed");
         }
 
         MppEncCodecCfg codec_cfg{};
-        codec_cfg.coding        = MPP_VIDEO_CodingMJPEG;
-        codec_cfg.jpeg.change   = MPP_ENC_JPEG_CFG_CHANGE_QFACTOR;
-        codec_cfg.jpeg.q_factor = quality_;
-        codec_cfg.jpeg.qf_max   = quality_;
-        codec_cfg.jpeg.qf_min   = quality_;
+        codec_cfg.coding      = MPP_VIDEO_CodingMJPEG;
+        codec_cfg.jpeg.change = MPP_ENC_JPEG_CFG_CHANGE_QFACTOR;
+        // MPP 的 q_factor 上限为 99；将通用 JPEG 质量 100 映射到硬件最大值。
+        const int mpp_quality   = std::min(quality_, 99);
+        codec_cfg.jpeg.q_factor = mpp_quality;
+        codec_cfg.jpeg.qf_max   = mpp_quality;
+        codec_cfg.jpeg.qf_min   = mpp_quality;
         result                  = api_->control(context_, MPP_ENC_SET_CODEC_CFG, &codec_cfg);
         if (result != MPP_OK) {
-            error = "MPP JPEG quality setup failed";
-            release();
-            return false;
+            return fail("MPP JPEG quality setup failed");
         }
 
         result = mpp_frame_init(&frame_);
         if (result != MPP_OK) {
-            error = "MPP frame allocation failed";
-            release();
-            return false;
+            return fail("MPP frame allocation failed");
         }
 
         mpp_frame_set_width(frame_, width_);

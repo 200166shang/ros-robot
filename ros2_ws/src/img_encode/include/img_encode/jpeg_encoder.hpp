@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "img_encode/backend_config.hpp"
+
 namespace img_encode {
 
 // JPEG 编码模块将 ROS 图像校验、颜色转换和所选硬件/软件编码集中在一个接口中。
