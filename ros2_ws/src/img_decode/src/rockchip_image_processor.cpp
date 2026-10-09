@@ -39,6 +39,7 @@ public:
 
     // 通过 MPP task 队列解码 JPEG，再由 RGA 缩放 RGB 输出。
     bool process(const std::vector<uint8_t> &jpeg, double scale, DecodedImage &image, std::string &error) override {
+        // 检查输入数据及 MPP packet 缓冲区容量。
         if (jpeg.empty()) {
             error = "compressed image is empty";
             return false;
@@ -48,10 +49,12 @@ public:
             return false;
         }
 
+        // 复制 JPEG 到 MPP 管理的 packet 缓冲区，并设置本次输入长度。
         std::memcpy(packet_data_, jpeg.data(), jpeg.size());
         mpp_packet_set_pos(packet_, packet_data_);
         mpp_packet_set_length(packet_, jpeg.size());
 
+        // 从 MPP 输入队列获取 task，提交 JPEG packet 和预分配的输出 frame。
         MppTask task = nullptr;
         MPP_RET ret  = mpi_->poll(context_, MPP_PORT_INPUT, MPP_POLL_BLOCK);
         if (ret == MPP_OK) {
@@ -70,6 +73,7 @@ public:
             return false;
         }
 
+        // 等待解码完成并取回包含输出 frame 的 task。
         ret = mpi_->poll(context_, MPP_PORT_OUTPUT, MPP_POLL_BLOCK);
         if (ret == MPP_OK) {
             ret = mpi_->dequeue(context_, MPP_PORT_OUTPUT, &task);
@@ -79,6 +83,7 @@ public:
             return false;
         }
 
+        // 取得解码 frame，经 RGA 缩放并整理为连续 RGB 字节数据。
         MppFrame output_frame = nullptr;
         mpp_task_meta_get_frame(task, KEY_OUTPUT_FRAME, &output_frame);
         if (output_frame == nullptr) {
@@ -87,6 +92,7 @@ public:
             resize_frame(output_frame, scale, image, error);
         }
 
+        // 将输出 task 交还给 MPP；若处理成功但归还失败，则向调用方报告错误。
         const MPP_RET output_ret = mpi_->enqueue(context_, MPP_PORT_OUTPUT, task);
         if (output_ret != MPP_OK && error.empty()) {
             error = "MPP could not release an output task: " + std::to_string(output_ret);
