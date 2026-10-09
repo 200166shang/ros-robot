@@ -114,13 +114,21 @@ scripts/rviz2-headless.sh status
 
 headless RViz2 和 Mac noVNC SSH 隧道的安装及连接步骤见 [`ydlidar/README.md`](../ydlidar/README.md) 的 noVNC 章节。预览结束后运行 `scripts/rviz2-headless.sh stop`，再在相机 launch 终端按 `Ctrl+C`。相机与解码器也可以在预览期间继续运行。
 
-速率观测时，先等待相机首帧和约 8 秒预热，再观察约 10 秒。`usb_camera_node` 每 5 秒报告实际采集 FPS 和发布 FPS；启动 `image_monitor` 可观察解码输出 FPS，也可用 `ros2 topic hz /image_raw/compressed` 和 `ros2 topic hz /camera/image_raw` 查看话题频率。报告中应记录实际后端、窗口、采集/相机发布/解码输出 FPS，不设置固定 FPS 门槛。要核对帧分频，可将相机发布器单独设为 divider 2，并独立运行默认 decoder：
+速率观测时，先等待相机首帧和约 8 秒预热，再观察约 10 秒。`usb_camera_node` 每 5 秒报告实际采集 FPS 和发布 FPS；启动 `image_monitor` 可观察解码输出 FPS，也可分别在终端中用 `ros2 topic hz /image_raw/compressed` 和 `ros2 topic hz /camera/image_raw` 查看话题频率。测 ROS 消息带宽时，在另外两个终端运行 `ros2 topic bw --window 20 /image_raw/compressed` 和 `ros2 topic bw --window 20 /camera/image_raw`；每个新终端先 source ROS 和工作区。`bw` 每秒报告最近 20 条消息的带宽和平均大小，建议预热后记录 3–5 次稳定读数。它测量订阅端收到的 ROS 消息数据速率，不代表网络接口总流量。报告中应记录实际后端、测量窗口、采集/相机发布/解码输出 FPS 和带宽，不设置固定 FPS 门槛。
+
+要核对帧分频，先停止组合 launch，再将相机发布器单独设为 divider 2，并独立运行默认 decoder：
 
 ```zsh
 ros2 launch usb_camera usb_camera.launch.py frame_divider:=2
 ```
 
-相机日志中的采集 FPS 应约为未分频值，发布 FPS 应约为其一半；解码输出 FPS 应跟随压缩输入话题。不要同时运行 `camera_bench`，因为它会独占打开相同的 V4L2 设备。
+另开终端启动 decoder：
+
+```zsh
+ros2 run img_decode img_decode_node
+```
+
+在其它终端订阅 `/camera/image_raw`（例如运行 `ros2 topic hz /camera/image_raw`）以唤醒 lazy decoder。相机日志中的采集 FPS 应约为未分频值，发布 FPS 应约为其一半；解码输出 FPS 应跟随压缩输入话题。不要同时运行 `camera_bench`，因为它会独占打开相同的 V4L2 设备。
 
 JPEG 编码到 ROS 解码的端到端往返命令见 [`img_encode/README.md`](../img_encode/README.md)。验证 OpenCV 和 MPP/RGA 时分别重建对应后端，并在报告中排除编码器 FPS、延迟和资源用量。
 
