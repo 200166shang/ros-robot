@@ -20,6 +20,27 @@ Issue：[验证 Orange Pi 相机预览和 ROS 2 数据流速率 #19](https://git
 
 未设定固定 FPS 门槛，也未与 ROS 1 比较。相机节点启动时偶尔报告采集超时并重新打开 `/dev/video0`；测量在摄像头开始输出帧且预热结束后进行。
 
+
+## ROS 话题带宽补充测量
+
+使用 ROS 2 Foxy 的 `ros2 topic bw` 在本机同时订阅两个话题，窗口设为最近 20 条消息。下表取启动后的 3 次稳定输出的平均值；括号内为这 3 次输出的范围。
+
+| OpenCV 路径话题 | 平均带宽 | 平均消息大小 | 观测范围 |
+|---|---:|---:|---:|
+| `/image_raw/compressed` | 约 0.985 MB/s | 约 31.76 KB | 0.973–0.997 MB/s |
+| `/camera/image_raw` | 约 19.66 MB/s | 约 0.69 MB | 19.35–19.85 MB/s |
+
+复现命令：
+
+```bash
+ros2 topic bw --window 20 /image_raw/compressed
+ros2 topic bw --window 20 /camera/image_raw
+```
+
+两条命令应在数据流运行期间、分别在终端中执行。`ros2 topic bw` 给出订阅端收到的 ROS 消息序列化大小速率，不代表以太网链路总占用。以上补充测量使用 OpenCV 解码后端；没有为 MPP/RGA 路径补测带宽。
+
+本次测量启动时相机曾发生一次采集超时并重开设备；OpenCV 解码日志也出现 libjpeg 关于 JPEG marker 前额外字节的警告。带宽均值取自恢复出帧后的连续稳定输出。
+
 ## 编码器功能往返验证
 
 每种后端都将生成的四象限 640×360 `rgb8` 图像发布给编码器。编码器在 `/camera/image_raw/compressed` 发布 `format: jpeg` 的消息，并保留输入 header；随后将消息送入缩放比例为 0.5 的 ROS 2 解码器。解码输出保留了 header，尺寸为 320×180、编码为 `rgb8`，且通过了四个颜色区域的内容检查。
