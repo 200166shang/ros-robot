@@ -9,6 +9,6 @@ def generate_launch_description():
         }]),
         Node(package='img_decode', executable='img_decode_node', output='screen', parameters=[{
             'input_topic': '/image_raw/compressed', 'output_topic': '/camera/image_raw',
-            'scale': 1.0, 'lazy': True,
+            'width': 1280, 'height': 720, 'scale': 0.5, 'frame_divider': 1, 'lazy': True,
         }]),
     ])
