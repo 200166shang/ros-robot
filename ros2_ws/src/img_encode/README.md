@@ -63,3 +63,32 @@ ros2 launch img_encode img_encode.launch.py
 ```
 
 Override topics or quality with ROS parameters `input_topic`, `output_topic`, and `jpeg_quality`. The node uses a best-effort, depth-one image QoS to keep the latest frame flowing through the camera pipeline. Unsupported encodings, malformed image buffers, and per-frame backend errors are logged and skipped.
+
+## ROS 2 encoder-to-decoder round trip
+
+On the Orange Pi, build `img_encode` and `img_decode` for matching paths: use `OPENCV` for both software backends, or `IMG_ENCODE_BACKEND=MPP` with `IMG_DECODE_BACKEND=ROCKCHIP` for MPP/RGA. Start the encoder and decoder in separate terminals:
+
+```zsh
+source /opt/ros/foxy/setup.zsh
+source ros2_ws/install/setup.zsh
+ros2 run img_encode img_encode_node
+```
+
+```zsh
+source /opt/ros/foxy/setup.zsh
+source ros2_ws/install/setup.zsh
+ros2 run img_decode img_decode_node --ros-args \
+  -p input_topic:=/camera/image_raw/compressed \
+  -p output_topic:=/roundtrip/image \
+  -p scale:=0.5 \
+  -p lazy:=false
+```
+
+From the repository root, publish a generated four-color image and check the ROS output:
+
+```zsh
+source /opt/ros/foxy/setup.zsh
+python3 scripts/verify_image_encode_roundtrip.py
+```
+
+The probe checks JPEG format and marker, compressed and decoded header preservation, `rgb8` output at 320×180, and the four image regions after the ROS decoder. Run it once with OpenCV and once with MPP/RGA. It verifies functional image behavior only; it does not measure encoder performance.

@@ -15,7 +15,7 @@ vnc_port="${ROBOT_RVIZ2_VNC_PORT:-5900}"
 web_port="${ROBOT_RVIZ2_WEB_PORT:-6080}"
 ros_setup="/opt/ros/foxy/setup.zsh"
 workspace_setup="${repo_root}/ros2_ws/install/setup.zsh"
-rviz_config="${repo_root}/ros2_ws/src/ydlidar/config/ydlidar.rviz"
+rviz_config="${ROBOT_RVIZ2_CONFIG:-${repo_root}/ros2_ws/src/ydlidar/config/ydlidar.rviz}"
 child_pids=()
 child_names=()
 

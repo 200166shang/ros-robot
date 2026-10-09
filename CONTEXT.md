@@ -68,6 +68,14 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Remaining acceptance work: RViz2 GUI display on the Orange Pi has not yet been verified; `rviz2` was not installed in the earlier environment check. Keep #7 open until that criterion is tested.
 - Next action: install or otherwise make RViz2 available on the Orange Pi, load `ydlidar.rviz`, and verify `/scan` renders in `laser_link`.
 
+## Camera pipeline Orange Pi validation — 2026-10-09 (Asia/Shanghai)
+
+- Issue: [#19 Verify Orange Pi camera preview and ROS 2 pipeline rates](https://github.com/200166shang/ros-robot/issues/19), after blockers #16–#18 were merged.
+- Added a camera Image RViz2 preset with Best Effort QoS and made `scripts/rviz2-headless.sh` accept `ROBOT_RVIZ2_CONFIG`, preserving the YDLIDAR view as the default. Updated the decoder and encoder usage guides with noVNC preview, rate observation, backend selection, and a ROS 2 encoder-to-decoder probe.
+- OpenCV and MPP/RGA configurations built on Orange Pi. OpenCV physical path: capture 29.8 FPS, camera topic 29.79 FPS, decoder 27.69 FPS. MPP/RGA physical path: 29.8 / 29.79 / 29.79 FPS. With `frame_divider=2`, capture remained 29.8 FPS while camera publication and decode were 14.88 FPS. Measurement windows were 10 seconds after an 8-second warm-up; software-rendered RViz was stopped for rate measurement.
+- RViz2 displayed the physical camera image with the Best Effort topic QoS; the noVNC endpoint served HTTP 200 locally. OpenCV and MPP/RGA encoder-to-decoder ROS topic round trips both preserved `jpeg` format/header, returned 320×180 `rgb8`, and passed four-region content checks. Encoder performance was not measured.
+- Validation report: [docs/reports/camera-pipeline-orange-pi-2026-10-09.md](docs/reports/camera-pipeline-orange-pi-2026-10-09.md). Next action: run final checks, review, commit, and open the PR; leave Issue #19 open pending review/merge.
+
 ## Headless RViz2 / noVNC plan evaluation — 2026-10-07 (Asia/Shanghai)
 
 - Related issues: [ros-robot #7](https://github.com/200166shang/ros-robot/issues/7) remains open for RViz2 validation; [robot-docker #6](https://github.com/200166shang/robot-docker/issues/6) is closed and its current implementation is on `robot-docker` commit `7d7a3c76`.
