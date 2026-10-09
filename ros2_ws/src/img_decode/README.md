@@ -130,6 +130,23 @@ ros2 run img_decode img_decode_node
 
 在其它终端订阅 `/camera/image_raw`（例如运行 `ros2 topic hz /camera/image_raw`）以唤醒 lazy decoder。相机日志中的采集 FPS 应约为未分频值，发布 FPS 应约为其一半；解码输出 FPS 应跟随压缩输入话题。不要同时运行 `camera_bench`，因为它会独占打开相同的 V4L2 设备。
 
+要检查摄像头本身能否超过 30 FPS，先停止其他相机节点，再查看 UVC 模式并单独请求 60 FPS：
+
+```zsh
+v4l2-ctl -d /dev/video0 --list-formats-ext
+ros2 run usb_camera usb_camera_node --ros-args \
+  -p device:=/dev/video0 -p width:=1280 -p height:=720 \
+  -p fps:=60 -p lazy:=false
+```
+
+另开终端订阅 `/image_raw/compressed`：
+
+```zsh
+ros2 topic hz --window 100 /image_raw/compressed
+```
+
+用相机运行时的 `v4l2-ctl -d /dev/video0 --get-parm` 和持续 FPS 判断实际帧率；`fps` 参数只是请求值。如果低光环境下自动曝光优先级使曝光时间超过帧间隔，FPS 也会降低。可临时关闭 `exposure_auto_priority` 做受控测试，但要在比较画面亮度后恢复原设置。Issue #19 的实测上限、曝光状态和结果解释见[验证报告](../../../docs/reports/camera-pipeline-orange-pi-2026-10-09.md)。
+
 JPEG 编码到 ROS 解码的端到端往返命令见 [`img_encode/README.md`](../img_encode/README.md)。验证 OpenCV 和 MPP/RGA 时分别重建对应后端，并在报告中排除编码器 FPS、延迟和资源用量。
 
 ## 独立运行解码器或调整参数

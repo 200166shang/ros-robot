@@ -29,6 +29,19 @@ Issue：[验证 Orange Pi 相机预览和 ROS 2 数据流速率 #19](https://git
 - `frame_divider=2` 时，相机采集仍约 29.8 FPS，发布约 14.88 FPS，约为采集速率的 49.9%；解码输出跟随发布速率。这与每两帧发布一帧的配置相符。
 - 以上 FPS 是稳定运行窗口里的端到端速率，不能换算成纯解码耗时。此次没有分别测量 JPEG 解码、缩放、ROS 发布各自的单帧耗时。
 
+## 物理相机上限探测
+
+用 `v4l2-ctl --list-formats-ext` 查询 Logitech `046d:0825` 的模式表，当前设备列出的最高档位为 30 FPS；目标模式 1280×720 MJPEG 也只列出 30 FPS。随后用 `usb_camera_node` 固定 1280×720，分别请求 30 和 60 FPS，并用 `ros2 topic hz --window 100 /image_raw/compressed` 测量稳定输出：
+
+| 请求帧率 | 实测相机发布 |
+|---:|---:|
+| 30 FPS | 约 29.8 FPS |
+| 60 FPS | 约 29.8 FPS |
+
+请求 60 FPS 时，运行中的 `v4l2-ctl --get-parm` 仍报告 30 FPS，因此请求值没有让摄像头超过模式上限。当前整条实体相机链路的最高已验证值仍是 MPP/RGA 解码输出约 29.79 FPS，基本贴近摄像头上限；继续把相机请求值调到 90 或 120 FPS 不会提高当前配置的端到端速率。
+
+本轮开始时自动曝光优先级为开启，低光画面下曝光为 41.9 ms，实测约 24.1 FPS。为了测模式上限，临时关闭了 `exposure_auto_priority`；30 和 60 FPS 请求随后都达到约 29.8 FPS。测试结束后已恢复该控制为开启。自动曝光优先级可能为画面亮度延长曝光并降低 FPS，因此报告帧率时应同时记录曝光控制状态。一次 `camera_bench` 独立测量未能在 15 秒内取得首帧；本次上限数据改由 `usb_camera_node` 和 ROS 话题频率测量取得。
+
 ## ROS 话题带宽补充测量
 
 使用 ROS 2 Foxy 的 `ros2 topic bw` 在本机同时订阅两个话题，窗口设为最近 20 条消息。下表取启动后的 3 次稳定输出的平均值；括号内为这 3 次输出的范围。
@@ -99,6 +112,17 @@ ros2 run img_decode img_decode_node
 ```
 
 预期采集速率基本不变，相机发布和解码输出约为其一半。不要同时运行 `camera_bench`，它会独占摄像头。图像预览启动步骤见 [`img_decode/README.md`](../../ros2_ws/src/img_decode/README.md) 的 Orange Pi 端到端验证章节；JPEG 编码器往返验证见 [`img_encode/README.md`](../../ros2_ws/src/img_encode/README.md)。
+
+要探测相机是否能超过默认 30 FPS，先停止相机和解码 launch，再查看设备模式并请求 60 FPS：
+
+```zsh
+v4l2-ctl -d /dev/video0 --list-formats-ext
+ros2 run usb_camera usb_camera_node --ros-args \
+  -p device:=/dev/video0 -p width:=1280 -p height:=720 \
+  -p fps:=60 -p lazy:=false
+```
+
+另开终端运行 `ros2 topic hz --window 100 /image_raw/compressed`，并在相机运行时检查 `v4l2-ctl -d /dev/video0 --get-parm` 返回的帧率。模式表或驱动若仍显示 30 FPS，持续测量也约为 30 FPS，则更高请求已被设备上限截住。`fps` 是请求值，不保证设备实际采用；曝光自动优先级也可能因低光而降低帧率。若临时将 `exposure_auto_priority` 设为 `0` 做受控比较，结束后恢复为原值，并检查图像亮度。
 
 ## 编码器功能往返验证
 
