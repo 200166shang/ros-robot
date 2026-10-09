@@ -12,7 +12,7 @@ constexpr int64_t kMaxConfiguredDimension = 8192;
 
 }  // namespace
 
-// 中文：读取节点参数、创建处理 Adapter，并建立输出话题。
+// 读取节点参数、创建处理 Adapter，并建立输出话题。
 ImageDecodeNode::ImageDecodeNode(const rclcpp::NodeOptions &options) : Node("img_decode", options) {
     input_topic_                           = declare_parameter<std::string>("input_topic", "/image_raw/compressed");
     output_topic_                          = declare_parameter<std::string>("output_topic", "/camera/image_raw");
@@ -50,7 +50,7 @@ ImageDecodeNode::ImageDecodeNode(const rclcpp::NodeOptions &options) : Node("img
                 static_cast<long long>(frame_divider_));
 }
 
-// 中文：只在需要图像输出时维持输入订阅。
+// 只在需要图像输出时维持输入订阅。
 void ImageDecodeNode::update_subscription() {
     const bool output_needed = !lazy_ || publisher_->get_subscription_count() > 0;
     if (output_needed && !subscription_) {
@@ -62,7 +62,7 @@ void ImageDecodeNode::update_subscription() {
     }
 }
 
-// 中文：创建压缩图像订阅并绑定处理入口。
+// 创建压缩图像订阅并绑定处理入口。
 void ImageDecodeNode::subscribe() {
     auto qos      = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
     subscription_ = create_subscription<sensor_msgs::msg::CompressedImage>(
@@ -70,7 +70,7 @@ void ImageDecodeNode::subscribe() {
     RCLCPP_INFO(get_logger(), "decoder subscribed");
 }
 
-// 中文：按输入帧 divider 解码 JPEG，并保留 header 发布 rgb8 图像。
+// 按输入帧 divider 解码 JPEG，并保留 header 发布 rgb8 图像。
 void ImageDecodeNode::decode(const sensor_msgs::msg::CompressedImage::SharedPtr &compressed) {
     ++input_count_;
     if (input_count_ % static_cast<uint64_t>(frame_divider_) != 0) {

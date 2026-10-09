@@ -11,7 +11,7 @@ namespace {
 
 class OpenCvImageProcessor final : public ImageProcessor {
 public:
-    // 中文：通过 OpenCV 将 JPEG 解码为 RGB 并执行软件缩放。
+    // 通过 OpenCV 将 JPEG 解码为 RGB 并执行软件缩放。
     bool process(const std::vector<uint8_t> &jpeg, double scale, DecodedImage &image, std::string &error) override {
         if (jpeg.empty()) {
             error = "compressed image is empty";
@@ -49,10 +49,10 @@ public:
 
 }  // namespace
 
-// 中文：返回使用 OpenCV 软件路径的图像处理 Adapter。
+// 返回使用 OpenCV 软件路径的图像处理 Adapter。
 std::unique_ptr<ImageProcessor> make_image_processor(uint32_t, uint32_t) { return std::make_unique<OpenCvImageProcessor>(); }
 
-// 中文：标识 OpenCV 软件处理路径，便于启动日志记录。
+// 标识 OpenCV 软件处理路径，便于启动日志记录。
 const char *image_processor_backend() { return "OpenCV"; }
 
 }  // namespace img_decode

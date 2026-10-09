@@ -26,18 +26,18 @@ namespace {
 
 constexpr uint32_t kStrideAlignment = 16;
 
-// 中文：将像素尺寸按 MPP 解码输出要求对齐。
+// 将像素尺寸按 MPP 解码输出要求对齐。
 uint32_t align_dimension(uint32_t value) { return (value + kStrideAlignment - 1) & ~(kStrideAlignment - 1); }
 
 class RockchipImageProcessor final : public ImageProcessor {
 public:
-    // 中文：创建 MPP JPEG 解码上下文并按配置尺寸准备输入输出缓冲区。
+    // 创建 MPP JPEG 解码上下文并按配置尺寸准备输入输出缓冲区。
     RockchipImageProcessor(uint32_t max_width, uint32_t max_height) : max_width_(max_width), max_height_(max_height) { initialize(); }
 
-    // 中文：释放 MPP context 和缓冲区组，归还硬件 Adapter 持有的资源。
+    // 释放 MPP context 和缓冲区组，归还硬件 Adapter 持有的资源。
     ~RockchipImageProcessor() override { release(); }
 
-    // 中文：通过 MPP task 队列解码 JPEG，再由 RGA 缩放 RGB 输出。
+    // 通过 MPP task 队列解码 JPEG，再由 RGA 缩放 RGB 输出。
     bool process(const std::vector<uint8_t> &jpeg, double scale, DecodedImage &image, std::string &error) override {
         if (jpeg.empty()) {
             error = "compressed image is empty";
@@ -95,7 +95,7 @@ public:
     }
 
 private:
-    // 中文：初始化 MPP decoder、RGB 格式和解码所需的缓冲区。
+    // 初始化 MPP decoder、RGB 格式和解码所需的缓冲区。
     void initialize() {
         MPP_RET ret = mpp_create(&context_, &mpi_);
         if (ret == MPP_OK) {
@@ -151,7 +151,7 @@ private:
         }
     }
 
-    // 中文：读取 MPP 返回的 RGB frame 并通过 RGA 写入连续的缩放图像。
+    // 读取 MPP 返回的 RGB frame 并通过 RGA 写入连续的缩放图像。
     bool resize_frame(MppFrame frame, double scale, DecodedImage &image, std::string &error) {
         const uint32_t width             = mpp_frame_get_width(frame);
         const uint32_t height            = mpp_frame_get_height(frame);
@@ -206,7 +206,7 @@ private:
         return true;
     }
 
-    // 中文：销毁 MPP objects、buffers 和 context，按依赖顺序释放资源。
+    // 销毁 MPP objects、buffers 和 context，按依赖顺序释放资源。
     void release() {
         if (packet_ != nullptr) {
             mpp_packet_deinit(&packet_);
@@ -255,12 +255,12 @@ private:
 
 }  // namespace
 
-// 中文：返回使用 Rockchip MPP/RGA 硬件处理路径的 Adapter。
+// 返回使用 Rockchip MPP/RGA 硬件处理路径的 Adapter。
 std::unique_ptr<ImageProcessor> make_image_processor(uint32_t max_width, uint32_t max_height) {
     return std::make_unique<RockchipImageProcessor>(max_width, max_height);
 }
 
-// 中文：标识 Rockchip 硬件处理路径，便于启动日志记录。
+// 标识 Rockchip 硬件处理路径，便于启动日志记录。
 const char *image_processor_backend() { return "Rockchip MPP/RGA"; }
 
 }  // namespace img_decode

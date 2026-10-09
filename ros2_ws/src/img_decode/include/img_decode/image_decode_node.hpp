@@ -11,15 +11,15 @@
 
 class ImageDecodeNode : public rclcpp::Node {
 public:
-    // 中文：构造 JPEG 解码节点并连接 ROS 图像话题。
+    // 构造 JPEG 解码节点并连接 ROS 图像话题。
     explicit ImageDecodeNode(const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
 
 private:
-    // 中文：按输入帧序号筛选消息并发布解码后的 RGB 图像。
+    // 按输入帧序号筛选消息并发布解码后的 RGB 图像。
     void decode(const sensor_msgs::msg::CompressedImage::SharedPtr &compressed);
-    // 中文：有输出订阅者时才接收输入图像，减少闲置处理。
+    // 有输出订阅者时才接收输入图像，减少闲置处理。
     void update_subscription();
-    // 中文：创建压缩图像订阅并绑定解码回调。
+    // 创建压缩图像订阅并绑定解码回调。
     void subscribe();
 
     std::string input_topic_;

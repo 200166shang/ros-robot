@@ -15,9 +15,9 @@ namespace {
 
 class ExecutorThread {
 public:
-    // 中文：在独立线程中运行 ROS executor 以观测真实 topic 接口。
+    // 在独立线程中运行 ROS executor 以观测真实 topic 接口。
     explicit ExecutorThread(rclcpp::executors::SingleThreadedExecutor &executor) : executor_(executor), thread_([this]() { executor_.spin(); }) {}
-    // 中文：停止并等待 ROS executor 线程结束。
+    // 停止并等待 ROS executor 线程结束。
     ~ExecutorThread() {
         executor_.cancel();
         if (thread_.joinable()) {
@@ -30,7 +30,7 @@ private:
     std::thread thread_;
 };
 
-// 中文：生成带固定 header 的 JPEG 样本供公开 topic 接口测试使用。
+// 生成带固定 header 的 JPEG 样本供公开 topic 接口测试使用。
 sensor_msgs::msg::CompressedImage make_jpeg_message() {
     cv::Mat bgr(243, 323, CV_8UC3, cv::Scalar(20, 80, 180));
     std::vector<uint8_t> jpeg;
@@ -45,7 +45,7 @@ sensor_msgs::msg::CompressedImage make_jpeg_message() {
     return message;
 }
 
-// 中文：等待输入 publisher 与解码节点建立 ROS topic 连接。
+// 等待输入 publisher 与解码节点建立 ROS topic 连接。
 template <typename PublisherT>
 bool wait_for_subscription(PublisherT &publisher) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -57,16 +57,16 @@ bool wait_for_subscription(PublisherT &publisher) {
 
 class ImgDecodeRosInterfaceTest : public ::testing::Test {
 protected:
-    // 中文：为节点 topic 接口测试初始化 ROS context。
+    // 为节点 topic 接口测试初始化 ROS context。
     static void SetUpTestCase() {
         int argc = 0;
         rclcpp::init(argc, nullptr);
     }
-    // 中文：释放 topic 接口测试使用的 ROS context。
+    // 释放 topic 接口测试使用的 ROS context。
     static void TearDownTestCase() { rclcpp::shutdown(); }
 };
 
-// 中文：验证默认缩放、RGB 输出布局与输入 header 保留行为。
+// 验证默认缩放、RGB 输出布局与输入 header 保留行为。
 TEST_F(ImgDecodeRosInterfaceTest, PublishesHalfScaleRgbImageAndPreservesHeader) {
     rclcpp::NodeOptions options;
     options.parameter_overrides({
@@ -112,7 +112,7 @@ TEST_F(ImgDecodeRosInterfaceTest, PublishesHalfScaleRgbImageAndPreservesHeader) 
     EXPECT_GT(received->data[0], received->data[2]);
 }
 
-// 中文：验证配置缩放比例和每 N 帧处理一次的行为。
+// 验证配置缩放比例和每 N 帧处理一次的行为。
 TEST_F(ImgDecodeRosInterfaceTest, AppliesConfiguredScaleAndEveryNthInputDivider) {
     rclcpp::NodeOptions options;
     options.parameter_overrides({
