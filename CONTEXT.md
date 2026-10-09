@@ -251,3 +251,9 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Updated `ros2_ws/src/img_decode/README.md` with Zsh setup/build commands, OpenCV and MPP/RGA backend selection, the physical-camera launch path, lazy-subscription behavior, topic-rate and image-monitor checks, snapshot saving, node parameters, and a separate-node example for parameter overrides. Kept README instructions aligned with the current launch and node interfaces.
 - Validation: checked documented executable names, launch parameters, and node defaults against `CMakeLists.txt`, `camera_decode.launch.py`, and the node sources; confirmed ROS Foxy `ros2 topic echo` does not support `--once` and documented Ctrl+C after receiving a frame instead. `git diff --check` passed. No build or tests were run for this documentation-only change.
 - Next action: review and commit the README update, then push it to PR #21 for user review.
+
+## YDLIDAR test and SDK setup documentation — 2026-10-09 (UTC)
+
+- Added Chinese and English `ydlidar/README.md` instructions for the ROS interface test and production hardware-node build. The guide explains that the test uses a fake scan source, needs no physical lidar or vendor SDK, and requires `YDLIDAR_BUILD_HARDWARE_NODE=OFF` because the hardware node is enabled by default. It also documents exposing an installed SDK's CMake config and shared libraries.
+- Validation on the Orange Pi: built `ydlidar` with `-DYDLIDAR_BUILD_HARDWARE_NODE=OFF`; `test_ydlidar_ros_interface` passed (1/1), covering scan publication and start/stop services. No physical radar was used. `git diff --check` passed.
+- Next action: open a documentation PR for user review.
