@@ -24,6 +24,7 @@ if(IMG_ENCODE_BACKEND STREQUAL "AUTO")
 endif()
 
 if(IMG_ENCODE_BACKEND STREQUAL "MPP")
+  set(IMG_ENCODE_BACKEND_SOURCE src/mpp_jpeg_encoder_backend.cpp)
   find_path(MPP_INCLUDE_DIR rockchip/rk_mpi.h)
   find_path(RGA_INCLUDE_DIR rga/im2d.h)
   find_library(MPP_LIBRARY rockchip_mpp)
@@ -33,29 +34,27 @@ if(IMG_ENCODE_BACKEND STREQUAL "MPP")
   endif()
 elseif(NOT IMG_ENCODE_BACKEND STREQUAL "OPENCV")
   message(FATAL_ERROR "IMG_ENCODE_BACKEND must be AUTO, OPENCV, or MPP")
+else()
+  set(IMG_ENCODE_BACKEND_SOURCE src/opencv_jpeg_encoder_backend.cpp)
 endif()
 
-add_library(img_encode_core src/jpeg_encoder.cpp src/image_encode_node.cpp)
-target_include_directories(img_encode_core PUBLIC include ${OpenCV_INCLUDE_DIRS})
+add_library(img_encode_core
+  src/jpeg_encoder.cpp
+  src/image_encode_node.cpp
+  ${IMG_ENCODE_BACKEND_SOURCE})
+target_include_directories(img_encode_core
+  PUBLIC include ${OpenCV_INCLUDE_DIRS}
+  PRIVATE src)
 ament_target_dependencies(img_encode_core rclcpp sensor_msgs)
 target_link_libraries(img_encode_core ${OpenCV_LIBRARIES})
 
 if(IMG_ENCODE_BACKEND STREQUAL "MPP")
   target_include_directories(img_encode_core PRIVATE ${MPP_INCLUDE_DIR} ${RGA_INCLUDE_DIR})
   target_link_libraries(img_encode_core ${MPP_LIBRARY} ${RGA_LIBRARY})
-  set(IMG_ENCODE_USE_MPP 1)
   set(IMG_ENCODE_EXPORT_LIBRARIES img_encode_core ${MPP_LIBRARY} ${RGA_LIBRARY})
 else()
-  set(IMG_ENCODE_USE_MPP 0)
   set(IMG_ENCODE_EXPORT_LIBRARIES img_encode_core)
 endif()
-
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/img_encode")
-configure_file(
-  cmake/backend_config.hpp.in
-  "${CMAKE_CURRENT_BINARY_DIR}/include/img_encode/backend_config.hpp"
-  @ONLY)
-target_include_directories(img_encode_core PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/include")
 
 add_executable(img_encode_node src/img_encode_main.cpp)
 ament_target_dependencies(img_encode_node rclcpp sensor_msgs)
@@ -66,8 +65,6 @@ install(TARGETS img_encode_core img_encode_node
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/img_encode/backend_config.hpp"
-  DESTINATION include/img_encode)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
