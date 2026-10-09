@@ -230,5 +230,33 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Added `ros2_ws/src/img_encode/`: a ROS 2 C++ `Image` to `CompressedImage` node, configurable topics and JPEG quality, header preservation, JPEG format metadata, OpenCV software encoding, and RGA RGB-to-YUV plus Rockchip MPP JPEG encoding. CMake `IMG_ENCODE_BACKEND=AUTO` chooses MPP on AArch64 and OpenCV elsewhere; explicit `OPENCV` and `MPP` selections are supported.
 - The `img_encode` topic test publishes an RGB image through ROS, checks the compressed output header and `jpeg` format, and decodes the JPEG to verify its dimensions. It passed on Orange Pi in both MPP and explicit OpenCV builds. The MPP test exercised RGA and MPP with test-generated input; no camera acquisition or robot actuation was used.
 - Validation: both backend builds and package topic tests passed. The available full workspace suite passed 16 tests across 13 packages; `rknn_yolov6` was excluded because its external `rknn_api.h` SDK header is unavailable in this environment. `clang-format --dry-run --Werror` and `git diff --check` passed.
-- Review: Standards found no hard breaches; its optional PIMPL suggestion is non-blocking. Spec review found no remaining gaps after mapping MPP quality 100 to its supported maximum `q_factor` of 99. PR [#22](https://github.com/200166shang/ros-robot/pull/22) is open from `codex/issue-18-jpeg-encoder` to `main` and is mergeable.
-- Next action: user review PR #22; Issue #19 remains the later live camera integration and preview verification step.
+- Review: Standards found no hard breaches; its optional PIMPL suggestion is non-blocking. Spec review found no remaining gaps after mapping MPP quality 100 to its supported maximum `q_factor` of 99. PR [#22](https://github.com/200166shang/ros-robot/pull/22) is open from `codex/issue-18-jpeg-encoder` to `main`; it was behind `main` before this synchronization.
+- Next action: user review the synchronized PR #22; Issue #19 remains the later live camera integration and preview verification step.
+
+## ROS 2 camera capture and frame divider — 2026-10-09 (Asia/Shanghai)
+
+- Issue: [#16 Migrate V4L2 camera capture and frame divider to ROS 2](https://github.com/200166shang/ros-robot/issues/16), part of [#15](https://github.com/200166shang/ros-robot/issues/15).
+- Implemented on `codex/issue-16-camera-divider`: the camera node now publishes every Nth captured JPEG according to `frame_divider` (default 1), accepts an ordered `device_candidates` parameter with rotation after open failures, and preserves the single `device` parameter as a compatibility fallback. The launch file configures only `/dev/video0`, exposes `frame_divider`, and retains lazy capture and `/enable_camera` behavior. Updated `usb_camera` usage documentation.
+- Validation: ROS Foxy `usb_camera` build passed; package tests passed (4/4); launch Python syntax, `.clang-format`, and `git diff --check` passed. On the Orange Pi, a topic subscriber validated JPEG markers, format, and `camera` frame ID. With divider 2, a stable interval logged 26 FPS captured and 13 FPS published. An enable/disable topic check observed 0 messages while disabled and resumed output after enabling. Candidate failover from `/dev/not-a-camera` to `/dev/video0` succeeded. The camera intermittently timed out and reopened during these runs, consistent with the existing V4L2 reconnect path.
+- Decision: use ROS topic I/O as the observable test seam; no tracking actuation was performed.
+- Next action: submit PR for review; continue with issue #19 after issues #16–#18 are merged or otherwise available.
+
+## Camera capture loop responsibility split — 2026-10-09 (Asia/Shanghai)
+
+- Follow-up to [PR #20](https://github.com/200166shang/ros-robot/pull/20), requested during review. Extracted frame selection into `usb_camera/frame_divider.hpp` and capture/publish rate windows into `usb_camera/frame_rate_stats.hpp`; the ROS node now records events and reports snapshots. Reset the stats window while capture is idle or recovering from a capture error so idle time is excluded. Kept C++14 compatibility, so `reportIfDue` uses a boolean result plus `FpsSnapshot&` instead of `std::optional`.
+- Validation: ROS Foxy `usb_camera` build passed; package tests passed (4/4); clang-format and `git diff --check` passed. On the Orange Pi with divider 2, valid JPEG messages were received and the node reported 23.3 FPS captured / 11.6 FPS published. `/enable_camera` still stopped messages while disabled and resumed publication after enabling.
+- Next action: push the refactor commit to PR #20 for review.
+
+## JPEG decoder RGA stride correction — 2026-10-09 (Asia/Shanghai)
+
+- Hardware validation of PR [#21](https://github.com/200166shang/ros-robot/pull/21) showed repeated `RGA_BLIT fail: Invalid argument` for 1280x720 RGB888 frames and no `/camera/image_raw` messages. The source RGA descriptor was receiving MPP's horizontal byte stride (3840) as RGA's pixel stride (which should be 1280 for this frame).
+- Updated `rockchip_image_processor.cpp` to validate MPP byte stride separately and pass `mpp_frame_get_hor_stride_pixel()` to RGA. Added a 1280x720 ROS topic-interface regression case. Commit: `c6d772c`.
+- Validation on the Orange Pi: the new test reproduced the RGA failure before the fix; after the fix the ROCKCHIP backend built and all 3 topic-interface cases passed, including 1280x720 to 640x360. `clang-format --dry-run --Werror` and `git diff --check` passed. MPP/RGA system-header pedantic warnings remain non-fatal.
+- Next action: user reruns the live camera pipeline with the updated PR branch; update PR #21 description when the GitHub API is available.
+
+## JPEG decoder usage documentation — 2026-10-09 (UTC)
+
+- Issue/PR: [#17 Migrate JPEG decoding and scaling to ROS 2](https://github.com/200166shang/ros-robot/issues/17), [PR #21](https://github.com/200166shang/ros-robot/pull/21).
+- Updated `ros2_ws/src/img_decode/README.md` with Zsh setup/build commands, OpenCV and MPP/RGA backend selection, the physical-camera launch path, lazy-subscription behavior, topic-rate and image-monitor checks, snapshot saving, node parameters, and a separate-node example for parameter overrides. Kept README instructions aligned with the current launch and node interfaces.
+- Validation: checked documented executable names, launch parameters, and node defaults against `CMakeLists.txt`, `camera_decode.launch.py`, and the node sources; confirmed ROS Foxy `ros2 topic echo` does not support `--once` and documented Ctrl+C after receiving a frame instead. `git diff --check` passed. No build or tests were run for this documentation-only change.
+- Next action: review and commit the README update, then push it to PR #21 for user review.

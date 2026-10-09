@@ -21,10 +21,16 @@ source install/setup.bash
 ros2 launch usb_camera usb_camera.launch.py
 ```
 
-默认从 `/dev/video0` 采集 1280×720、请求帧率 30 FPS 的 MJPEG 图像，并发布到 `/image_raw/compressed`。Launch 默认启用 `lazy`：没有图像订阅者时不会持续打开相机。可以在另一个终端运行下面的命令建立订阅并查看实际发布帧率：
+默认按 `device_candidates` 顺序尝试 `/dev/video0`，采集 1280×720、请求帧率 30 FPS 的 MJPEG 图像，并发布到 `/image_raw/compressed`。设备打开失败时节点会轮到下一候选路径；当前 launch 只配置 `/dev/video0`。Launch 默认启用 `lazy`：没有图像订阅者时不会持续打开相机。`frame_divider` 默认是 `1`，设为 `N` 时每采集 N 帧发布一帧。`/enable_camera` 上的 `std_msgs/Bool` 可暂停或恢复相机采集。可以在另一个终端运行下面的命令建立订阅并查看实际发布帧率：
 
 ```bash
 ros2 topic hz /image_raw/compressed
+```
+
+例如，以 divider 2 启动节点：
+
+```bash
+ros2 launch usb_camera usb_camera.launch.py frame_divider:=2
 ```
 
 ## 运行相机性能基准
