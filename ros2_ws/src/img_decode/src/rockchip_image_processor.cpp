@@ -160,17 +160,18 @@ private:
     // 读取 MPP 返回的 RGB frame 并通过 RGA 写入连续的缩放图像。
     bool resize_frame(MppFrame frame, double scale, DecodedImage &image, std::string &error) {
         // 读取解码图像的可见尺寸、对齐 stride 和底层像素缓冲区。
-        const uint32_t width             = mpp_frame_get_width(frame);
-        const uint32_t height            = mpp_frame_get_height(frame);
-        const uint32_t horizontal_stride = mpp_frame_get_hor_stride(frame);
-        const uint32_t vertical_stride   = mpp_frame_get_ver_stride(frame);
-        MppBuffer buffer                 = mpp_frame_get_buffer(frame);
-        auto *pixels                     = buffer == nullptr ? nullptr : static_cast<uint8_t *>(mpp_buffer_get_ptr(buffer));
+        const uint32_t width                    = mpp_frame_get_width(frame);
+        const uint32_t height                   = mpp_frame_get_height(frame);
+        const uint32_t horizontal_stride_bytes  = mpp_frame_get_hor_stride(frame);
+        const uint32_t horizontal_stride_pixels = mpp_frame_get_hor_stride_pixel(frame);
+        const uint32_t vertical_stride          = mpp_frame_get_ver_stride(frame);
+        MppBuffer buffer                        = mpp_frame_get_buffer(frame);
+        auto *pixels                            = buffer == nullptr ? nullptr : static_cast<uint8_t *>(mpp_buffer_get_ptr(buffer));
 
         // 确认图像未超出配置尺寸，stride、像素格式和 MPP 解码状态均有效。
-        const bool valid_frame = width > 0 && height > 0 && width <= max_width_ && height <= max_height_ && horizontal_stride >= width &&
-                                 vertical_stride >= height && pixels != nullptr && mpp_frame_get_fmt(frame) == MPP_FMT_RGB888 &&
-                                 mpp_frame_get_errinfo(frame) == 0;
+        const bool valid_frame = width > 0 && height > 0 && width <= max_width_ && height <= max_height_ && horizontal_stride_bytes >= width * 3 &&
+                                 horizontal_stride_pixels >= width && vertical_stride >= height && pixels != nullptr &&
+                                 mpp_frame_get_fmt(frame) == MPP_FMT_RGB888 && mpp_frame_get_errinfo(frame) == 0;
         if (!valid_frame) {
             error = "MPP returned an invalid, oversized, or non-RGB frame";
             return false;
@@ -192,7 +193,7 @@ private:
 
         // 将 MPP 源帧和 RGA 目标缓冲区包装为 RGA 描述，并检查是否可执行。
         rga_buffer_t source =
-            wrapbuffer_virtualaddr(pixels, width, height, RK_FORMAT_RGB_888, static_cast<int>(horizontal_stride), static_cast<int>(vertical_stride));
+            wrapbuffer_virtualaddr(pixels, width, height, RK_FORMAT_RGB_888, static_cast<int>(horizontal_stride_pixels), static_cast<int>(vertical_stride));
         rga_buffer_t destination = wrapbuffer_virtualaddr(
             destination_data, image.width, image.height, RK_FORMAT_RGB_888, static_cast<int>(destination_stride), static_cast<int>(image.height));
         im_rect source_rect{};
