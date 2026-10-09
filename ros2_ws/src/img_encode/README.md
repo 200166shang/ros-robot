@@ -30,6 +30,32 @@ The MPP backend requires the Rockchip MPP headers/library and RGA headers/librar
 
 The node and `JpegEncoder` share the ROS message handling and RGB normalization path. `JpegEncoder` delegates JPEG generation through a small internal backend interface; CMake compiles either the OpenCV adapter or the MPP/RGA adapter selected by `IMG_ENCODE_BACKEND`. Each adapter owns only its encoding-specific work and resources.
 
+## Test
+
+The topic-interface test publishes a generated RGB image, receives the compressed topic, checks the message header and `jpeg` format, then decodes the JPEG and checks its dimensions. It does not need a camera. Run it once for each backend to exercise both build selections.
+
+For OpenCV:
+
+```bash
+source /opt/ros/foxy/setup.zsh
+cd ~/code/ros-robot/ros2_ws
+colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=OPENCV
+source install/setup.zsh
+colcon test --packages-select img_encode --event-handlers console_direct+
+colcon test-result --verbose
+```
+
+For MPP/RGA, the Rockchip SDK headers and libraries must be installed:
+
+```bash
+colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=MPP
+source install/setup.zsh
+colcon test --packages-select img_encode --event-handlers console_direct+
+colcon test-result --verbose
+```
+
+The test sends a synthetic frame through the selected encoder, so the MPP/RGA run exercises the hardware encoding path without opening a camera or moving the robot. A passing run reports `test_img_encode` as 1/1 passed.
+
 ## Run
 
 ```bash

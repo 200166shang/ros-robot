@@ -266,4 +266,11 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Follow-up to [PR #22](https://github.com/200166shang/ros-robot/pull/22): separated ROS image validation/RGB normalization from JPEG encoding behind a private `JpegEncoderBackend` virtual interface. OpenCV and MPP/RGA adapters now live in separate source files; CMake compiles only the adapter selected by `IMG_ENCODE_BACKEND`. The ROS topic interface and build-time backend choice are unchanged.
 - Added Chinese responsibility comments to the interface and named functions, plus a short README architecture note. Removed the generated backend config header, which is no longer needed after CMake selects the adapter source directly.
 - Validation: OpenCV build and topic test passed (1/1); MPP/RGA build and topic test passed (1/1); `clang-format --dry-run --Werror` and `git diff --check` passed. A full workspace build was attempted but did not complete: `ydlidar` needs an unavailable `ydlidar_sdkConfig.cmake`; `monitor_interfaces` and `usb_camera` were aborted when the overall build reached its five-minute limit. `rknn_yolov6` also remains excluded from available workspace validation because its external `rknn_api.h` is unavailable.
-- Review: Standards found no documented violations or supported smells; Spec found no missing Issue #18 requirements or unasked behavior. Commit `176166c` contains the refactor. No tracking actuation or live camera capture was performed. Next action: push the updated PR #22 and await user review.
+- Review: Standards found no documented violations or supported smells; Spec found no missing Issue #18 requirements or unasked behavior. Commit `6d3ab6c` contains the refactor. No tracking actuation or live camera capture was performed. Next action: await user review of PR #22.
+
+
+## JPEG encoder test instructions — 2026-10-09 (UTC)
+
+- Follow-up to [PR #22](https://github.com/200166shang/ros-robot/pull/22): documented the synthetic ROS topic-interface test and exact OpenCV and MPP/RGA build/test commands in `ros2_ws/src/img_encode/README.md`. The test needs no camera; the MPP/RGA configuration still requires the Rockchip headers and libraries and exercises that hardware encoder path.
+- Validation on Orange Pi: the documented package build and topic test passed for OpenCV (1/1) and MPP/RGA (1/1). `git diff --check` passed.
+- Next action: push the README update to PR #22 and await user review.
