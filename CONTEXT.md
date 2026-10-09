@@ -290,3 +290,10 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Follow-up to [PR #22](https://github.com/200166shang/ros-robot/pull/22): documented the synthetic ROS topic-interface test and exact OpenCV and MPP/RGA build/test commands in `ros2_ws/src/img_encode/README.md`. The test needs no camera; the MPP/RGA configuration still requires the Rockchip headers and libraries and exercises that hardware encoder path.
 - Validation on Orange Pi: the documented package build and topic test passed for OpenCV (1/1) and MPP/RGA (1/1). `git diff --check` passed.
 - PR [#22](https://github.com/200166shang/ros-robot/pull/22) was merged into `main` as `8d6bc42`; Issue #18 is closed.
+
+## Issue #19 multi-node load observation — 2026-10-09 (UTC)
+
+- Request: evaluate whether running several decoder nodes under high load affects camera pipeline performance.
+- Hardware run: one 1280×720 MJPEG camera input stayed near 29.8 FPS while four OpenCV `img_decode_node` processes ran concurrently on separate output topics. The monitored decoder showed about 1.7 FPS overall (observed windows varied around 0.7–2.3 FPS); single-decoder baseline was about 11.4 FPS. Existing `rosbridge_websocket` remained active at roughly 60–68% CPU, each decoder used about 60–75% CPU, and the 4-core system load average was around 5.9–6.5. This is a loaded-session observation, not a clean idle-board benchmark or MPP/RGA result.
+- Cleanup: stopped all camera, decoder, and monitor processes started for this run; restored `/dev/video0` `exposure_auto_priority` to `1` and verified it.
+- Updated the Issue #19 report with results and repeatable four-node commands. Next action: commit and push the report/runbook update to PR #24.

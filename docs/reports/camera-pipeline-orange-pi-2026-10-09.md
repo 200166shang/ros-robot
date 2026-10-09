@@ -42,6 +42,36 @@ Issue：[验证 Orange Pi 相机预览和 ROS 2 数据流速率 #19](https://git
 
 本轮开始时自动曝光优先级为开启，低光画面下曝光为 41.9 ms，实测约 24.1 FPS。为了测模式上限，临时关闭了 `exposure_auto_priority`；30 和 60 FPS 请求随后都达到约 29.8 FPS。测试结束后已恢复该控制为开启。自动曝光优先级可能为画面亮度延长曝光并降低 FPS，因此报告帧率时应同时记录曝光控制状态。一次 `camera_bench` 独立测量未能在 15 秒内取得首帧；本次上限数据改由 `usb_camera_node` 和 ROS 话题频率测量取得。
 
+## 多解码节点高负载观察
+
+为观察并发解码负载的影响，在相同的 1280×720 MJPEG、约 29.8 FPS 相机输入下，同时运行 4 个 OpenCV `img_decode_node`，分别发布到独立输出话题；`image_monitor` 只监控其中一个输出。相机端保持约 29.8 FPS 采集和发布，没有因增加解码节点而明显降速。单解码器基线的监控输出约为 11.4 FPS；四个解码器并发时，被监控解码器整体读数约为 1.7 FPS，观察窗口间曾在约 0.7–2.3 FPS 波动，显示解码输出受到明显 CPU 竞争。
+
+这不是空闲系统的纯对比：测试期间原本运行的 `rosbridge_websocket` 也订阅压缩图像，并占用约 60–68% CPU；四个解码进程各约占 60–75% CPU，4 核系统负载均值约为 5.9–6.5。因此结果只说明该设备在当前背景负载和 OpenCV 软件解码下，增加并发解码节点会显著压低每个节点的输出速率，不能代表 MPP/RGA 后端或无 rosbridge 背景负载时的性能。测试结束后停止了本轮启动的进程，并将 `exposure_auto_priority` 恢复为 `1`。
+
+可按下面步骤复测并发负载。先单独启动相机：
+
+```zsh
+ros2 launch usb_camera usb_camera.launch.py
+```
+
+在四个终端分别启动解码节点，每个都使用独立输出话题：
+
+```zsh
+ros2 run img_decode img_decode_node --ros-args -p lazy:=false -p output_topic:=/camera/stress_1
+ros2 run img_decode img_decode_node --ros-args -p lazy:=false -p output_topic:=/camera/stress_2
+ros2 run img_decode img_decode_node --ros-args -p lazy:=false -p output_topic:=/camera/stress_3
+ros2 run img_decode img_decode_node --ros-args -p lazy:=false -p output_topic:=/camera/stress_4
+```
+
+另开终端监控其中一路解码输出，并同时记录相机日志和 CPU 负载：
+
+```zsh
+ros2 run img_decode image_monitor --ros-args -p topic:=/camera/stress_1
+uptime
+```
+
+预热约 8 秒后观察至少 20 秒；结束时在五个节点终端分别按 `Ctrl+C`。测试 OpenCV 和 MPP/RGA 时分别重建 `img_decode`，并记录后端、相机 FPS、各路解码 FPS、系统负载和其它常驻订阅节点。不要在报告中把单路监控值当作四路总吞吐量。
+
 ## ROS 话题带宽补充测量
 
 使用 ROS 2 Foxy 的 `ros2 topic bw` 在本机同时订阅两个话题，窗口设为最近 20 条消息。下表取启动后的 3 次稳定输出的平均值；括号内为这 3 次输出的范围。
