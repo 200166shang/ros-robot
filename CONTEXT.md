@@ -237,3 +237,10 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Follow-up to [PR #20](https://github.com/200166shang/ros-robot/pull/20), requested during review. Extracted frame selection into `usb_camera/frame_divider.hpp` and capture/publish rate windows into `usb_camera/frame_rate_stats.hpp`; the ROS node now records events and reports snapshots. Reset the stats window while capture is idle or recovering from a capture error so idle time is excluded. Kept C++14 compatibility, so `reportIfDue` uses a boolean result plus `FpsSnapshot&` instead of `std::optional`.
 - Validation: ROS Foxy `usb_camera` build passed; package tests passed (4/4); clang-format and `git diff --check` passed. On the Orange Pi with divider 2, valid JPEG messages were received and the node reported 23.3 FPS captured / 11.6 FPS published. `/enable_camera` still stopped messages while disabled and resumed publication after enabling.
 - Next action: push the refactor commit to PR #20 for review.
+
+## JPEG decoder RGA stride correction — 2026-10-09 (Asia/Shanghai)
+
+- Hardware validation of PR [#21](https://github.com/200166shang/ros-robot/pull/21) showed repeated `RGA_BLIT fail: Invalid argument` for 1280x720 RGB888 frames and no `/camera/image_raw` messages. The source RGA descriptor was receiving MPP's horizontal byte stride (3840) as RGA's pixel stride (which should be 1280 for this frame).
+- Updated `rockchip_image_processor.cpp` to validate MPP byte stride separately and pass `mpp_frame_get_hor_stride_pixel()` to RGA. Added a 1280x720 ROS topic-interface regression case. Commit: `c6d772c`.
+- Validation on the Orange Pi: the new test reproduced the RGA failure before the fix; after the fix the ROCKCHIP backend built and all 3 topic-interface cases passed, including 1280x720 to 640x360. `clang-format --dry-run --Werror` and `git diff --check` passed. MPP/RGA system-header pedantic warnings remain non-fatal.
+- Next action: user reruns the live camera pipeline with the updated PR branch; update PR #21 description when the GitHub API is available.
