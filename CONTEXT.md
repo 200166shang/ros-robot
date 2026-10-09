@@ -244,3 +244,10 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Updated `rockchip_image_processor.cpp` to validate MPP byte stride separately and pass `mpp_frame_get_hor_stride_pixel()` to RGA. Added a 1280x720 ROS topic-interface regression case. Commit: `c6d772c`.
 - Validation on the Orange Pi: the new test reproduced the RGA failure before the fix; after the fix the ROCKCHIP backend built and all 3 topic-interface cases passed, including 1280x720 to 640x360. `clang-format --dry-run --Werror` and `git diff --check` passed. MPP/RGA system-header pedantic warnings remain non-fatal.
 - Next action: user reruns the live camera pipeline with the updated PR branch; update PR #21 description when the GitHub API is available.
+
+## JPEG decoder usage documentation — 2026-10-09 (UTC)
+
+- Issue/PR: [#17 Migrate JPEG decoding and scaling to ROS 2](https://github.com/200166shang/ros-robot/issues/17), [PR #21](https://github.com/200166shang/ros-robot/pull/21).
+- Updated `ros2_ws/src/img_decode/README.md` with Zsh setup/build commands, OpenCV and MPP/RGA backend selection, the physical-camera launch path, lazy-subscription behavior, topic-rate and image-monitor checks, snapshot saving, node parameters, and a separate-node example for parameter overrides. Kept README instructions aligned with the current launch and node interfaces.
+- Validation: checked documented executable names, launch parameters, and node defaults against `CMakeLists.txt`, `camera_decode.launch.py`, and the node sources; confirmed ROS Foxy `ros2 topic echo` does not support `--once` and documented Ctrl+C after receiving a frame instead. `git diff --check` passed. No build or tests were run for this documentation-only change.
+- Next action: review and commit the README update, then push it to PR #21 for user review.
