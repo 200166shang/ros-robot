@@ -231,3 +231,9 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Validation: ROS Foxy `usb_camera` build passed; package tests passed (4/4); launch Python syntax, `.clang-format`, and `git diff --check` passed. On the Orange Pi, a topic subscriber validated JPEG markers, format, and `camera` frame ID. With divider 2, a stable interval logged 26 FPS captured and 13 FPS published. An enable/disable topic check observed 0 messages while disabled and resumed output after enabling. Candidate failover from `/dev/not-a-camera` to `/dev/video0` succeeded. The camera intermittently timed out and reopened during these runs, consistent with the existing V4L2 reconnect path.
 - Decision: use ROS topic I/O as the observable test seam; no tracking actuation was performed.
 - Next action: submit PR for review; continue with issue #19 after issues #16–#18 are merged or otherwise available.
+
+## Camera capture loop responsibility split — 2026-10-09 (Asia/Shanghai)
+
+- Follow-up to [PR #20](https://github.com/200166shang/ros-robot/pull/20), requested during review. Extracted frame selection into `usb_camera/frame_divider.hpp` and capture/publish rate windows into `usb_camera/frame_rate_stats.hpp`; the ROS node now records events and reports snapshots. Reset the stats window while capture is idle or recovering from a capture error so idle time is excluded. Kept C++14 compatibility, so `reportIfDue` uses a boolean result plus `FpsSnapshot&` instead of `std::optional`.
+- Validation: ROS Foxy `usb_camera` build passed; package tests passed (4/4); clang-format and `git diff --check` passed. On the Orange Pi with divider 2, valid JPEG messages were received and the node reported 23.3 FPS captured / 11.6 FPS published. `/enable_camera` still stopped messages while disabled and resumed publication after enabling.
+- Next action: push the refactor commit to PR #20 for review.
