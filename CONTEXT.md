@@ -223,3 +223,11 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Validation evidence from this code state: ROS Foxy package build passed; package tests passed (3/3); the configured 640x480, requested 30 FPS, 3-second hardware run completed 5/5 times. `clang-format --dry-run --Werror` and `git diff --check` passed again for the follow-up commit.
 - Opened [PR #14](https://github.com/200166shang/ros-robot/pull/14), targeting `main`; GitHub reports it mergeable with no configured checks.
 - Next action: merge PR #14 and clean up the follow-up branch; handle CSV-to-HTML visualization in the separate discussion the user plans to open.
+
+## ROS 2 camera capture and frame divider — 2026-10-09 (Asia/Shanghai)
+
+- Issue: [#16 Migrate V4L2 camera capture and frame divider to ROS 2](https://github.com/200166shang/ros-robot/issues/16), part of [#15](https://github.com/200166shang/ros-robot/issues/15).
+- Implemented on `codex/issue-16-camera-divider`: the camera node now publishes every Nth captured JPEG according to `frame_divider` (default 1), accepts an ordered `device_candidates` parameter with rotation after open failures, and preserves the single `device` parameter as a compatibility fallback. The launch file configures only `/dev/video0`, exposes `frame_divider`, and retains lazy capture and `/enable_camera` behavior. Updated `usb_camera` usage documentation.
+- Validation: ROS Foxy `usb_camera` build passed; package tests passed (4/4); launch Python syntax, `.clang-format`, and `git diff --check` passed. On the Orange Pi, a topic subscriber validated JPEG markers, format, and `camera` frame ID. With divider 2, a stable interval logged 26 FPS captured and 13 FPS published. An enable/disable topic check observed 0 messages while disabled and resumed output after enabling. Candidate failover from `/dev/not-a-camera` to `/dev/video0` succeeded. The camera intermittently timed out and reopened during these runs, consistent with the existing V4L2 reconnect path.
+- Decision: use ROS topic I/O as the observable test seam; no tracking actuation was performed.
+- Next action: submit PR for review; continue with issue #19 after issues #16–#18 are merged or otherwise available.
