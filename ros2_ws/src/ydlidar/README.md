@@ -9,6 +9,40 @@
 浏览器视图都读取同一话题；它们不会启动第二个雷达驱动，也不会再次连接
 雷达串口。
 
+### 构建并运行 ROS 接口测试（无需 SDK 或雷达）
+
+接口测试使用模拟扫描数据源，通过真实 ROS 节点检查 `/scan` 消息及
+`start_scan`/`stop_scan` 服务；它不连接物理雷达。包的默认构建还会编译
+硬件节点并查找 YDLIDAR SDK 1.2.7，因此在没有 SDK 的环境中，构建测试时要关闭硬件节点：
+
+```bash
+source /opt/ros/foxy/setup.zsh
+cd ~/code/ros-robot/ros2_ws
+colcon build --packages-select ydlidar \
+  --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=OFF
+source install/setup.zsh
+colcon test --packages-select ydlidar \
+  --ctest-args -R test_ydlidar_ros_interface
+colcon test-result --verbose
+```
+
+预期结果是 `test_ydlidar_ros_interface` 通过。该模式只验证 ROS 接口和节点生命周期，
+不会构建可连接雷达的 `ydlidar_node`。
+
+如果需要构建硬件节点，先安装 YDLIDAR SDK 1.2.7，并让 CMake 找到其中的
+`ydlidar_sdkConfig.cmake`。例如 SDK 安装前缀为 `/path/to/ydlidar-sdk-install` 时：
+
+```bash
+export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
+export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
+colcon build --packages-select ydlidar
+```
+
+`find` 应输出 SDK 的 CMake 配置文件路径；如果 SDK 安装布局不同，请按实际位置设置
+`CMAKE_PREFIX_PATH` 或 `ydlidar_sdk_DIR`，并将 SDK 动态库目录加入 `LD_LIBRARY_PATH`。
+
 ### 在 Orange Pi 上使用 RViz2
 
 如果尚未安装 RViz2：
@@ -125,6 +159,45 @@ The driver publishes radar scans as `sensor_msgs/msg/LaserScan` on the relative
 topic `scan`. With the default configuration, the topic is `/scan` and the frame
 is `laser_link`. RViz2 and the browser view both read this same topic; neither
 starts another radar driver or opens a second serial connection.
+
+### Build and run the ROS interface test (no SDK or lidar required)
+
+The interface test uses a fake scan source and exercises `/scan` plus the
+`start_scan`/`stop_scan` services through the real ROS node. It does not connect
+to a physical lidar. The default package build also builds the hardware node and
+looks for YDLIDAR SDK 1.2.7, so disable that node when building the test without
+the SDK:
+
+```bash
+source /opt/ros/foxy/setup.zsh
+cd ~/code/ros-robot/ros2_ws
+colcon build --packages-select ydlidar \
+  --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=OFF
+source install/setup.zsh
+colcon test --packages-select ydlidar \
+  --ctest-args -R test_ydlidar_ros_interface
+colcon test-result --verbose
+```
+
+The expected result is a passing `test_ydlidar_ros_interface`. This mode tests
+the ROS interface and node lifecycle; it does not build the hardware-connected
+`ydlidar_node`.
+
+To build the hardware node, first install YDLIDAR SDK 1.2.7 and make its
+`ydlidar_sdkConfig.cmake` visible to CMake. For an SDK installed under
+`/path/to/ydlidar-sdk-install`:
+
+```bash
+export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
+export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
+colcon build --packages-select ydlidar
+```
+
+`find` should print the SDK CMake config path. If the SDK uses a different
+layout, set `CMAKE_PREFIX_PATH` or `ydlidar_sdk_DIR` to its actual config
+location, and add its shared-library directory to `LD_LIBRARY_PATH`.
 
 ### RViz2 on the Orange Pi
 
