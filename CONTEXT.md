@@ -68,6 +68,17 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Remaining acceptance work: RViz2 GUI display on the Orange Pi has not yet been verified; `rviz2` was not installed in the earlier environment check. Keep #7 open until that criterion is tested.
 - Next action: install or otherwise make RViz2 available on the Orange Pi, load `ydlidar.rviz`, and verify `/scan` renders in `laser_link`.
 
+## Camera pipeline Orange Pi validation — 2026-10-09 (Asia/Shanghai)
+
+- Issue: [#19 Verify Orange Pi camera preview and ROS 2 pipeline rates](https://github.com/200166shang/ros-robot/issues/19), after blockers #16–#18 were merged.
+- Added a camera Image RViz2 preset with Best Effort QoS and made `scripts/rviz2-headless.sh` accept `ROBOT_RVIZ2_CONFIG`, preserving the YDLIDAR view as the default. Updated the decoder and encoder usage guides with noVNC preview, rate observation, backend selection, and a ROS 2 encoder-to-decoder probe.
+- OpenCV and MPP/RGA configurations built on Orange Pi. OpenCV physical path: capture 29.8 FPS, camera topic 29.79 FPS, decoder 27.69 FPS. MPP/RGA physical path: 29.8 / 29.79 / 29.79 FPS. With `frame_divider=2`, capture remained 29.8 FPS while camera publication and decode were 14.88 FPS. Measurement windows were 10 seconds after an 8-second warm-up; software-rendered RViz was stopped for rate measurement.
+- RViz2 displayed the physical camera image with the Best Effort topic QoS; the noVNC endpoint served HTTP 200 locally. OpenCV and MPP/RGA encoder-to-decoder ROS topic round trips both preserved `jpeg` format/header, returned 320×180 `rgb8`, and passed four-region content checks. Encoder performance was not measured.
+- Supplemental bandwidth measurement: during a live OpenCV run, `ros2 topic bw --window 20` measured approximately 0.985 MB/s on `/image_raw/compressed` and 19.66 MB/s on `/camera/image_raw`; three stable outputs per topic were averaged. The report notes the capture reopen and OpenCV JPEG warnings observed during this run, and that MPP/RGA bandwidth was not measured.
+- Follow-up documentation in PR #24 adds end-to-end FPS interpretation, bandwidth-vs-payload analysis, and step-by-step commands to rebuild, start, monitor bandwidth/rates, and verify `frame_divider=2` independently.
+- Physical camera upper-bound probe: V4L2 enumerates no MJPEG mode above 30 FPS at 1280×720. Direct `usb_camera_node` runs requesting 30 and 60 FPS both stabilized near 29.8 FPS when `exposure_auto_priority=0`; `VIDIOC_G_PARM` returned 30 FPS. With auto-exposure priority enabled in a low-light run, exposure reached 41.9 ms and capture slowed to 24.1 FPS. The setting was restored to enabled after the controlled probe. The standalone `camera_bench` attempt timed out before its first frame; the rate cap was measured through the regular node and `ros2 topic hz`.
+- Validation report: [docs/reports/camera-pipeline-orange-pi-2026-10-09.md](docs/reports/camera-pipeline-orange-pi-2026-10-09.md). Next action: PR [#24](https://github.com/200166shang/ros-robot/pull/24) is open for review; leave Issue #19 open pending review/merge.
+
 ## Headless RViz2 / noVNC plan evaluation — 2026-10-07 (Asia/Shanghai)
 
 - Related issues: [ros-robot #7](https://github.com/200166shang/ros-robot/issues/7) remains open for RViz2 validation; [robot-docker #6](https://github.com/200166shang/robot-docker/issues/6) is closed and its current implementation is on `robot-docker` commit `7d7a3c76`.
@@ -279,3 +290,10 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Follow-up to [PR #22](https://github.com/200166shang/ros-robot/pull/22): documented the synthetic ROS topic-interface test and exact OpenCV and MPP/RGA build/test commands in `ros2_ws/src/img_encode/README.md`. The test needs no camera; the MPP/RGA configuration still requires the Rockchip headers and libraries and exercises that hardware encoder path.
 - Validation on Orange Pi: the documented package build and topic test passed for OpenCV (1/1) and MPP/RGA (1/1). `git diff --check` passed.
 - PR [#22](https://github.com/200166shang/ros-robot/pull/22) was merged into `main` as `8d6bc42`; Issue #18 is closed.
+
+## Issue #19 multi-node load observation — 2026-10-09 (UTC)
+
+- Request: evaluate whether running several decoder nodes under high load affects camera pipeline performance.
+- Hardware run: one 1280×720 MJPEG camera input stayed near 29.8 FPS while four OpenCV `img_decode_node` processes ran concurrently on separate output topics. The monitored decoder showed about 1.7 FPS overall (observed windows varied around 0.7–2.3 FPS); single-decoder baseline was about 11.4 FPS. Existing `rosbridge_websocket` remained active at roughly 60–68% CPU, each decoder used about 60–75% CPU, and the 4-core system load average was around 5.9–6.5. This is a loaded-session observation, not a clean idle-board benchmark or MPP/RGA result.
+- Cleanup: stopped all camera, decoder, and monitor processes started for this run; restored `/dev/video0` `exposure_auto_priority` to `1` and verified it.
+- Updated the Issue #19 report with results and repeatable four-node commands. Next action: commit and push the report/runbook update to PR #24.

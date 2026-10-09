@@ -85,6 +85,70 @@ file /tmp/img_decode.png
 
 `image_monitor` 用于观察输出图像和帧率，不会记录 CSV，也不测量单帧纯解码耗时。需要看话题实时频率时也可以使用 `ros2 topic hz /camera/image_raw`。
 
+## Orange Pi 端到端预览和速率验证
+
+在 Orange Pi 上按需选择后端并重新构建 `img_decode`。`usb_camera` 也需要构建；运行编码器往返时还要构建 `img_encode`：
+
+```zsh
+cd ros2_ws
+colcon build --packages-select usb_camera
+colcon build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
+colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=MPP
+source install/setup.zsh
+```
+
+软件路径将两个后端值都改成 `OPENCV`。在一个终端启动物理相机和解码器：
+
+```zsh
+ros2 launch img_decode camera_decode.launch.py
+```
+
+相机默认以 1280×720 MJPEG、请求 30 FPS 运行；解码输出默认缩放为 640×360。预览使用工作区内的 RViz2 预设。它订阅 `/camera/image_raw`，并采用与图像发布器匹配的 Best Effort QoS：
+
+```zsh
+cd ..
+ROBOT_RVIZ2_CONFIG="$PWD/ros2_ws/src/img_decode/config/camera_preview.rviz" \
+  scripts/rviz2-headless.sh start
+scripts/rviz2-headless.sh status
+```
+
+headless RViz2 和 Mac noVNC SSH 隧道的安装及连接步骤见 [`ydlidar/README.md`](../ydlidar/README.md) 的 noVNC 章节。预览结束后运行 `scripts/rviz2-headless.sh stop`，再在相机 launch 终端按 `Ctrl+C`。相机与解码器也可以在预览期间继续运行。
+
+速率观测时，先等待相机首帧和约 8 秒预热，再观察约 10 秒。`usb_camera_node` 每 5 秒报告实际采集 FPS 和发布 FPS；启动 `image_monitor` 可观察解码输出 FPS，也可分别在终端中用 `ros2 topic hz /image_raw/compressed` 和 `ros2 topic hz /camera/image_raw` 查看话题频率。测 ROS 消息带宽时，在另外两个终端运行 `ros2 topic bw --window 20 /image_raw/compressed` 和 `ros2 topic bw --window 20 /camera/image_raw`；每个新终端先 source ROS 和工作区。`bw` 每秒报告最近 20 条消息的带宽和平均大小，建议预热后记录 3–5 次稳定读数。它测量订阅端收到的 ROS 消息数据速率，不代表网络接口总流量。报告中应记录实际后端、测量窗口、采集/相机发布/解码输出 FPS 和带宽，不设置固定 FPS 门槛。
+
+要核对帧分频，先停止组合 launch，再将相机发布器单独设为 divider 2，并独立运行默认 decoder：
+
+```zsh
+ros2 launch usb_camera usb_camera.launch.py frame_divider:=2
+```
+
+另开终端启动 decoder：
+
+```zsh
+ros2 run img_decode img_decode_node
+```
+
+在其它终端订阅 `/camera/image_raw`（例如运行 `ros2 topic hz /camera/image_raw`）以唤醒 lazy decoder。相机日志中的采集 FPS 应约为未分频值，发布 FPS 应约为其一半；解码输出 FPS 应跟随压缩输入话题。不要同时运行 `camera_bench`，因为它会独占打开相同的 V4L2 设备。
+
+要检查摄像头本身能否超过 30 FPS，先停止其他相机节点，再查看 UVC 模式并单独请求 60 FPS：
+
+```zsh
+v4l2-ctl -d /dev/video0 --list-formats-ext
+ros2 run usb_camera usb_camera_node --ros-args \
+  -p device:=/dev/video0 -p width:=1280 -p height:=720 \
+  -p fps:=60 -p lazy:=false
+```
+
+另开终端订阅 `/image_raw/compressed`：
+
+```zsh
+ros2 topic hz --window 100 /image_raw/compressed
+```
+
+用相机运行时的 `v4l2-ctl -d /dev/video0 --get-parm` 和持续 FPS 判断实际帧率；`fps` 参数只是请求值。如果低光环境下自动曝光优先级使曝光时间超过帧间隔，FPS 也会降低。可临时关闭 `exposure_auto_priority` 做受控测试，但要在比较画面亮度后恢复原设置。Issue #19 的实测上限、曝光状态和结果解释见[验证报告](../../../docs/reports/camera-pipeline-orange-pi-2026-10-09.md)。
+
+JPEG 编码到 ROS 解码的端到端往返命令见 [`img_encode/README.md`](../img_encode/README.md)。验证 OpenCV 和 MPP/RGA 时分别重建对应后端，并在报告中排除编码器 FPS、延迟和资源用量。
+
 ## 独立运行解码器或调整参数
 
 如果压缩图像已由其它节点发布，可单独启动解码器：
@@ -116,3 +180,5 @@ ros2 run img_decode img_decode_node --ros-args \
 ## img_decode usage
 
 `img_decode_node` converts compressed JPEG images on `/image_raw/compressed` into `rgb8` images on `/camera/image_raw`, preserving the input header. Run `ros2 launch img_decode camera_decode.launch.py` to start the camera and decoder together, then use `ros2 topic hz /camera/image_raw` or `ros2 run img_decode image_monitor` to check output. The Chinese guide above gives the Zsh build steps, backend choices, snapshot example, and all parameter defaults and constraints. For custom node parameters, start `usb_camera` separately and pass ROS parameter overrides to `img_decode_node`.
+
+For Orange Pi preview and full-pipeline rate validation, use the RViz2 camera preset and noVNC workflow in the Chinese guide above. Repeat the run with both `IMG_DECODE_BACKEND=OPENCV` and `ROCKCHIP`.
