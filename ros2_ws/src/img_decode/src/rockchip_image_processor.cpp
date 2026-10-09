@@ -159,6 +159,7 @@ private:
 
     // 读取 MPP 返回的 RGB frame 并通过 RGA 写入连续的缩放图像。
     bool resize_frame(MppFrame frame, double scale, DecodedImage &image, std::string &error) {
+        // 读取解码图像的可见尺寸、对齐 stride 和底层像素缓冲区。
         const uint32_t width             = mpp_frame_get_width(frame);
         const uint32_t height            = mpp_frame_get_height(frame);
         const uint32_t horizontal_stride = mpp_frame_get_hor_stride(frame);
@@ -166,6 +167,7 @@ private:
         MppBuffer buffer                 = mpp_frame_get_buffer(frame);
         auto *pixels                     = buffer == nullptr ? nullptr : static_cast<uint8_t *>(mpp_buffer_get_ptr(buffer));
 
+        // 确认图像未超出配置尺寸，stride、像素格式和 MPP 解码状态均有效。
         const bool valid_frame = width > 0 && height > 0 && width <= max_width_ && height <= max_height_ && horizontal_stride >= width &&
                                  vertical_stride >= height && pixels != nullptr && mpp_frame_get_fmt(frame) == MPP_FMT_RGB888 &&
                                  mpp_frame_get_errinfo(frame) == 0;
@@ -174,10 +176,12 @@ private:
             return false;
         }
 
+        // 按 OpenCV 一致的舍入规则计算缩放尺寸，并分配紧凑 RGB 输出区。
         image.width  = static_cast<uint32_t>(std::max(1, cvRound(width * scale)));
         image.height = static_cast<uint32_t>(std::max(1, cvRound(height * scale)));
         image.rgb.resize(static_cast<size_t>(image.width) * image.height * 3);
 
+        // RGA 的 RGB888 目标 stride 需按像素对齐；尺寸不对齐时先写入临时缓冲区。
         const uint32_t destination_stride = (image.width + 3U) & ~3U;
         std::vector<uint8_t> padded_rgb;
         uint8_t *destination_data = image.rgb.data();
@@ -186,6 +190,7 @@ private:
             destination_data = padded_rgb.data();
         }
 
+        // 将 MPP 源帧和 RGA 目标缓冲区包装为 RGA 描述，并检查是否可执行。
         rga_buffer_t source =
             wrapbuffer_virtualaddr(pixels, width, height, RK_FORMAT_RGB_888, static_cast<int>(horizontal_stride), static_cast<int>(vertical_stride));
         rga_buffer_t destination = wrapbuffer_virtualaddr(
@@ -193,6 +198,8 @@ private:
         im_rect source_rect{};
         im_rect destination_rect{};
         IM_STATUS status = imcheck(source, destination, source_rect, destination_rect, IM_SYNC);
+
+        // 尺寸不变时直接复制，否则由 RGA 执行缩放。
         if (status == IM_STATUS_NOERROR) {
             status = image.width == width && image.height == height ? imcopy(source, destination) : imresize(source, destination);
         }
@@ -202,6 +209,8 @@ private:
             image = DecodedImage{};
             return false;
         }
+
+        // 去掉临时缓冲区每行的 stride 填充，形成 ROS rgb8 所需的紧凑像素排列。
         if (destination_stride != image.width) {
             const size_t output_row_bytes = static_cast<size_t>(image.width) * 3;
             const size_t padded_row_bytes = static_cast<size_t>(destination_stride) * 3;
