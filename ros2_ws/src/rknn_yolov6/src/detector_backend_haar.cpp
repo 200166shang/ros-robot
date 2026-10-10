@@ -39,10 +39,14 @@ public:
 
     // 将 Haar 人脸框映射到现有 Detection 字段语义。
     std::vector<Det> detections(DetectorBackendFrameResult &frame_result) override {
-        auto &result = static_cast<HaarFrameResult &>(frame_result);
+        auto *haar_result = dynamic_cast<HaarFrameResult *>(&frame_result);
+        if (haar_result == nullptr) {
+            throw std::runtime_error("Haar backend received an incompatible frame result");
+        }
+
         std::vector<Det> detections;
-        detections.reserve(result.faces.size());
-        for (const auto &face : result.faces) {
+        detections.reserve(haar_result->faces.size());
+        for (const auto &face : haar_result->faces) {
             Det detection{};
             detection.x1       = static_cast<unsigned short>(face.x);
             detection.y1       = static_cast<unsigned short>(face.y);

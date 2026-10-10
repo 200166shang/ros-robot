@@ -133,8 +133,12 @@ public:
 
     // 用现有 YOLOv6 算法将当前 RKNN 输出解释为 Detection。
     std::vector<Det> detections(DetectorBackendFrameResult &frame_result) override {
-        auto &result  = static_cast<RknnFrameResult &>(frame_result);
-        auto &outputs = result.outputs();
+        auto *rknn_result = dynamic_cast<RknnFrameResult *>(&frame_result);
+        if (rknn_result == nullptr) {
+            throw std::runtime_error("RKNN backend received an incompatible frame result");
+        }
+
+        auto &outputs = rknn_result->outputs();
         std::vector<Det> detections;
         std::vector<int> output_indices{0, 1, 2};
         post_process(outputs[0].want_float,
@@ -145,8 +149,8 @@ public:
                      model_width_,
                      confidence_threshold_,
                      nms_threshold_,
-                     static_cast<float>(result.source_width()) / model_width_,
-                     static_cast<float>(result.source_height()) / model_height_,
+                     static_cast<float>(rknn_result->source_width()) / model_width_,
+                     static_cast<float>(rknn_result->source_height()) / model_height_,
                      output_zero_points_,
                      output_scales_,
                      output_indices,
