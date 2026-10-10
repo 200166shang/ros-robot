@@ -64,10 +64,12 @@ struct FrameData {
 struct RknnYolov6Node::Implementation {
     // 读取参数、初始化后端并启动 ROS 接口和处理线程。
     explicit Implementation(RknnYolov6Node *node) : node_(node) {
+        // 先读取并校验配置，再准备推理后端和 ROS 接口。
         read_parameters();
         initialize_backend();
         create_ros_interfaces();
 
+        // ROS 接口就绪后启动后处理线程和推理线程。
         started_at_        = std::chrono::steady_clock::now();
         last_report_at_    = started_at_;
         processing_thread_ = std::thread(&Implementation::run_processing_stage, this);
@@ -78,6 +80,8 @@ struct RknnYolov6Node::Implementation {
     ~Implementation() {
         stopping_.store(true);
         input_queue_.close();
+
+        // 先等待推理结束，再关闭输出队列并等待后处理排空。
         if (inference_thread_.joinable()) {
             inference_thread_.join();
         }
@@ -95,22 +99,30 @@ struct RknnYolov6Node::Implementation {
 
     // 声明 ROS 参数并校验当前检测后端需要的路径。
     void read_parameters() {
-        model_path_           = node_->declare_parameter<std::string>("model_path", "");
-        labels_path_          = node_->declare_parameter<std::string>("labels_path", "");
+        // RKNN 模型和类别标签资源。
+        model_path_  = node_->declare_parameter<std::string>("model_path", "");
+        labels_path_ = node_->declare_parameter<std::string>("labels_path", "");
+
+        // ROS 输入输出话题及检测阈值。
         input_topic_          = node_->declare_parameter<std::string>("input_topic", "/camera/image_raw");
         detections_topic_     = node_->declare_parameter<std::string>("detections_topic", "/ai_msg_det");
         annotated_topic_      = node_->declare_parameter<std::string>("annotated_topic", "/camera/image_det");
         confidence_threshold_ = node_->declare_parameter<double>("confidence_threshold", 0.30);
         nms_threshold_        = node_->declare_parameter<double>("nms_threshold", 0.30);
+
+        // 实时处理、性能输出和 NPU 核心选择开关。
         enabled_.store(node_->declare_parameter<bool>("enabled", true));
-        always_process_      = node_->declare_parameter<bool>("always_process", false);
-        print_perf_detail_   = node_->declare_parameter<bool>("print_perf_detail", false);
-        use_multi_npu_core_  = node_->declare_parameter<bool>("use_multi_npu_core", false);
+        always_process_     = node_->declare_parameter<bool>("always_process", false);
+        print_perf_detail_  = node_->declare_parameter<bool>("print_perf_detail", false);
+        use_multi_npu_core_ = node_->declare_parameter<bool>("use_multi_npu_core", false);
+
+        // 离线图片和主机 Haar 后端资源。
         offline_mode_        = node_->declare_parameter<bool>("is_offline_image_mode", false);
         offline_images_path_ = node_->declare_parameter<std::string>("offline_images_path", "");
         offline_output_path_ = node_->declare_parameter<std::string>("offline_output_path", "");
         haar_cascade_path_   = node_->declare_parameter<std::string>("haar_cascade_path", "");
 
+        // 先校验离线配置，再校验当前编译后端所需的模型资源。
         if (offline_mode_ && (offline_images_path_.empty() || offline_output_path_.empty())) {
             throw std::runtime_error("offline image mode requires offline_images_path and offline_output_path");
         }
@@ -249,12 +261,15 @@ struct RknnYolov6Node::Implementation {
 
     // 接收符合启用状态及订阅状态的 RGB 图像并送入输入队列。
     void receive_image(sensor_msgs::msg::Image::ConstSharedPtr message) {
+        // 实时模式下按启用状态和订阅需求决定是否接收图像。
         if (offline_mode_ || !enabled_.load()) {
             return;
         }
         if (!always_process_ && detections_publisher_->get_subscription_count() == 0 && annotated_publisher_->get_subscription_count() == 0) {
             return;
         }
+
+        // 校验消息布局，保证下游取得完整的 rgb8 图像数据。
         const auto row_size  = static_cast<std::size_t>(message->width) * 3;
         const auto data_size = static_cast<std::size_t>(message->step) * message->height;
         if (message->encoding != "rgb8" || message->width == 0 || message->height == 0 || message->step < row_size || message->data.size() < data_size) {
@@ -262,6 +277,7 @@ struct RknnYolov6Node::Implementation {
             return;
         }
 
+        // 克隆图像像素，确保异步推理不依赖回调期间的消息内存。
         auto frame           = std::make_shared<FrameData>();
         frame->input_message = std::move(message);
         frame->header        = frame->input_message->header;
@@ -277,8 +293,10 @@ struct RknnYolov6Node::Implementation {
     // 按实时或离线模式生成帧，在推理完成后交给后处理线程。
     void run_inference_stage() {
         if (offline_mode_) {
+            // 离线图片复用同一套推理和后处理队列。
             run_offline_images();
         } else {
+            // 实时模式从输入队列取帧，推理成功后交给输出队列。
             while (auto frame = input_queue_.wait_and_pop()) {
                 if (stopping_.load()) {
                     break;
@@ -288,12 +306,15 @@ struct RknnYolov6Node::Implementation {
                 }
             }
         }
+
+        // 通知后处理线程：不会再有新的推理结果。
         output_queue_.close();
     }
 
     // 对当前帧运行 RKNN 模型或 Haar 分类器并记录后处理数据。
     bool run_inference(FrameData &frame) {
 #ifdef RKNN_YOLOV6_BACKEND_RKNN
+        // 准备模型输入；图像尺寸不匹配时通过 RGA 缩放。
         cv::Mat resized;
         const cv::Mat *input_image = &frame.image;
         if (frame.image.cols != model_width_ || frame.image.rows != model_height_) {
@@ -304,6 +325,7 @@ struct RknnYolov6Node::Implementation {
             input_image = &resized;
         }
 
+        // 提交 RGB 输入并启动一次 RKNN 推理。
         rknn_input input{};
         input.index        = 0;
         input.buf          = input_image->data;
@@ -320,6 +342,7 @@ struct RknnYolov6Node::Implementation {
             return false;
         }
 
+        // 按需读取逐层耗时，默认不额外查询性能详情。
         if (print_perf_detail_) {
             rknn_perf_detail detail{};
             if (rknn_query(context_, RKNN_QUERY_PERF_DETAIL, &detail, sizeof(detail)) >= 0) {
@@ -327,6 +350,7 @@ struct RknnYolov6Node::Implementation {
             }
         }
 
+        // 以浮点格式获取输出张量，供现有 YOLOv6 后处理使用。
         frame.outputs.resize(io_count_.n_output);
         for (auto &output : frame.outputs) {
             output.want_float = 1;
@@ -339,6 +363,7 @@ struct RknnYolov6Node::Implementation {
         frame.outputs_acquired = true;
         return true;
 #else
+        // Haar 后端先把 RGB 图像转为灰度，再检测人脸区域。
         cv::Mat gray;
         cv::cvtColor(frame.image, gray, cv::COLOR_RGB2GRAY);
         face_cascade_.detectMultiScale(gray, frame.faces, 1.1, 2, 0 | cv::CASCADE_SCALE_IMAGE, cv::Size(30, 30));
@@ -388,6 +413,7 @@ struct RknnYolov6Node::Implementation {
 
     // 从外部图片目录构造离线帧并送入实时处理路径。
     void run_offline_images() {
+        // 展开图片匹配模式，并在开始处理前确认输出目录可用。
         std::vector<cv::String> image_paths;
         cv::glob(offline_images_path_, image_paths, false);
         if (image_paths.empty()) {
@@ -405,11 +431,14 @@ struct RknnYolov6Node::Implementation {
                 continue;
             }
 
+            // 统一转为 RGB，并为离线结果生成对应的 ROS 头信息。
             auto frame = std::make_shared<FrameData>();
             cv::cvtColor(bgr_image, frame->image, cv::COLOR_BGR2RGB);
             frame->offline_index   = index;
             frame->header.stamp    = node_->now();
             frame->header.frame_id = "image";
+
+            // 离线帧进入与实时帧相同的推理、后处理链路。
             if (run_inference(*frame)) {
                 queue_inference_result(std::move(frame));
             }
@@ -438,8 +467,10 @@ struct RknnYolov6Node::Implementation {
     void run_processing_stage() {
         while (auto frame = output_queue_.wait_and_pop()) {
             try {
+                // 正常路径完成后处理、发布和离线保存。
                 process_frame(*frame);
             } catch (const std::exception &error) {
+                // 异常帧不影响后续处理，并释放可能持有的 RKNN 输出。
                 RCLCPP_ERROR(node_->get_logger(), "frame processing failed: %s", error.what());
 #ifdef RKNN_YOLOV6_BACKEND_RKNN
                 release_outputs(*frame);
@@ -450,6 +481,7 @@ struct RknnYolov6Node::Implementation {
 
     // 后处理单帧检测结果，绘制标注、发布消息并保存离线图像。
     void process_frame(FrameData &frame) {
+        // 先运行 YOLOv6 后处理或转换 Haar 检测框。
         std::vector<Det> detections;
 #ifdef RKNN_YOLOV6_BACKEND_RKNN
         std::vector<int> output_indices{0, 1, 2};
@@ -486,6 +518,7 @@ struct RknnYolov6Node::Implementation {
         }
 #endif
 
+        // 构造带原始图像头信息和尺寸的检测消息，并绘制标注框。
         auto annotated = frame.image.clone();
         robot_interfaces::msg::Dets detection_message;
         detection_message.header       = frame.header;
@@ -511,6 +544,7 @@ struct RknnYolov6Node::Implementation {
             cv::putText(annotated, text, cv::Point(detection.x1, std::max<int>(15, detection.y1 - 6)), cv::FONT_HERSHEY_SIMPLEX, 0.5, color, 2);
         }
 
+        // 发布检测结果；有图像订阅者或处于离线模式时发布标注图像。
         detections_publisher_->publish(detection_message);
         if (offline_mode_ || annotated_publisher_->get_subscription_count() > 0) {
             sensor_msgs::msg::Image output;
@@ -524,6 +558,7 @@ struct RknnYolov6Node::Implementation {
             annotated_publisher_->publish(std::move(output));
         }
 
+        // 离线模式额外保存编号图片，随后统一报告处理速率。
         if (offline_mode_) {
             const std::string path = offline_output_path_ + "/" + std::to_string(frame.offline_index) + ".jpg";
             if (!cv::imwrite(path, annotated)) {
