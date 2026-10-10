@@ -1,27 +1,5 @@
 #include "rknn_yolov6/rknn_yolov6_node.hpp"
 
-#include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
-#include <robot_interfaces/msg/det.hpp>
-#include <robot_interfaces/msg/dets.hpp>
-#include <sensor_msgs/msg/image.hpp>
-#include <std_msgs/msg/bool.hpp>
-#include <std_msgs/msg/header.hpp>
-
-#include "rknn_yolov6/bounded_queue.hpp"
-#include "rknn_yolov6/postprocess.hpp"
-
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-#include <rknn_api.h>
-
-#include <im2d.hpp>
-#endif
-
-#ifdef RKNN_YOLOV6_BACKEND_HAAR
-#include <opencv2/objdetect.hpp>
-#endif
-
 #include <sys/stat.h>
 
 #include <algorithm>
@@ -30,13 +8,23 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
 #include <memory>
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+#include <robot_interfaces/msg/det.hpp>
+#include <robot_interfaces/msg/dets.hpp>
+#include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "detector_backend.hpp"
+#include "rknn_yolov6/bounded_queue.hpp"
 
 namespace rknn_yolov6 {
 namespace {
@@ -49,13 +37,7 @@ struct FrameData {
     std_msgs::msg::Header header;
     cv::Mat image;
     std::uint64_t offline_index{0};
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-    std::vector<rknn_output> outputs;
-    bool outputs_acquired{false};
-#endif
-#ifdef RKNN_YOLOV6_BACKEND_HAAR
-    std::vector<cv::Rect> faces;
-#endif
+    std::unique_ptr<detail::DetectorBackendFrameResult> backend_result;
 };
 
 }  // namespace
@@ -66,7 +48,7 @@ struct RknnYolov6Node::Implementation {
     explicit Implementation(RknnYolov6Node *node) : node_(node) {
         // 先读取并校验配置，再准备推理后端和 ROS 接口。
         read_parameters();
-        initialize_backend();
+        backend_ = detail::create_detector_backend(backend_config_, node_->get_logger(), node_->get_clock());
         create_ros_interfaces();
 
         // ROS 接口就绪后启动后处理线程和推理线程。
@@ -76,7 +58,7 @@ struct RknnYolov6Node::Implementation {
         inference_thread_  = std::thread(&Implementation::run_inference_stage, this);
     }
 
-    // 关闭队列、等待工作线程退出并释放 RKNN 上下文。
+    // 关闭队列并等待工作线程释放所有帧结果。
     ~Implementation() {
         stopping_.store(true);
         input_queue_.close();
@@ -89,66 +71,33 @@ struct RknnYolov6Node::Implementation {
         if (processing_thread_.joinable()) {
             processing_thread_.join();
         }
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-        if (context_ != 0) {
-            rknn_destroy(context_);
-            context_ = 0;
-        }
-#endif
     }
 
-    // 声明 ROS 参数并校验当前检测后端需要的路径。
+    // 声明 ROS 参数并校验离线输入输出配置。
     void read_parameters() {
-        // RKNN 模型和类别标签资源。
-        model_path_  = node_->declare_parameter<std::string>("model_path", "");
-        labels_path_ = node_->declare_parameter<std::string>("labels_path", "");
+        // 后端资源与检测阈值参数由对应 adapter 使用。
+        backend_config_.model_path           = node_->declare_parameter<std::string>("model_path", "");
+        backend_config_.labels_path          = node_->declare_parameter<std::string>("labels_path", "");
+        backend_config_.confidence_threshold = static_cast<float>(node_->declare_parameter<double>("confidence_threshold", 0.30));
+        backend_config_.nms_threshold        = static_cast<float>(node_->declare_parameter<double>("nms_threshold", 0.30));
+        backend_config_.print_perf_detail    = node_->declare_parameter<bool>("print_perf_detail", false);
+        backend_config_.use_multi_npu_core   = node_->declare_parameter<bool>("use_multi_npu_core", false);
+        backend_config_.haar_cascade_path    = node_->declare_parameter<std::string>("haar_cascade_path", "");
 
-        // ROS 输入输出话题及检测阈值。
-        input_topic_          = node_->declare_parameter<std::string>("input_topic", "/camera/image_raw");
-        detections_topic_     = node_->declare_parameter<std::string>("detections_topic", "/ai_msg_det");
-        annotated_topic_      = node_->declare_parameter<std::string>("annotated_topic", "/camera/image_det");
-        confidence_threshold_ = node_->declare_parameter<double>("confidence_threshold", 0.30);
-        nms_threshold_        = node_->declare_parameter<double>("nms_threshold", 0.30);
-
-        // 实时处理、性能输出和 NPU 核心选择开关。
+        // ROS 输入输出话题及实时处理开关。
+        input_topic_      = node_->declare_parameter<std::string>("input_topic", "/camera/image_raw");
+        detections_topic_ = node_->declare_parameter<std::string>("detections_topic", "/ai_msg_det");
+        annotated_topic_  = node_->declare_parameter<std::string>("annotated_topic", "/camera/image_det");
         enabled_.store(node_->declare_parameter<bool>("enabled", true));
-        always_process_     = node_->declare_parameter<bool>("always_process", false);
-        print_perf_detail_  = node_->declare_parameter<bool>("print_perf_detail", false);
-        use_multi_npu_core_ = node_->declare_parameter<bool>("use_multi_npu_core", false);
+        always_process_ = node_->declare_parameter<bool>("always_process", false);
 
-        // 离线图片和主机 Haar 后端资源。
+        // 离线图片和输出目录仍由共享 ROS 流程管理。
         offline_mode_        = node_->declare_parameter<bool>("is_offline_image_mode", false);
         offline_images_path_ = node_->declare_parameter<std::string>("offline_images_path", "");
         offline_output_path_ = node_->declare_parameter<std::string>("offline_output_path", "");
-        haar_cascade_path_   = node_->declare_parameter<std::string>("haar_cascade_path", "");
-
-        // 先校验离线配置，再校验当前编译后端所需的模型资源。
         if (offline_mode_ && (offline_images_path_.empty() || offline_output_path_.empty())) {
             throw std::runtime_error("offline image mode requires offline_images_path and offline_output_path");
         }
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-        if (model_path_.empty() || labels_path_.empty()) {
-            throw std::runtime_error("RKNN backend requires model_path and labels_path");
-        }
-#endif
-#ifdef RKNN_YOLOV6_BACKEND_HAAR
-        if (haar_cascade_path_.empty()) {
-            throw std::runtime_error("Haar backend requires haar_cascade_path");
-        }
-#endif
-    }
-
-    // 加载 RKNN 模型与标签，或加载主机侧 Haar 分类器。
-    void initialize_backend() {
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-        load_labels();
-        initialize_rknn();
-#endif
-#ifdef RKNN_YOLOV6_BACKEND_HAAR
-        if (!face_cascade_.load(haar_cascade_path_)) {
-            throw std::runtime_error("cannot load Haar cascade: " + haar_cascade_path_);
-        }
-#endif
     }
 
     // 创建保持现有话题、消息类型和 QoS 的 ROS 2 发布与订阅接口。
@@ -161,103 +110,6 @@ struct RknnYolov6Node::Implementation {
         enable_subscription_ = node_->create_subscription<std_msgs::msg::Bool>(
             "/enable_detector", 10, [this](std_msgs::msg::Bool::ConstSharedPtr message) { enabled_.store(message->data); });
     }
-
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-    // 从类别文件读取标签名称并确保后处理至少有一个类别。
-    void load_labels() {
-        std::ifstream input(labels_path_);
-        std::string line;
-        while (std::getline(input, line)) {
-            if (!line.empty()) {
-                labels_.push_back(line);
-            }
-        }
-        if (labels_.empty()) {
-            throw std::runtime_error("labels_path is empty or unreadable: " + labels_path_);
-        }
-    }
-
-    // 初始化 RKNN 上下文、模型张量信息、核心掩码和输出量化参数。
-    void initialize_rknn() {
-        std::ifstream model(model_path_, std::ios::binary | std::ios::ate);
-        if (!model) {
-            throw std::runtime_error("model_path is unreadable: " + model_path_);
-        }
-        const auto model_size = model.tellg();
-        if (model_size <= 0) {
-            throw std::runtime_error("model_path is empty: " + model_path_);
-        }
-        model.seekg(0);
-        model_data_.resize(static_cast<std::size_t>(model_size));
-        if (!model.read(reinterpret_cast<char *>(model_data_.data()), static_cast<std::streamsize>(model_size))) {
-            throw std::runtime_error("failed to read RKNN model: " + model_path_);
-        }
-
-        try {
-            const std::uint32_t flags = print_perf_detail_ ? RKNN_FLAG_COLLECT_PERF_MASK : 0;
-            int result                = rknn_init(&context_, model_data_.data(), static_cast<std::uint32_t>(model_data_.size()), flags, nullptr);
-            if (result < 0) {
-                throw std::runtime_error("rknn_init failed: " + std::to_string(result));
-            }
-
-            const rknn_core_mask core_mask = use_multi_npu_core_ ? RKNN_NPU_CORE_0_1_2 : RKNN_NPU_CORE_AUTO;
-            result                         = rknn_set_core_mask(context_, core_mask);
-            if (result < 0) {
-                throw std::runtime_error("rknn_set_core_mask failed: " + std::to_string(result));
-            }
-
-            rknn_sdk_version version{};
-            result = rknn_query(context_, RKNN_QUERY_SDK_VERSION, &version, sizeof(version));
-            if (result < 0) {
-                throw std::runtime_error("cannot query RKNN SDK version");
-            }
-            RCLCPP_INFO(node_->get_logger(), "RKNN runtime=%s driver=%s", version.api_version, version.drv_version);
-
-            result = rknn_query(context_, RKNN_QUERY_IN_OUT_NUM, &io_count_, sizeof(io_count_));
-            if (result < 0 || io_count_.n_input != 1 || io_count_.n_output < 3) {
-                throw std::runtime_error("unexpected RKNN input/output count");
-            }
-
-            rknn_tensor_attr input_attribute{};
-            input_attribute.index = 0;
-            result                = rknn_query(context_, RKNN_QUERY_INPUT_ATTR, &input_attribute, sizeof(input_attribute));
-            if (result < 0) {
-                throw std::runtime_error("cannot query RKNN input tensor");
-            }
-            if (input_attribute.fmt == RKNN_TENSOR_NHWC) {
-                model_height_ = static_cast<int>(input_attribute.dims[1]);
-                model_width_  = static_cast<int>(input_attribute.dims[2]);
-                channels_     = static_cast<int>(input_attribute.dims[3]);
-            } else {
-                channels_     = static_cast<int>(input_attribute.dims[1]);
-                model_height_ = static_cast<int>(input_attribute.dims[2]);
-                model_width_  = static_cast<int>(input_attribute.dims[3]);
-            }
-            if (channels_ != 3 || model_width_ <= 0 || model_height_ <= 0) {
-                throw std::runtime_error("RKNN model input must have three channels and positive dimensions");
-            }
-
-            output_zero_points_.reserve(io_count_.n_output);
-            output_scales_.reserve(io_count_.n_output);
-            for (std::uint32_t index = 0; index < io_count_.n_output; ++index) {
-                rknn_tensor_attr output_attribute{};
-                output_attribute.index = index;
-                result                 = rknn_query(context_, RKNN_QUERY_OUTPUT_ATTR, &output_attribute, sizeof(output_attribute));
-                if (result < 0) {
-                    throw std::runtime_error("cannot query RKNN output tensor");
-                }
-                output_zero_points_.push_back(output_attribute.zp);
-                output_scales_.push_back(output_attribute.scale);
-            }
-        } catch (...) {
-            if (context_ != 0) {
-                rknn_destroy(context_);
-                context_ = 0;
-            }
-            throw;
-        }
-    }
-#endif
 
     // 接收符合启用状态及订阅状态的 RGB 图像并送入输入队列。
     void receive_image(sensor_msgs::msg::Image::ConstSharedPtr message) {
@@ -311,105 +163,14 @@ struct RknnYolov6Node::Implementation {
         output_queue_.close();
     }
 
-    // 对当前帧运行 RKNN 模型或 Haar 分类器并记录后处理数据。
+    // 将当前图像交给所选后端推理并保存其私有帧结果。
     bool run_inference(FrameData &frame) {
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-        // 准备模型输入；图像尺寸不匹配时通过 RGA 缩放。
-        cv::Mat resized;
-        const cv::Mat *input_image = &frame.image;
-        if (frame.image.cols != model_width_ || frame.image.rows != model_height_) {
-            resized.create(model_height_, model_width_, CV_8UC3);
-            if (!resize_with_rga(frame.image, resized)) {
-                return false;
-            }
-            input_image = &resized;
-        }
-
-        // 提交 RGB 输入并启动一次 RKNN 推理。
-        rknn_input input{};
-        input.index        = 0;
-        input.buf          = input_image->data;
-        input.size         = static_cast<std::uint32_t>(input_image->total() * input_image->elemSize());
-        input.type         = RKNN_TENSOR_UINT8;
-        input.fmt          = RKNN_TENSOR_NHWC;
-        input.pass_through = 0;
-        int result         = rknn_inputs_set(context_, 1, &input);
-        if (result >= 0) {
-            result = rknn_run(context_, nullptr);
-        }
-        if (result < 0) {
-            RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000, "RKNN inference failed: %d", result);
-            return false;
-        }
-
-        // 按需读取逐层耗时，默认不额外查询性能详情。
-        if (print_perf_detail_) {
-            rknn_perf_detail detail{};
-            if (rknn_query(context_, RKNN_QUERY_PERF_DETAIL, &detail, sizeof(detail)) >= 0) {
-                RCLCPP_INFO(node_->get_logger(), "RKNN perf detail: %s", detail.perf_data);
-            }
-        }
-
-        // 以浮点格式获取输出张量，供现有 YOLOv6 后处理使用。
-        frame.outputs.resize(io_count_.n_output);
-        for (auto &output : frame.outputs) {
-            output.want_float = 1;
-        }
-        result = rknn_outputs_get(context_, io_count_.n_output, frame.outputs.data(), nullptr);
-        if (result < 0) {
-            RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000, "RKNN output retrieval failed: %d", result);
-            return false;
-        }
-        frame.outputs_acquired = true;
-        return true;
-#else
-        // Haar 后端先把 RGB 图像转为灰度，再检测人脸区域。
-        cv::Mat gray;
-        cv::cvtColor(frame.image, gray, cv::COLOR_RGB2GRAY);
-        face_cascade_.detectMultiScale(gray, frame.faces, 1.1, 2, 0 | cv::CASCADE_SCALE_IMAGE, cv::Size(30, 30));
-        return true;
-#endif
+        frame.backend_result = backend_->infer(frame.image);
+        return frame.backend_result != nullptr;
     }
 
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-    // 通过 RGA 将 RGB 图像缩放到模型输入尺寸。
-    bool resize_with_rga(const cv::Mat &source, cv::Mat &destination) {
-        auto src = wrapbuffer_virtualaddr_t(const_cast<std::uint8_t *>(source.data), source.cols, source.rows, source.cols, source.rows, RK_FORMAT_RGB_888);
-        auto dst = wrapbuffer_virtualaddr_t(destination.data, destination.cols, destination.rows, destination.cols, destination.rows, RK_FORMAT_RGB_888);
-        const im_rect source_rect{};
-        const im_rect destination_rect{};
-        const int check_result = imcheck_t(src, dst, rga_buffer_t{}, source_rect, destination_rect, im_rect{}, 0);
-        if (check_result != IM_STATUS_NOERROR) {
-            RCLCPP_ERROR(node_->get_logger(), "RGA input validation failed: %s", imStrError_t(static_cast<IM_STATUS>(check_result)));
-            return false;
-        }
-
-        const IM_STATUS result = imresize_t(src, dst, 0.0, 0.0, INTER_LINEAR, 1);
-        if (result != IM_STATUS_SUCCESS && result != IM_STATUS_NOERROR) {
-            RCLCPP_ERROR(node_->get_logger(), "RGA resize failed: %s", imStrError_t(result));
-            return false;
-        }
-        return true;
-    }
-
-    // 释放已取得的 RKNN 输出，覆盖正常处理和队列淘汰路径。
-    void release_outputs(FrameData &frame) {
-        if (frame.outputs_acquired) {
-            rknn_outputs_release(context_, io_count_.n_output, frame.outputs.data());
-            frame.outputs_acquired = false;
-        }
-    }
-#endif
-
-    // 推入后处理队列，并释放因队列满而淘汰帧的 RKNN 输出。
-    void queue_inference_result(std::shared_ptr<FrameData> frame) {
-        auto dropped = output_queue_.push(std::move(frame));
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-        if (dropped) {
-            release_outputs(*dropped);
-        }
-#endif
-    }
+    // 推入结果处理队列；被淘汰帧由其后端结果自动释放资源。
+    void queue_inference_result(std::shared_ptr<FrameData> frame) { output_queue_.push(std::move(frame)); }
 
     // 从外部图片目录构造离线帧并送入实时处理路径。
     void run_offline_images() {
@@ -463,60 +224,24 @@ struct RknnYolov6Node::Implementation {
         return false;
     }
 
-    // 从后处理队列取帧并发布检测结果及标注图像。
+    // 从结果处理队列取帧并发布检测结果及标注图像。
     void run_processing_stage() {
         while (auto frame = output_queue_.wait_and_pop()) {
             try {
                 // 正常路径完成后处理、发布和离线保存。
                 process_frame(*frame);
             } catch (const std::exception &error) {
-                // 异常帧不影响后续处理，并释放可能持有的 RKNN 输出。
+                // 异常帧不影响后续处理；帧结果析构时释放后端资源。
                 RCLCPP_ERROR(node_->get_logger(), "frame processing failed: %s", error.what());
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-                release_outputs(*frame);
-#endif
             }
         }
     }
 
     // 后处理单帧检测结果，绘制标注、发布消息并保存离线图像。
     void process_frame(FrameData &frame) {
-        // 先运行 YOLOv6 后处理或转换 Haar 检测框。
-        std::vector<Det> detections;
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-        std::vector<int> output_indices{0, 1, 2};
-        post_process(frame.outputs[0].want_float,
-                     frame.outputs[0].buf,
-                     frame.outputs[1].buf,
-                     frame.outputs[2].buf,
-                     model_height_,
-                     model_width_,
-                     static_cast<float>(confidence_threshold_),
-                     static_cast<float>(nms_threshold_),
-                     static_cast<float>(frame.image.cols) / model_width_,
-                     static_cast<float>(frame.image.rows) / model_height_,
-                     output_zero_points_,
-                     output_scales_,
-                     output_indices,
-                     labels_,
-                     static_cast<int>(labels_.size()),
-                     detections);
-        release_outputs(frame);
-#else
-        detections.reserve(frame.faces.size());
-        for (const auto &face : frame.faces) {
-            Det detection{};
-            detection.x1       = static_cast<unsigned short>(face.x);
-            detection.y1       = static_cast<unsigned short>(face.y);
-            detection.x2       = static_cast<unsigned short>(face.x + face.width);
-            detection.y2       = static_cast<unsigned short>(face.y + face.height);
-            detection.conf     = 1.0F;
-            detection.cls_name = "person";
-            detection.cls_id   = 0;
-            detection.obj_id   = 0;
-            detections.push_back(std::move(detection));
-        }
-#endif
+        // 通过统一 seam 将后端私有帧状态转换为 Detection。
+        auto detections = backend_->detections(*frame.backend_result);
+        frame.backend_result.reset();
 
         // 构造带原始图像头信息和尺寸的检测消息，并绘制标注框。
         auto annotated = frame.image.clone();
@@ -598,22 +323,19 @@ struct RknnYolov6Node::Implementation {
 
     // ROS 参数和节点所有者。
     RknnYolov6Node *node_;
-    std::string model_path_;
-    std::string labels_path_;
     std::string input_topic_;
     std::string detections_topic_;
     std::string annotated_topic_;
     std::string offline_images_path_;
     std::string offline_output_path_;
-    std::string haar_cascade_path_;
-    double confidence_threshold_{0.30};
-    double nms_threshold_{0.30};
     bool always_process_{false};
-    bool print_perf_detail_{false};
-    bool use_multi_npu_core_{false};
     bool offline_mode_{false};
     std::atomic<bool> enabled_{true};
     std::atomic<bool> stopping_{false};
+
+    // 后端必须晚于队列销毁，以便残留帧结果先归还后端资源。
+    detail::DetectorBackendConfig backend_config_;
+    std::unique_ptr<detail::DetectorBackend> backend_;
 
     // 两个容量二队列及其工作线程。
     BoundedQueue<FrameData> input_queue_{kQueueCapacity};
@@ -629,23 +351,6 @@ struct RknnYolov6Node::Implementation {
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr annotated_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_subscription_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr enable_subscription_;
-
-#ifdef RKNN_YOLOV6_BACKEND_RKNN
-    // RKNN 上下文、模型数据和模型张量元信息。
-    int model_width_{0};
-    int model_height_{0};
-    int channels_{0};
-    rknn_context context_{0};
-    rknn_input_output_num io_count_{};
-    std::vector<std::uint8_t> model_data_;
-    std::vector<std::int32_t> output_zero_points_;
-    std::vector<float> output_scales_;
-    std::vector<std::string> labels_;
-#endif
-#ifdef RKNN_YOLOV6_BACKEND_HAAR
-    // 主机侧 Haar 级联分类器。
-    cv::CascadeClassifier face_cascade_;
-#endif
 };
 
 // 使用 ROS 2 参数创建检测节点实现。

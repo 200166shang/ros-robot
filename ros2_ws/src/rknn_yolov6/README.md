@@ -7,7 +7,7 @@
 - Annotated image: `/camera/image_det` (`sensor_msgs/msg/Image`, `rgb8`)
 - Enable control: `/enable_detector` (`std_msgs/msg/Bool`)
 
-The detector retains separate inference and output stages with capacity-two drop-oldest queues. The AArch64 RKNN backend uses RGA for resize; the Haar backend is a host-side fallback for interface checks and face detection. Both use the same ROS messages.
+The detector retains separate inference and output stages with capacity-two drop-oldest queues. The ROS-facing module uses a build-selected adapter for backend-specific initialization, inference, result decoding, and resource ownership. The AArch64 RKNN adapter uses RGA for resize; the Haar adapter is a host-side fallback for interface checks and face detection. Both use the same ROS messages.
 
 ## Build
 
