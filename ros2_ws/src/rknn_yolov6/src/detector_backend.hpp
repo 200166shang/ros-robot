@@ -15,13 +15,13 @@ namespace detail {
 
 // 汇总由 ROS 参数提供、供所选检测后端使用的配置。
 struct DetectorBackendConfig {
-    std::string model_path;
-    std::string labels_path;
-    std::string haar_cascade_path;
-    float confidence_threshold{0.30F};
-    float nms_threshold{0.30F};
-    bool print_perf_detail{false};
-    bool use_multi_npu_core{false};
+    std::string model_path;             // RKNN 模型文件路径。
+    std::string labels_path;            // YOLO 类别标签文件路径。
+    std::string haar_cascade_path;      // Haar 级联分类器文件路径。
+    float confidence_threshold{0.30F};  // YOLO 检测置信度阈值。
+    float nms_threshold{0.30F};         // YOLO 非极大值抑制阈值。
+    bool print_perf_detail{false};      // 是否收集并输出 RKNN 性能详情。
+    bool use_multi_npu_core{false};     // 是否请求使用多个 NPU 核心。
 };
 
 // 为单帧保留跨推理与结果处理阶段的后端私有资源。
