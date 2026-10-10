@@ -84,6 +84,7 @@ public:
 
     // 准备输入、运行 RKNN 并保存跨阶段输出张量。
     std::unique_ptr<DetectorBackendFrameResult> infer(const cv::Mat &image) override {
+        // 1. 将输入图像调整到模型尺寸；尺寸不匹配时通过 RGA 缩放。
         cv::Mat resized;
         const cv::Mat *input_image = &image;
         if (image.cols != model_width_ || image.rows != model_height_) {
@@ -94,6 +95,7 @@ public:
             input_image = &resized;
         }
 
+        // 2. 设置 RKNN 输入并执行推理，失败时记录错误并结束当前帧。
         rknn_input input{};
         input.index        = 0;
         input.buf          = input_image->data;
@@ -110,7 +112,7 @@ public:
             return nullptr;
         }
 
-        // 按需查询逐层耗时，默认关闭以保留当前运行开销。
+        // 3. 按需查询逐层耗时，默认关闭以保留当前运行开销。
         if (print_perf_detail_) {
             rknn_perf_detail detail{};
             if (rknn_query(context_, RKNN_QUERY_PERF_DETAIL, &detail, sizeof(detail)) >= 0) {
@@ -118,6 +120,7 @@ public:
             }
         }
 
+        // 4. 获取输出张量并交给帧结果对象管理，供结果线程后处理。
         auto frame_result = std::make_unique<RknnFrameResult>(context_, io_count_.n_output, image.cols, image.rows);
         result            = rknn_outputs_get(context_, io_count_.n_output, frame_result->outputs().data(), nullptr);
         if (result < 0) {
