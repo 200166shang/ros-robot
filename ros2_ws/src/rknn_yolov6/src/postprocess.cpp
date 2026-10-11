@@ -78,7 +78,10 @@ void quick_sort_indice_inverse(std::vector<float> &scores, int left, int right, 
     quick_sort_indice_inverse(scores, low + 1, right, indices);
 }
 
-// 解码单个浮点检测头并收集通过阈值筛选的检测框。
+// 逐网格解码一个步长对应的 YOLOv6 float 检测头，并收集候选框。
+// input 是按通道平面连续排列的单个 head buffer；先按目标置信度筛选，再选择最高类别分。
+// 根据网格中心和四边距离还原边界，并用 stride 换算为模型输入像素坐标。
+// 候选框的坐标、分数和类别编号分别追加到并行数组；排序、NMS 和原图坐标缩放由外层 process 完成。
 int process_float(const float *input,
                   int grid_height,
                   int grid_width,
