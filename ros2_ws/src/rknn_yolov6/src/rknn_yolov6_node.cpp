@@ -148,19 +148,23 @@ struct RknnYolov6Node::Implementation {
             // 离线图片复用同一套推理和后处理队列。
             run_offline_images();
         } else {
-            // 实时模式从输入队列取帧，推理成功后交给输出队列。
-            while (auto frame = input_queue_.wait_and_pop()) {
-                if (stopping_.load()) {
-                    break;
-                }
-                if (run_inference(*frame)) {
-                    queue_inference_result(std::move(frame));
-                }
-            }
+            run_live_frames();
         }
 
         // 通知后处理线程：不会再有新的推理结果。
         output_queue_.close();
+    }
+
+    // 从实时输入队列取帧，推理成功后交给后处理队列。
+    void run_live_frames() {
+        while (auto frame = input_queue_.wait_and_pop()) {
+            if (stopping_.load()) {
+                break;
+            }
+            if (run_inference(*frame)) {
+                queue_inference_result(std::move(frame));
+            }
+        }
     }
 
     // 将当前图像交给所选后端推理并保存其私有帧结果。
