@@ -88,17 +88,24 @@ int process_float(const float *input,
                   std::vector<int> &class_ids,
                   float threshold,
                   int class_count) {
-    int valid_count       = 0;
+    // input 指向当前一个检测头 buffer 的起始位置；数据按 [通道][网格位置] 连续排列。
+    int valid_count = 0;
+    // 一个通道平面包含所有网格位置，因此跨通道时要偏移整个网格的 float 元素数量。
     const int grid_length = grid_height * grid_width;
 
     for (int row = 0; row < grid_height; ++row) {
         for (int column = 0; column < grid_width; ++column) {
+            // 当前网格位置在每个通道平面中的索引都相同。
             const int cell_index = row * grid_width + column;
+
+            // 通道 4 是目标置信度；低于阈值时跳过这个网格位置。
             if (input[4 * grid_length + cell_index] < threshold) {
                 continue;
             }
 
-            const float *cell      = input + cell_index;
+            // cell 指向通道 0 下的当前位置；cell[k * grid_length] 是通道 k 下同一位置的值。
+            const float *cell = input + cell_index;
+            // 通道 5 起是各类别分数；选择最高分和对应的类别编号。
             float best_class_score = cell[5 * grid_length];
             int best_class_id      = 0;
             for (int class_index = 1; class_index < class_count; ++class_index) {
@@ -110,11 +117,14 @@ int process_float(const float *input,
             }
 
             if (best_class_score >= threshold) {
+                // 最高类别分也要达到阈值；通道 0–3 是 left、top、right、bottom 距离。
+                // stride 将网格坐标换算成模型像素坐标。
                 const float x1 = column + 0.5 - cell[0 * grid_length];
                 const float y1 = row + 0.5 - cell[1 * grid_length];
                 const float x2 = column + 0.5 + cell[2 * grid_length];
                 const float y2 = row + 0.5 + cell[3 * grid_length];
 
+                // 按 x、y、宽、高及其类别信息保存候选框，留给外层排序和 NMS。
                 scores.push_back(best_class_score);
                 class_ids.push_back(best_class_id);
                 boxes.push_back(x1 * stride);
