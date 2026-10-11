@@ -326,3 +326,10 @@ Record the active issue URL, resolved decisions or ADR links, completed work, va
 - Validation (2026-10-11 UTC): HAAR and RKNN/RGA package builds passed. CTest passed both registered targets in each build: the fixed-tensor target ran seven cases covering all three output heads, class mapping/scaling, sorting, NMS, confidence filtering, and invalid configuration; the existing ROS topic and offline-save target passed using external assets. `clang-format --dry-run --Werror` and `git diff --check` passed. The RKNN build reported a pedantic warning from the system RGA header; the RKNN test runtime logged that core-mask selection has no implementation on this platform, but topic inference and offline processing both passed.
 - Pull request: [#33](https://github.com/200166shang/ros-robot/pull/33), stacked on PR #27 against `codex/rknn-yolov6-migration`. Next action: review and merge #33 into the migration branch; keep #32 open through that review and merge.
 - Follow-up: added a function-level overview and Chinese in-function comments to `process_float` explaining the per-head buffer, channel-plane layout, `grid_length`/`cell_index` indexing, confidence filtering, box-distance channels, the half-cell center offset, `x1/y1` and `x2/y2` corner meanings, candidate outputs, and the work left to the outer `process`. This follow-up changes comments only; formatting and diff checks pass.
+
+## Inference stage readability follow-up — 2026-10-11 (UTC)
+
+- Follow-up to implementation ticket [#32](https://github.com/200166shang/ros-robot/issues/32), in PR [#33](https://github.com/200166shang/ros-robot/pull/33).
+- Extracted the real-time input loop from `run_inference_stage()` into `run_live_frames()`. The stage method now only selects real-time/offline frame production and closes the output queue after that source finishes; inference success filtering, queue handoff, and shutdown behavior are unchanged.
+- Validation: `clang-format --dry-run --Werror` and `git diff --check` passed. No build or tests were run for this focused readability refactor.
+- Next action: continue PR #33 review.
