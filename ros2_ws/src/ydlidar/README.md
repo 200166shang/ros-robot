@@ -9,6 +9,8 @@
 浏览器视图都读取同一话题；它们不会启动第二个雷达驱动，也不会再次连接
 雷达串口。
 
+下面的构建和测试命令从仓库根目录运行。
+
 ### 构建并运行 ROS 接口测试（无需 SDK 或雷达）
 
 接口测试使用模拟扫描数据源，通过真实 ROS 节点检查 `/scan` 消息及
@@ -17,13 +19,13 @@
 
 ```bash
 source /opt/ros/foxy/setup.zsh
-cd ~/code/ros-robot/ros2_ws
-colcon build --packages-select ydlidar \
+cd ~/code/ros-robot
+./scripts/colcon.sh build --packages-select ydlidar \
   --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=OFF
-source install/setup.zsh
-colcon test --packages-select ydlidar \
+source ros2_ws/install/setup.zsh
+./scripts/colcon.sh test --packages-select ydlidar \
   --ctest-args -R test_ydlidar_ros_interface
-colcon test-result --verbose
+./scripts/colcon.sh test-result --verbose
 ```
 
 预期结果是 `test_ydlidar_ros_interface` 通过。该模式只验证 ROS 接口和节点生命周期，
@@ -36,8 +38,9 @@ colcon test-result --verbose
 export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
 export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cd ~/code/ros-robot
 find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
-colcon build --packages-select ydlidar
+./scripts/colcon.sh build --packages-select ydlidar
 ```
 
 `find` 应输出 SDK 的 CMake 配置文件路径；如果 SDK 安装布局不同，请按实际位置设置
@@ -170,13 +173,13 @@ the SDK:
 
 ```bash
 source /opt/ros/foxy/setup.zsh
-cd ~/code/ros-robot/ros2_ws
-colcon build --packages-select ydlidar \
+cd ~/code/ros-robot
+./scripts/colcon.sh build --packages-select ydlidar \
   --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=OFF
-source install/setup.zsh
-colcon test --packages-select ydlidar \
+source ros2_ws/install/setup.zsh
+./scripts/colcon.sh test --packages-select ydlidar \
   --ctest-args -R test_ydlidar_ros_interface
-colcon test-result --verbose
+./scripts/colcon.sh test-result --verbose
 ```
 
 The expected result is a passing `test_ydlidar_ros_interface`. This mode tests
@@ -191,8 +194,9 @@ To build the hardware node, first install YDLIDAR SDK 1.2.7 and make its
 export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
 export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+cd ~/code/ros-robot
 find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
-colcon build --packages-select ydlidar
+./scripts/colcon.sh build --packages-select ydlidar
 ```
 
 `find` should print the SDK CMake config path. If the SDK uses a different

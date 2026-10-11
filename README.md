@@ -17,6 +17,22 @@ ROS packages are organized under `ros2_ws/src/`, one package per directory.
 Build output belongs under `ros2_ws/`; the repository root is for source,
 scripts, and project files.
 
+## Build and test
+
+Source the ROS 2 Foxy environment, then run the workspace commands from the
+repository root. The wrapper runs `colcon` from `ros2_ws/` and forwards its
+arguments:
+
+```bash
+source /opt/ros/foxy/setup.bash
+./scripts/colcon.sh build --symlink-install
+./scripts/colcon.sh test
+./scripts/colcon.sh test-result --verbose
+```
+
+Package-specific backend, SDK, asset, and test setup is documented in each
+package README.
+
 The demo depends on locally installed Rockchip SDK headers, model weights, and
 voice assets. These machine-specific files are kept outside Git. The tracking
 demo defaults to `dry_run: true` and does not drive a physical base.

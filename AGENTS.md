@@ -4,8 +4,6 @@
 
 Work from the issue's scope and acceptance criteria. For module design or restructuring, apply `codebase-design`: keep the Interface small, concentrate behaviour in the Implementation, and introduce a Seam where behaviour actually varies. Test observable behaviour through the Interface. Keep ROS wiring and hardware-specific Adapters at the edges.
 
-Read `CONTEXT.md` when starting work or resuming a handoff. Confirm its current-state claims against source and GitHub before relying on them. Update it at a task checkpoint with the issue, decisions, validation evidence, and next action.
-
 Keep tracking in dry-run mode unless the user explicitly authorizes hardware actuation. Keep model weights, recordings, proprietary SDK headers, credentials, and generated build output outside source commits.
 
 ### C++ readability and review

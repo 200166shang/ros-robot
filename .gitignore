@@ -1,6 +1,8 @@
 # Colcon/CMake output. Keep these in the workspace for local development,
 # but never version generated build trees.
 /build/
+/install/
+/log/
 /Testing/
 /ros2_ws/build/
 /ros2_ws/install/
