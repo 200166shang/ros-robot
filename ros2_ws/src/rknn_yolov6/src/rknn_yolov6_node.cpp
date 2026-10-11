@@ -23,8 +23,8 @@
 #include <utility>
 #include <vector>
 
-#include "detector_backend.hpp"
 #include "rknn_yolov6/bounded_queue.hpp"
+#include "rknn_yolov6/detector_backend.hpp"
 
 namespace rknn_yolov6 {
 namespace {

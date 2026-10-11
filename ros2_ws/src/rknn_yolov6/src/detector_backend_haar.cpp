@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "detector_backend.hpp"
+#include "rknn_yolov6/detector_backend.hpp"
 
 namespace rknn_yolov6 {
 namespace detail {
