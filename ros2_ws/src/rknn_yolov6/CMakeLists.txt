@@ -80,6 +80,9 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_rknn_yolov6_postprocess test/test_yolov6_postprocess.cpp src/postprocess.cpp)
+  target_include_directories(test_rknn_yolov6_postprocess PRIVATE include)
+
   ament_add_gtest(test_rknn_yolov6_topic test/test_rknn_yolov6_topic.cpp)
   ament_target_dependencies(test_rknn_yolov6_topic rclcpp sensor_msgs robot_interfaces)
   target_link_libraries(test_rknn_yolov6_topic rknn_yolov6_core)

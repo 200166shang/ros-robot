@@ -1,405 +1,215 @@
 #include "rknn_yolov6/postprocess.hpp"
 
-#include <math.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/time.h>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <utility>
 
-#include <vector>
+namespace rknn_yolov6 {
+namespace {
 
-// 将数值限制在模型输入图像的有效像素范围内。
-inline static int clamp(float val, int min, int max) {
-    return val > min ? (val < max ? val : max) : min;  //小于等于0，则等于0；大于等于max,则等于max
-}
+// 将坐标限制在模型输入图像的有效像素范围内。
+inline int clamp(float value, int minimum, int maximum) { return value > minimum ? (value < maximum ? value : maximum) : minimum; }
 
 // 根据两个检测框坐标计算交并比。
-static float CalculateOverlap(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1, float ymax1) {
-    float w = fmax(0.f, fmin(xmax0, xmax1) - fmax(xmin0, xmin1) + 1.0);
-    float h = fmax(0.f, fmin(ymax0, ymax1) - fmax(ymin0, ymin1) + 1.0);
-    float i = w * h;
-    float u = (xmax0 - xmin0 + 1.0) * (ymax0 - ymin0 + 1.0) + (xmax1 - xmin1 + 1.0) * (ymax1 - ymin1 + 1.0) - i;
-    return u <= 0.f ? 0.f : (i / u);
+float CalculateOverlap(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1, float ymax1) {
+    const float width        = std::fmax(0.0F, std::fmin(xmax0, xmax1) - std::fmax(xmin0, xmin1) + 1.0);
+    const float height       = std::fmax(0.0F, std::fmin(ymax0, ymax1) - std::fmax(ymin0, ymin1) + 1.0);
+    const float intersection = width * height;
+    const float union_area   = (xmax0 - xmin0 + 1.0) * (ymax0 - ymin0 + 1.0) + (xmax1 - xmin1 + 1.0) * (ymax1 - ymin1 + 1.0) - intersection;
+    return union_area <= 0.0F ? 0.0F : intersection / union_area;
 }
 
 // 按交并比阈值抑制重叠检测框。
-static int nms(int validCount, std::vector<float> &outputLocations, std::vector<int> &order, float threshold) {
-    for (int i = 0; i < validCount; ++i) {
+void nms(int valid_count, const std::vector<float> &locations, std::vector<int> &order, float threshold) {
+    for (int i = 0; i < valid_count; ++i) {
         if (order[i] == -1) {
             continue;
         }
-        int n = order[i];
-        for (int j = i + 1; j < validCount; ++j) {
-            int m = order[j];
-            if (m == -1) {
+        const int current = order[i];
+        for (int j = i + 1; j < valid_count; ++j) {
+            const int candidate = order[j];
+            if (candidate == -1) {
                 continue;
             }
-            float xmin0 = outputLocations[n * 4 + 0];
-            float ymin0 = outputLocations[n * 4 + 1];
-            float xmax0 = outputLocations[n * 4 + 0] + outputLocations[n * 4 + 2];
-            float ymax0 = outputLocations[n * 4 + 1] + outputLocations[n * 4 + 3];
 
-            float xmin1 = outputLocations[m * 4 + 0];
-            float ymin1 = outputLocations[m * 4 + 1];
-            float xmax1 = outputLocations[m * 4 + 0] + outputLocations[m * 4 + 2];
-            float ymax1 = outputLocations[m * 4 + 1] + outputLocations[m * 4 + 3];
+            const float xmin0 = locations[current * 4];
+            const float ymin0 = locations[current * 4 + 1];
+            const float xmax0 = xmin0 + locations[current * 4 + 2];
+            const float ymax0 = ymin0 + locations[current * 4 + 3];
+            const float xmin1 = locations[candidate * 4];
+            const float ymin1 = locations[candidate * 4 + 1];
+            const float xmax1 = xmin1 + locations[candidate * 4 + 2];
+            const float ymax1 = ymin1 + locations[candidate * 4 + 3];
 
-            float iou = CalculateOverlap(xmin0, ymin0, xmax0, ymax0, xmin1, ymin1, xmax1, ymax1);
-
-            if (iou > threshold) {
+            if (CalculateOverlap(xmin0, ymin0, xmax0, ymax0, xmin1, ymin1, xmax1, ymax1) > threshold) {
                 order[j] = -1;
             }
         }
     }
-    return 0;
 }
 
 // 按置信度降序排列分数，同时同步排列原始检测索引。
-static int quick_sort_indice_inverse(std::vector<float> &input, int left, int right, std::vector<int> &indices) {
-    float key;
-    int key_index;
+void quick_sort_indice_inverse(std::vector<float> &scores, int left, int right, std::vector<int> &indices) {
     int low  = left;
     int high = right;
-    if (left < right) {
-        key_index = indices[left];
-        key       = input[left];
-        while (low < high) {
-            while (low < high && input[high] <= key) {
-                high--;
-            }
-            input[low]   = input[high];
-            indices[low] = indices[high];
-            while (low < high && input[low] >= key) {
-                low++;
-            }
-            input[high]   = input[low];
-            indices[high] = indices[low];
-        }
-        input[low]   = key;
-        indices[low] = key_index;
-        quick_sort_indice_inverse(input, left, low - 1, indices);
-        quick_sort_indice_inverse(input, low + 1, right, indices);
+    if (left >= right) {
+        return;
     }
-    return low;
+
+    const int key_index = indices[left];
+    const float key     = scores[left];
+    while (low < high) {
+        while (low < high && scores[high] <= key) {
+            --high;
+        }
+        scores[low]  = scores[high];
+        indices[low] = indices[high];
+        while (low < high && scores[low] >= key) {
+            ++low;
+        }
+        scores[high]  = scores[low];
+        indices[high] = indices[low];
+    }
+    scores[low]  = key;
+    indices[low] = key_index;
+
+    quick_sort_indice_inverse(scores, left, low - 1, indices);
+    quick_sort_indice_inverse(scores, low + 1, right, indices);
 }
 
-// 计算 sigmoid，用于旧的量化输出解码路径。
-static float sigmoid(float x) { return 1.0 / (1.0 + expf(-x)); }
+// 解码单个浮点检测头并收集通过阈值筛选的检测框。
+int process_float(const float *input,
+                  int grid_height,
+                  int grid_width,
+                  int stride,
+                  std::vector<float> &boxes,
+                  std::vector<float> &scores,
+                  std::vector<int> &class_ids,
+                  float threshold,
+                  int class_count) {
+    int valid_count       = 0;
+    const int grid_length = grid_height * grid_width;
 
-// 计算 sigmoid 的反函数，用于旧的量化输出阈值转换。
-static float unsigmoid(float y) { return -1.0 * logf((1.0 / y) - 1.0); }
-
-// 将浮点值裁剪到 RKNN 量化数值范围。
-inline static int32_t __clip(float val, float min, float max) {
-    float f = val <= min ? min : (val >= max ? max : val);
-    return f;
-}
-
-// 将浮点值转换为仿射量化的 int8 值。
-static int8_t qnt_f32_to_affine(float f32, int32_t zp, float scale) {
-    float dst_val = (f32 / scale) + zp;
-    // int8_t res = (int8_t)__clip(dst_val, 0, 255);
-
-    int8_t res = (int8_t)__clip(dst_val, -128, 127);
-    return res;
-}
-
-// 将仿射量化的 int8 值恢复为浮点值。
-static float deqnt_affine_to_f32(int8_t qnt, int32_t zp, float scale) { return ((float)qnt - (float)zp) * scale; }
-
-// 解码旧版 int8 检测头；当前 YOLOv6 模型使用浮点后处理分支。
-static int process(int8_t *input,
-                   int grid_h,
-                   int grid_w,
-                   int height,
-                   int width,
-                   int stride,
-                   std::vector<float> &boxes,
-                   std::vector<float> &objProbs,
-                   std::vector<int> &classId,
-                   float threshold,
-                   int32_t zp,
-                   float scale,
-                   int OBJ_CLASS_NUM) {
-    int validCount = 0;
-    //   int    grid_len   = grid_h * grid_w;
-    //   float  thres      = unsigmoid(threshold);
-    //   int8_t thres_i8   = qnt_f32_to_affine(thres, zp, scale);
-    //   for (int a = 0; a < 3; a++) {
-    //     for (int i = 0; i < grid_h; i++) {
-    //       for (int j = 0; j < grid_w; j++) {
-    //         int8_t box_confidence = input[((5+OBJ_CLASS_NUM) * a + 4) * grid_len + i * grid_w + j];
-    //         if (box_confidence >= thres_i8) {
-    //           int     offset = ((5+OBJ_CLASS_NUM) * a) * grid_len + i * grid_w + j;
-    //           int8_t* in_ptr = input + offset;
-    //           float   box_x  = sigmoid(deqnt_affine_to_f32(*in_ptr, zp, scale)) * 2.0 - 0.5;
-    //           float   box_y  = sigmoid(deqnt_affine_to_f32(in_ptr[grid_len], zp, scale)) * 2.0 - 0.5;
-    //           float   box_w  = sigmoid(deqnt_affine_to_f32(in_ptr[2 * grid_len], zp, scale)) * 2.0;
-    //           float   box_h  = sigmoid(deqnt_affine_to_f32(in_ptr[3 * grid_len], zp, scale)) * 2.0;
-    //           box_x          = (box_x + j) * (float)stride;
-    //           box_y          = (box_y + i) * (float)stride;
-    //           box_w          = box_w * box_w * (float)anchor[a * 2];
-    //           box_h          = box_h * box_h * (float)anchor[a * 2 + 1];
-    //           box_x -= (box_w / 2.0);
-    //           box_y -= (box_h / 2.0);
-
-    //           int8_t maxClassProbs = in_ptr[5 * grid_len];
-    //           int    maxClassId    = 0;
-    //           for (int k = 1; k < OBJ_CLASS_NUM; ++k) {
-    //             int8_t prob = in_ptr[(5 + k) * grid_len];
-    //             if (prob > maxClassProbs) {
-    //               maxClassId    = k;
-    //               maxClassProbs = prob;
-    //             }
-    //           }
-    //           if (maxClassProbs>= thres_i8){
-    //             objProbs.push_back(sigmoid(deqnt_affine_to_f32(maxClassProbs, zp, scale))
-    //                                * sigmoid(deqnt_affine_to_f32(box_confidence, zp, scale)));
-    //             classId.push_back(maxClassId);
-    //             validCount++;
-    //             boxes.push_back(box_x);
-    //             boxes.push_back(box_y);
-    //             boxes.push_back(box_w);
-    //             boxes.push_back(box_h);
-    //           }
-    //         }
-    //       }
-    //     }
-    //   }
-    return validCount;
-}
-
-// 解码浮点检测头并收集通过置信度筛选的检测框。
-static int process_float(float *input,
-                         int grid_h,
-                         int grid_w,
-                         int height,
-                         int width,
-                         int stride,
-                         std::vector<float> &boxes,
-                         std::vector<float> &objProbs,
-                         std::vector<int> &classId,
-                         float threshold,
-                         int32_t zp,
-                         float scale,
-                         int OBJ_CLASS_NUM) {
-    int validCount = 0;
-    int grid_len   = grid_h * grid_w;
-
-    // printf("hxw %dx%d %dx%d %d\n",grid_h,grid_w,height,width,stride);
-
-    for (int i = 0; i < grid_h; i++) {
-        for (int j = 0; j < grid_w; j++) {
-            if (input[4 * grid_len + i * grid_w + j] < threshold)  // 4+1+80
-            {
+    for (int row = 0; row < grid_height; ++row) {
+        for (int column = 0; column < grid_width; ++column) {
+            const int cell_index = row * grid_width + column;
+            if (input[4 * grid_length + cell_index] < threshold) {
                 continue;
-            }  //这一步可以节约大量后处理时间，并且减少CPU占用，但是要将ReduMax在模型推理中完成，模型推理也调用的是CPU，所以CPU会在推理时偏高
+            }
 
-            // 4+1+80 or 4+80
-
-            float *in_ptr = input + i * grid_w + j;
-
-            // float prob_max = in_ptr[4 * grid_len];
-            float prob_max = in_ptr[5 * grid_len];
-            int maxClassId = 0;
-            for (int c = 1; c < OBJ_CLASS_NUM; c++) {
-                // float prob = in_ptr[(4 + c) * grid_len];
-                float prob = in_ptr[(5 + c) * grid_len];
-                if (prob > prob_max) {
-                    maxClassId = c;
-                    prob_max   = prob;
+            const float *cell      = input + cell_index;
+            float best_class_score = cell[5 * grid_length];
+            int best_class_id      = 0;
+            for (int class_index = 1; class_index < class_count; ++class_index) {
+                const float class_score = cell[(5 + class_index) * grid_length];
+                if (class_score > best_class_score) {
+                    best_class_id    = class_index;
+                    best_class_score = class_score;
                 }
             }
 
-            if (prob_max >= threshold) {
-                float box_x  = j + 0.5 - in_ptr[0 * grid_len];
-                float box_y  = i + 0.5 - in_ptr[1 * grid_len];
-                float box_x2 = j + 0.5 + in_ptr[2 * grid_len];
-                float box_y2 = i + 0.5 + in_ptr[3 * grid_len];
+            if (best_class_score >= threshold) {
+                const float x1 = column + 0.5 - cell[0 * grid_length];
+                const float y1 = row + 0.5 - cell[1 * grid_length];
+                const float x2 = column + 0.5 + cell[2 * grid_length];
+                const float y2 = row + 0.5 + cell[3 * grid_length];
 
-                float box_w = box_x2 - box_x;
-                float box_h = box_y2 - box_y;
-
-                // printf("prob=%f\n",maxClassProbs);
-                // objProbs.push_back(maxClassProbs);
-                // classId.push_back(maxClassId);
-
-                objProbs.push_back(prob_max);
-                classId.push_back(maxClassId);
-
-                boxes.push_back(box_x * stride);
-                boxes.push_back(box_y * stride);
-                boxes.push_back(box_w * stride);
-                boxes.push_back(box_h * stride);
-
-                validCount++;
+                scores.push_back(best_class_score);
+                class_ids.push_back(best_class_id);
+                boxes.push_back(x1 * stride);
+                boxes.push_back(y1 * stride);
+                boxes.push_back((x2 - x1) * stride);
+                boxes.push_back((y2 - y1) * stride);
+                ++valid_count;
             }
         }
     }
 
-    return validCount;
+    return valid_count;
 }
 
-// 合并三个尺度的候选框，执行排序与 NMS 后生成检测结果。
-int post_process(uint8_t want_float,
-                 void *input0,
-                 void *input1,
-                 void *input2,
-                 int model_in_h,
-                 int model_in_w,
-                 float conf_threshold,
-                 float nms_threshold,
-                 float scale_w,
-                 float scale_h,
-                 std::vector<int32_t> &qnt_zps,
-                 std::vector<float> &qnt_scales,
-                 std::vector<int> &out_index,
-                 std::vector<std::string> &label_names,
-                 int cls_num,
-                 std::vector<Det> &dets) {
-    std::vector<float> filterBoxes;
-    std::vector<float> boxesScore;
-    std::vector<int> classId;
-    int stride0     = 8;
-    int grid_h0     = model_in_h / stride0;
-    int grid_w0     = model_in_w / stride0;
-    int validCount0 = 0;
+}  // namespace
 
-    int stride1     = 16;
-    int grid_h1     = model_in_h / stride1;
-    int grid_w1     = model_in_w / stride1;
-    int validCount1 = 0;
+// 校验并保存 YOLOv6 后处理所需的固定配置。
+YoloV6Postprocessor::YoloV6Postprocessor(YoloV6PostprocessorConfig config)
+    : model_width_(config.model_width),
+      model_height_(config.model_height),
+      confidence_threshold_(config.confidence_threshold),
+      nms_threshold_(config.nms_threshold),
+      labels_(std::move(config.labels)) {
+    if (model_width_ <= 0 || model_height_ <= 0) {
+        throw std::invalid_argument("YOLOv6 model dimensions must be positive");
+    }
+    if (labels_.empty()) {
+        throw std::invalid_argument("YOLOv6 postprocessor requires at least one class label");
+    }
+}
 
-    int stride2     = 32;
-    int grid_h2     = model_in_h / stride2;
-    int grid_w2     = model_in_w / stride2;
-    int validCount2 = 0;
-
-    if (want_float) {
-        validCount0 = process_float((float *)input0,
-                                    grid_h0,
-                                    grid_w0,
-                                    model_in_h,
-                                    model_in_w,
-                                    stride0,
-                                    filterBoxes,
-                                    boxesScore,
-                                    classId,
-                                    conf_threshold,
-                                    qnt_zps[out_index[0]],
-                                    qnt_scales[out_index[0]],
-                                    cls_num);  //注意此处索引可能从2开始！！！
-
-        validCount1 = process_float((float *)input1,
-                                    grid_h1,
-                                    grid_w1,
-                                    model_in_h,
-                                    model_in_w,
-                                    stride1,
-                                    filterBoxes,
-                                    boxesScore,
-                                    classId,
-                                    conf_threshold,
-                                    qnt_zps[out_index[1]],
-                                    qnt_scales[out_index[1]],
-                                    cls_num);
-
-        validCount2 = process_float((float *)input2,
-                                    grid_h2,
-                                    grid_w2,
-                                    model_in_h,
-                                    model_in_w,
-                                    stride2,
-                                    filterBoxes,
-                                    boxesScore,
-                                    classId,
-                                    conf_threshold,
-                                    qnt_zps[out_index[2]],
-                                    qnt_scales[out_index[2]],
-                                    cls_num);
-    } else {
-        validCount0 = process((int8_t *)input0,
-                              grid_h0,
-                              grid_w0,
-                              model_in_h,
-                              model_in_w,
-                              stride0,
-                              filterBoxes,
-                              boxesScore,
-                              classId,
-                              conf_threshold,
-                              qnt_zps[out_index[0]],
-                              qnt_scales[out_index[0]],
-                              cls_num);  //注意此处索引可能从2开始！！！
-
-        validCount1 = process((int8_t *)input1,
-                              grid_h1,
-                              grid_w1,
-                              model_in_h,
-                              model_in_w,
-                              stride1,
-                              filterBoxes,
-                              boxesScore,
-                              classId,
-                              conf_threshold,
-                              qnt_zps[out_index[1]],
-                              qnt_scales[out_index[1]],
-                              cls_num);
-
-        validCount2 = process((int8_t *)input2,
-                              grid_h2,
-                              grid_w2,
-                              model_in_h,
-                              model_in_w,
-                              stride2,
-                              filterBoxes,
-                              boxesScore,
-                              classId,
-                              conf_threshold,
-                              qnt_zps[out_index[2]],
-                              qnt_scales[out_index[2]],
-                              cls_num);
+// 解码三个输出尺度，排序并执行 NMS 后映射到原图坐标。
+std::vector<Det> YoloV6Postprocessor::process(const YoloV6FrameOutputs &outputs) const {
+    if (outputs.source_width <= 0 || outputs.source_height <= 0) {
+        throw std::invalid_argument("YOLOv6 source image dimensions must be positive");
+    }
+    if (std::any_of(outputs.heads.begin(), outputs.heads.end(), [](const float *head) { return head == nullptr; })) {
+        throw std::invalid_argument("YOLOv6 frame output heads must not be null");
     }
 
-    int validCount = validCount0 + validCount1 + validCount2;
-    if (validCount <= 0) {
-        return 0;
+    std::vector<float> boxes;
+    std::vector<float> scores;
+    std::vector<int> class_ids;
+
+    // 1. 按固定的 8、16、32 步长解码三个输出头。
+    constexpr std::array<int, 3> strides{{8, 16, 32}};
+    int valid_count       = 0;
+    const int class_count = static_cast<int>(labels_.size());
+    for (std::size_t head_index = 0; head_index < strides.size(); ++head_index) {
+        const int stride = strides[head_index];
+        valid_count += process_float(
+            outputs.heads[head_index], model_height_ / stride, model_width_ / stride, stride, boxes, scores, class_ids, confidence_threshold_, class_count);
     }
 
-    std::vector<int> indexArray;
-    for (int i = 0; i < validCount; ++i) {
-        indexArray.push_back(i);
+    std::vector<Det> detections;
+    if (valid_count == 0) {
+        return detections;
     }
 
-    quick_sort_indice_inverse(boxesScore, 0, validCount - 1, indexArray);
+    // 2. 按置信度排序并对候选框执行 NMS。
+    std::vector<int> order(static_cast<std::size_t>(valid_count));
+    for (int index = 0; index < valid_count; ++index) {
+        order[static_cast<std::size_t>(index)] = index;
+    }
+    quick_sort_indice_inverse(scores, 0, valid_count - 1, order);
+    nms(valid_count, boxes, order, nms_threshold_);
 
-    nms(validCount, filterBoxes, indexArray, nms_threshold);
-
-    for (int i = 0; i < validCount; ++i) {
-        if (indexArray[i] == -1 || boxesScore[i] < conf_threshold || i >= 100) {
+    // 3. 限制输出数量，并把模型坐标缩放到原始图像。
+    const float scale_width  = static_cast<float>(outputs.source_width) / model_width_;
+    const float scale_height = static_cast<float>(outputs.source_height) / model_height_;
+    for (int index = 0; index < valid_count && index < 100; ++index) {
+        const int box_index = order[static_cast<std::size_t>(index)];
+        if (box_index == -1 || scores[static_cast<std::size_t>(index)] < confidence_threshold_) {
             continue;
         }
 
-        int n = indexArray[i];
+        const float x1     = boxes[static_cast<std::size_t>(box_index) * 4];
+        const float y1     = boxes[static_cast<std::size_t>(box_index) * 4 + 1];
+        const float x2     = x1 + boxes[static_cast<std::size_t>(box_index) * 4 + 2];
+        const float y2     = y1 + boxes[static_cast<std::size_t>(box_index) * 4 + 3];
+        const int class_id = class_ids[static_cast<std::size_t>(box_index)];
 
-        float x1 = filterBoxes[n * 4 + 0];
-        float y1 = filterBoxes[n * 4 + 1];
-        float x2 = x1 + filterBoxes[n * 4 + 2];
-        float y2 = y1 + filterBoxes[n * 4 + 3];
-        int id   = classId[n];
-
-        Det det;
-        det.x1       = (int)(clamp(x1, 0, model_in_w - 1) * scale_w);
-        det.y1       = (int)(clamp(y1, 0, model_in_h - 1) * scale_h);
-        det.x2       = (int)(clamp(x2, 0, model_in_w - 1) * scale_w);
-        det.y2       = (int)(clamp(y2, 0, model_in_h - 1) * scale_h);
-        det.conf     = boxesScore[n];
-        det.cls_name = label_names[id];
-        det.cls_id   = id;
-        det.obj_id   = 0;
-        dets.push_back(det);
+        Det detection;
+        detection.x1       = static_cast<unsigned short>(static_cast<int>(clamp(x1, 0, model_width_ - 1) * scale_width));
+        detection.y1       = static_cast<unsigned short>(static_cast<int>(clamp(y1, 0, model_height_ - 1) * scale_height));
+        detection.x2       = static_cast<unsigned short>(static_cast<int>(clamp(x2, 0, model_width_ - 1) * scale_width));
+        detection.y2       = static_cast<unsigned short>(static_cast<int>(clamp(y2, 0, model_height_ - 1) * scale_height));
+        detection.conf     = scores[static_cast<std::size_t>(index)];
+        detection.cls_name = labels_[static_cast<std::size_t>(class_id)];
+        detection.cls_id   = static_cast<unsigned short>(class_id);
+        detection.obj_id   = 0;
+        detections.push_back(std::move(detection));
     }
 
-    return 0;
+    return detections;
 }
+
+}  // namespace rknn_yolov6

@@ -73,6 +73,7 @@ public:
         try {
             load_labels(config.labels_path);
             initialize_rknn(config.model_path);
+            initialize_postprocessor();
         } catch (...) {
             destroy_context();
             throw;
@@ -138,26 +139,15 @@ public:
             throw std::runtime_error("RKNN backend received an incompatible frame result");
         }
 
+        // 1. 借用帧结果持有的三个浮点张量，后处理在本次调用内同步读取。
         auto &outputs = rknn_result->outputs();
-        std::vector<Det> detections;
-        std::vector<int> output_indices{0, 1, 2};
-        post_process(outputs[0].want_float,
-                     outputs[0].buf,
-                     outputs[1].buf,
-                     outputs[2].buf,
-                     model_height_,
-                     model_width_,
-                     confidence_threshold_,
-                     nms_threshold_,
-                     static_cast<float>(rknn_result->source_width()) / model_width_,
-                     static_cast<float>(rknn_result->source_height()) / model_height_,
-                     output_zero_points_,
-                     output_scales_,
-                     output_indices,
-                     labels_,
-                     static_cast<int>(labels_.size()),
-                     detections);
-        return detections;
+        const YoloV6FrameOutputs frame_outputs{
+            {static_cast<const float *>(outputs[0].buf), static_cast<const float *>(outputs[1].buf), static_cast<const float *>(outputs[2].buf)},
+            rknn_result->source_width(),
+            rknn_result->source_height()};
+
+        // 2. 将张量视图交给已配置的 YOLOv6 后处理模块。
+        return postprocessor_->process(frame_outputs);
     }
 
 private:
@@ -233,19 +223,17 @@ private:
         if (channels_ != 3 || model_width_ <= 0 || model_height_ <= 0) {
             throw std::runtime_error("RKNN model input must have three channels and positive dimensions");
         }
+    }
 
-        output_zero_points_.reserve(io_count_.n_output);
-        output_scales_.reserve(io_count_.n_output);
-        for (std::uint32_t index = 0; index < io_count_.n_output; ++index) {
-            rknn_tensor_attr output_attribute{};
-            output_attribute.index = index;
-            result                 = rknn_query(context_, RKNN_QUERY_OUTPUT_ATTR, &output_attribute, sizeof(output_attribute));
-            if (result < 0) {
-                throw std::runtime_error("cannot query RKNN output tensor");
-            }
-            output_zero_points_.push_back(output_attribute.zp);
-            output_scales_.push_back(output_attribute.scale);
-        }
+    // 在模型和标签载入后集中初始化只读的浮点后处理配置。
+    void initialize_postprocessor() {
+        YoloV6PostprocessorConfig postprocessor_config;
+        postprocessor_config.model_width          = model_width_;
+        postprocessor_config.model_height         = model_height_;
+        postprocessor_config.confidence_threshold = confidence_threshold_;
+        postprocessor_config.nms_threshold        = nms_threshold_;
+        postprocessor_config.labels               = std::move(labels_);
+        postprocessor_                            = std::make_unique<YoloV6Postprocessor>(std::move(postprocessor_config));
     }
 
     // 通过 RGA 将 RGB 图像缩放到模型输入尺寸。
@@ -288,9 +276,8 @@ private:
     rknn_context context_{0};
     rknn_input_output_num io_count_{};
     std::vector<std::uint8_t> model_data_;
-    std::vector<std::int32_t> output_zero_points_;
-    std::vector<float> output_scales_;
     std::vector<std::string> labels_;
+    std::unique_ptr<YoloV6Postprocessor> postprocessor_;
 };
 
 }  // namespace
