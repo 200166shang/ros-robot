@@ -10,9 +10,9 @@ Use the glossary's vocabulary in issues, specifications, code, and tests. If a p
 
 ## Layout
 
-This repository uses a single context even though ROS packages live under `ros2_ws/src/`.
+ROS packages live under `ros2_ws/src/`.
 
 - `GLOSSARY.md`: agreed domain terms.
 - `docs/adr/NNNN-short-title.md`: architectural decisions, including context, decision, and consequences.
 
-`CONTEXT.md` holds task checkpoints and pointers. Persistent domain definitions belong in the glossary; architectural decisions belong in ADRs; scope and acceptance criteria belong in GitHub Issues.
+Persistent domain definitions belong in the glossary; architectural decisions belong in ADRs; scope and acceptance criteria belong in GitHub Issues; detailed validation results belong in reports.

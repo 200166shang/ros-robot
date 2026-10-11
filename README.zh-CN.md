@@ -16,5 +16,19 @@
 ROS 软件包统一放在 `ros2_ws/src/`，每个目录对应一个软件包。构建产物放在
 `ros2_ws/` 内；仓库根目录用于项目源码、脚本和配置文件。
 
+## 构建与测试
+
+先加载 ROS 2 Foxy 环境，然后在仓库根目录运行工作区命令。包装脚本会切换到
+`ros2_ws/` 再调用 `colcon`，并原样传递参数：
+
+```bash
+source /opt/ros/foxy/setup.bash
+./scripts/colcon.sh build --symlink-install
+./scripts/colcon.sh test
+./scripts/colcon.sh test-result --verbose
+```
+
+各软件包特有的后端、SDK、资源和测试准备步骤见对应的软件包 README。
+
 演示程序依赖本机安装的 Rockchip SDK 头文件、模型权重和语音资源。这些设备
 相关文件不纳入 Git。人物跟踪默认使用 `dry_run: true`，不会驱动实体底盘。

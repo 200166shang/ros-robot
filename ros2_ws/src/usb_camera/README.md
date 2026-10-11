@@ -7,10 +7,10 @@
 在仓库根目录执行：
 
 ```bash
-cd ros2_ws
+cd ~/code/ros-robot
 source /opt/ros/foxy/setup.bash
-colcon build --packages-select usb_camera
-source install/setup.bash
+./scripts/colcon.sh build --packages-select usb_camera
+source ros2_ws/install/setup.bash
 ```
 
 如果当前终端使用 Zsh，把上面两处 `setup.bash` 换成 `setup.zsh`。构建后每个新终端都需要重新加载 ROS 和工作区环境。

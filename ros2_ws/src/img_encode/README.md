@@ -11,17 +11,18 @@ Defaults:
 
 ## Build
 
-The `IMG_ENCODE_BACKEND` CMake cache option selects `AUTO`, `OPENCV`, or `MPP`. `AUTO` selects MPP/RGA on AArch64 and OpenCV on other architectures.
+The `IMG_ENCODE_BACKEND` CMake cache option selects `AUTO`, `OPENCV`, or `MPP`.
+`AUTO` selects MPP/RGA on AArch64 and OpenCV on other architectures. Run the
+build and test commands below from the repository root.
 
 ```bash
-cd ros2_ws
-colcon build --packages-select img_encode
+./scripts/colcon.sh build --packages-select img_encode
 ```
 
 Choose the OpenCV backend explicitly with:
 
 ```bash
-colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=OPENCV
+./scripts/colcon.sh build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=OPENCV
 ```
 
 The MPP backend requires the Rockchip MPP headers/library and RGA headers/library. It uses RGA for RGB-to-YUV420P conversion and MPP's JPEG `q_factor` setting for quality; quality 100 maps to MPP's maximum `q_factor` of 99. Build it with `-DIMG_ENCODE_BACKEND=MPP`.
@@ -38,20 +39,21 @@ For OpenCV:
 
 ```bash
 source /opt/ros/foxy/setup.zsh
-cd ~/code/ros-robot/ros2_ws
-colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=OPENCV
-source install/setup.zsh
-colcon test --packages-select img_encode --event-handlers console_direct+
-colcon test-result --verbose
+cd ~/code/ros-robot
+./scripts/colcon.sh build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=OPENCV
+source ros2_ws/install/setup.zsh
+./scripts/colcon.sh test --packages-select img_encode --event-handlers console_direct+
+./scripts/colcon.sh test-result --verbose
 ```
 
 For MPP/RGA, the Rockchip SDK headers and libraries must be installed:
 
 ```bash
-colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=MPP
-source install/setup.zsh
-colcon test --packages-select img_encode --event-handlers console_direct+
-colcon test-result --verbose
+cd ~/code/ros-robot
+./scripts/colcon.sh build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=MPP
+source ros2_ws/install/setup.zsh
+./scripts/colcon.sh test --packages-select img_encode --event-handlers console_direct+
+./scripts/colcon.sh test-result --verbose
 ```
 
 The test sends a synthetic frame through the selected encoder, so the MPP/RGA run exercises the hardware encoding path without opening a camera or moving the robot. A passing run reports `test_img_encode` as 1/1 passed.

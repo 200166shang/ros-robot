@@ -34,8 +34,8 @@ USB 相机
 ```zsh
 source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
-colcon --log-base /tmp/ros-robot-rknn-log build \
-  --base-paths ros2_ws/src --packages-up-to rknn_yolov6 \
+./scripts/colcon.sh --log-base /tmp/ros-robot-rknn-log build \
+  --base-paths src --packages-up-to rknn_yolov6 \
   --build-base /tmp/ros-robot-rknn-build \
   --install-base /tmp/ros-robot-rknn-install \
   --cmake-args -DRKNN_YOLOV6_BACKEND=RKNN \
@@ -47,8 +47,8 @@ colcon --log-base /tmp/ros-robot-rknn-log build \
 ```zsh
 source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
-colcon --log-base /tmp/ros-robot-haar-log build \
-  --base-paths ros2_ws/src --packages-up-to rknn_yolov6 \
+./scripts/colcon.sh --log-base /tmp/ros-robot-haar-log build \
+  --base-paths src --packages-up-to rknn_yolov6 \
   --build-base /tmp/ros-robot-haar-build \
   --install-base /tmp/ros-robot-haar-install \
   --cmake-args -DRKNN_YOLOV6_BACKEND=HAAR
@@ -61,10 +61,10 @@ colcon --log-base /tmp/ros-robot-haar-log build \
 如果尚未构建相机和解码包，先构建一次。在仓库根目录执行：
 
 ```zsh
-cd ~/code/ros-robot/ros2_ws
+cd ~/code/ros-robot
 source /opt/ros/foxy/setup.zsh
-colcon build --packages-select usb_camera
-colcon build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
+./scripts/colcon.sh build --packages-select usb_camera
+./scripts/colcon.sh build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
 ```
 
 若系统没有 Rockchip MPP/RGA 开发库，将 `ROCKCHIP` 改为 `OPENCV`。每个新终端都要按顺序加载 ROS、相机工作区和检测器安装环境：

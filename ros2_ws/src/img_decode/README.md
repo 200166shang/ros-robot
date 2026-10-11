@@ -14,10 +14,9 @@
 
 ```zsh
 source /opt/ros/foxy/setup.zsh
-cd ros2_ws
-colcon build --packages-select usb_camera
-colcon build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=AUTO
-source install/setup.zsh
+./scripts/colcon.sh build --packages-select usb_camera
+./scripts/colcon.sh build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=AUTO
+source ros2_ws/install/setup.zsh
 ```
 
 这里分别构建相机发布器和解码器，因为 `camera_decode.launch.py` 会启动这两个包中的节点。在不需要相机 launch 的环境中，只构建 `img_decode` 即可。
@@ -33,8 +32,8 @@ source install/setup.zsh
 例如在 Orange Pi 上明确构建硬件后端：
 
 ```zsh
-colcon build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
-source install/setup.zsh
+./scripts/colcon.sh build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
+source ros2_ws/install/setup.zsh
 ```
 
 明确构建 OpenCV 软件后端时，将值改为 `OPENCV`。启动日志会打印实际选用的后端。更换后端后应重新构建并重新 source 工作区。
@@ -90,11 +89,10 @@ file /tmp/img_decode.png
 在 Orange Pi 上按需选择后端并重新构建 `img_decode`。`usb_camera` 也需要构建；运行编码器往返时还要构建 `img_encode`：
 
 ```zsh
-cd ros2_ws
-colcon build --packages-select usb_camera
-colcon build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
-colcon build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=MPP
-source install/setup.zsh
+./scripts/colcon.sh build --packages-select usb_camera
+./scripts/colcon.sh build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
+./scripts/colcon.sh build --packages-select img_encode --cmake-args -DIMG_ENCODE_BACKEND=MPP
+source ros2_ws/install/setup.zsh
 ```
 
 软件路径将两个后端值都改成 `OPENCV`。在一个终端启动物理相机和解码器：
