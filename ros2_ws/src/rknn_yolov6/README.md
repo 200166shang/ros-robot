@@ -1,22 +1,38 @@
-# rknn_yolov6
+# rknn_yolov6 使用说明
 
-`rknn_yolov6` subscribes to RGB images and publishes detections plus an annotated image. It keeps the current ROS 2 interface used by the tracking pipeline:
+`rknn_yolov6` 订阅 ROS 2 RGB 图像，运行目标检测，并发布检测消息和带框图像。ROS 话题与消息接口由节点统一管理，推理和后处理后端在构建时选择 RKNN/RGA 或 Haar。
 
-- Input: `/camera/image_raw` (`sensor_msgs/msg/Image`, `rgb8`)
-- Detections: `/ai_msg_det` (`robot_interfaces/msg/Dets`)
-- Annotated image: `/camera/image_det` (`sensor_msgs/msg/Image`, `rgb8`)
-- Enable control: `/enable_detector` (`std_msgs/msg/Bool`)
+## 数据流
 
-The detector retains separate inference and output stages with capacity-two drop-oldest queues. The ROS-facing module uses a build-selected adapter for backend-specific initialization, inference, result decoding, and resource ownership. The AArch64 RKNN adapter uses RGA for resize; the Haar adapter is a host-side fallback for interface checks and face detection. Both use the same ROS messages.
+```text
+USB 相机
+  └─ /image_raw/compressed (sensor_msgs/msg/CompressedImage, JPEG)
+       └─ img_decode
+            └─ /camera/image_raw (sensor_msgs/msg/Image, rgb8)
+                 └─ rknn_yolov6
+                      ├─ /ai_msg_det (robot_interfaces/msg/Dets)
+                      └─ /camera/image_det (sensor_msgs/msg/Image, rgb8)
+```
 
-## Build
+| 用途 | 话题 | 类型 | 说明 |
+|---|---|---|---|
+| 输入图像 | `/camera/image_raw` | `sensor_msgs/msg/Image` | 要求 `rgb8` 编码 |
+| 检测结果 | `/ai_msg_det` | `robot_interfaces/msg/Dets` | 包含图像尺寸、类别、置信度和框坐标 |
+| 标注图像 | `/camera/image_det` | `sensor_msgs/msg/Image` | RGB 原图上绘制检测框和类别置信度 |
+| 启停控制 | `/enable_detector` | `std_msgs/msg/Bool` | `false` 暂停接收检测帧，`true` 恢复 |
 
-`RKNN_YOLOV6_BACKEND` accepts `AUTO`, `RKNN`, or `HAAR`. `AUTO` selects RKNN on AArch64 and Haar on other architectures. The RKNN backend needs the installed RKNN runtime, RGA headers/library, and an official `rknn_api.h` header compatible with that runtime. The header is supplied from an external SDK include directory and is not stored in this repository. For the verified runtime 1.4.0, the official header is in [Rockchip's v1.4.0 runtime SDK](https://github.com/airockchip/rknpu2/blob/v1.4.0/runtime/RK356X/Linux/librknn_api/include/rknn_api.h).
+实时模式默认 `always_process=false`。当 `/ai_msg_det` 和 `/camera/image_det` 都没有订阅者时，节点会跳过输入图像；订阅任一输出即可触发检测。标注图像也只在有订阅者时发布。队列容量为 2，队列已满时丢弃最旧帧，以减少实时处理延迟。
 
-On AArch64, build against the SDK header installed outside the source tree:
+## 构建
 
-```bash
-source /opt/ros/foxy/setup.bash
+### RKNN/RGA 后端（Orange Pi / AArch64）
+
+设备需安装 ROS 2 Foxy、RKNN runtime、RGA 头文件与库，以及与 runtime 兼容的官方 `rknn_api.h`。SDK 头文件、模型权重和运行时库不放入仓库。已验证的 RKNN runtime 1.4.0 对应头文件可从 [Rockchip rknpu2 v1.4.0](https://github.com/airockchip/rknpu2/blob/v1.4.0/runtime/RK356X/Linux/librknn_api/include/rknn_api.h) 获取。
+
+以下命令从仓库根目录运行；构建和安装输出放在 `/tmp`：
+
+```zsh
+source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
 colcon --log-base /tmp/ros-robot-rknn-log build \
   --base-paths ros2_ws/src --packages-up-to rknn_yolov6 \
@@ -26,10 +42,10 @@ colcon --log-base /tmp/ros-robot-rknn-log build \
   -DRKNN_API_INCLUDE_DIR=/path/to/rknn/include
 ```
 
-For a host build or to select Haar explicitly:
+### Haar 后端（普通开发机或接口验证）
 
-```bash
-source /opt/ros/foxy/setup.bash
+```zsh
+source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
 colcon --log-base /tmp/ros-robot-haar-log build \
   --base-paths ros2_ws/src --packages-up-to rknn_yolov6 \
@@ -38,30 +54,147 @@ colcon --log-base /tmp/ros-robot-haar-log build \
   --cmake-args -DRKNN_YOLOV6_BACKEND=HAAR
 ```
 
-## Run
+`RKNN_YOLOV6_BACKEND=AUTO` 会在 AArch64 选择 RKNN，在其它架构选择 Haar。Haar 模式需要外部 Haar cascade 文件；它是备用检测后端，不等同于 YOLOv6 模型。
 
-The launch file keeps the existing topic and parameter names. Model weights and Haar cascade data are external files. Set `model_path` for RKNN, or `haar_cascade_path` for Haar:
+## 启动完整相机检测链路
 
-```bash
-source /opt/ros/foxy/setup.bash
-source /tmp/ros-robot-rknn-install/setup.bash
-ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
-  model_path:=/path/to/yolov6.rknn
+如果尚未构建相机和解码包，先构建一次。在仓库根目录执行：
+
+```zsh
+cd ~/code/ros-robot/ros2_ws
+source /opt/ros/foxy/setup.zsh
+colcon build --packages-select usb_camera
+colcon build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
 ```
 
-`labels_path` defaults to the package's `config/coco_labels.txt`. The runtime parameters are `input_topic`, `detections_topic`, `annotated_topic`, `confidence_threshold`, `nms_threshold`, `enabled`, `always_process`, `print_perf_detail`, and `use_multi_npu_core`. Confidence and NMS default to `0.30`; performance detail and multi-core use default to `false`.
+若系统没有 Rockchip MPP/RGA 开发库，将 `ROCKCHIP` 改为 `OPENCV`。每个新终端都要按顺序加载 ROS、相机工作区和检测器安装环境：
 
-To process files without a camera, enable `is_offline_image_mode`, set `offline_images_path` to an OpenCV glob pattern (for example `/data/images/*.jpg`), and set `offline_output_path` to an output directory. The node publishes the same detection and annotated-image messages and saves numbered `.jpg` files there. The output directory's parent must already exist.
+```zsh
+source /opt/ros/foxy/setup.zsh
+source ~/code/ros-robot/ros2_ws/install/setup.zsh
+source /tmp/ros-robot-rknn-install/setup.zsh
+```
 
-## Test
+**终端 1：启动 USB 相机和 JPEG 解码器**
 
-The topic test publishes a synthetic `rgb8` image and checks the detection and annotated-image topics, including header and dimensions. It uses an external RKNN model and labels on AArch64, or an external Haar cascade for the fallback. The offline test also checks that an annotated file is saved. Supply a sample image with `RKNN_YOLOV6_TEST_IMAGE` to run that case.
+```zsh
+ros2 launch img_decode camera_decode.launch.py
+```
 
-For the RKNN build, set the paths to local assets before running the package test:
+该 launch 从 `/dev/video0` 发布压缩 JPEG，再解码为 `/camera/image_raw` 的 `rgb8` 图像。
 
-```bash
-source /opt/ros/foxy/setup.bash
-source /tmp/ros-robot-rknn-install/setup.bash
+**终端 2：启动检测节点**
+
+```zsh
+ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
+  model_path:=/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn
+```
+
+RKNN 模型和 Haar cascade 是外部资源，需在设备上提供可读取的文件。Launch 默认标签文件为包内的 `config/coco_labels.txt`。
+
+**终端 3：订阅检测结果并触发实时推理**
+
+```zsh
+ros2 topic echo /ai_msg_det
+```
+
+查看检测消息的发布频率可用 `ros2 topic hz /ai_msg_det`；这类订阅也会触发默认的按需检测。查看标注图像可使用已安装的 `rqt_image_view` 并选择 `/camera/image_det`。
+
+也可以不依赖相机链路，单独发布符合要求的 `rgb8` 图像到 `input_topic`，再启动检测节点。
+
+## 参数
+
+Launch 参数可以通过 `name:=value` 覆盖：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `model_path` | `/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn` | RKNN 模型路径；RKNN 后端必填 |
+| `labels_path` | 包内 `config/coco_labels.txt` | 类别标签文件 |
+| `haar_cascade_path` | 空 | Haar 后端的 cascade 文件路径 |
+| `input_topic` | `/camera/image_raw` | RGB 输入图像话题 |
+| `detections_topic` | `/ai_msg_det` | 检测消息输出话题 |
+| `annotated_topic` | `/camera/image_det` | 标注图像输出话题 |
+| `confidence_threshold` | `0.30` | 候选检测置信度阈值 |
+| `nms_threshold` | `0.30` | 非极大值抑制阈值 |
+| `enabled` | `true` | 是否处理输入；可由 `/enable_detector` 动态切换 |
+| `always_process` | `false` | 为 `true` 时即使没有输出订阅者也处理实时图像 |
+| `print_perf_detail` | `false` | 为 `true` 时输出 RKNN runtime 的逐层性能详情 |
+| `use_multi_npu_core` | `false` | 是否请求多 NPU 核心；是否支持取决于设备/runtime |
+| `is_offline_image_mode` | `false` | 是否从图片目录离线处理 |
+| `offline_images_path` | 空 | OpenCV 图片 glob，例如 `/data/images/*.jpg` |
+| `offline_output_path` | 空 | 离线标注图像输出目录；其父目录需已存在 |
+
+控制节点启停示例：
+
+```zsh
+ros2 topic pub --once /enable_detector std_msgs/msg/Bool "{data: false}"
+ros2 topic pub --once /enable_detector std_msgs/msg/Bool "{data: true}"
+```
+
+## 离线图片检测
+
+离线模式会复用同一推理与后处理流程，将标注结果保存为按处理顺序编号的 JPG 文件（`0.jpg`、`1.jpg`……）。
+
+```zsh
+ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
+  model_path:=/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn \
+  is_offline_image_mode:=true \
+  'offline_images_path:=/data/images/*.jpg' \
+  offline_output_path:=/tmp/rknn-yolov6-results
+```
+
+离线模式不要求检测结果订阅者；检测消息和标注图像仍会发布。`offline_output_path` 不存在时节点会尝试创建该目录，但不会递归创建缺失的父目录。
+
+## 运行日志与数据记录
+
+### 理解节点日志
+
+- `RKNN runtime=... driver=...`：RKNN 初始化成功后打印的 runtime 和驱动版本。
+- `rknn_set_core_mask: No implementation found for current platform`：部分平台/runtime 会在核心选择时打印此信息。若之后继续打印 runtime 版本和 `inference` 日志，说明节点继续运行；若节点随后退出，应结合后续错误和退出码判断。
+- `inference X fps, detections=N`：每当处理线程完成一帧，且距离上次报告至少 5 秒时打印。`X` 是**节点启动以来已完成处理帧数除以节点启动以来经过的秒数**，包含没有输入帧或没有订阅者时的空闲时间；它不是最近 5 秒的帧率，也不是 RKNN 单次推理耗时。`N` 是本次报告对应的最近一帧检测框数量。
+- `print_perf_detail:=true`：请求 RKNN runtime 输出逐层性能详情。它会增加日志量；不开启时不会打印 `RKNN perf detail`。
+
+要观察实时话题频率，请在其它终端运行：
+
+```zsh
+ros2 topic hz /camera/image_raw
+ros2 topic hz /ai_msg_det
+```
+
+`/camera/image_raw` 的频率反映检测器输入端收到的图像，`/ai_msg_det` 的频率反映检测结果发布速率。`/ai_msg_det` 的订阅本身会唤醒默认按需检测。纯 RKNN 推理耗时需使用 runtime 性能详情或单独在 `backend_->infer()` 周围计时；`inference X fps` 不能替代该数据。
+
+### 保存控制台日志和 ROS 日志文件
+
+Launch 默认将节点日志输出到控制台，ROS 日志文件默认保存在 `~/.ros/log/`。如需为一轮运行单独保存日志：
+
+```zsh
+mkdir -p /tmp/rknn-yolov6-logs
+ROS_LOG_DIR=/tmp/rknn-yolov6-logs \
+  ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
+  model_path:=/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn \
+  2>&1 | tee /tmp/rknn-yolov6-logs/console.log
+```
+
+### 录制 ROS 话题数据
+
+需要复查输入和检测结果时，可使用 rosbag 录制相关话题：
+
+```zsh
+ros2 bag record -o /tmp/rknn-yolov6-run \
+  /camera/image_raw /ai_msg_det /camera/image_det
+```
+
+录制 `/camera/image_raw` 和 `/camera/image_det` 会占用较多磁盘空间；请按需要选择话题并确认可用空间。订阅 `/camera/image_det` 也会使节点发布标注图像。
+
+## 测试
+
+包内测试覆盖后处理和 ROS 话题接口。话题测试发布合成 `rgb8` 图像，并检查检测消息和标注图像；测试使用外部 RKNN 模型/标签或 Haar cascade。离线用例还会检查标注图片是否写入。`RKNN_YOLOV6_TEST_IMAGE` 可指定离线测试图像。
+
+RKNN 构建的示例：
+
+```zsh
+source /opt/ros/foxy/setup.zsh
+source /tmp/ros-robot-rknn-install/setup.zsh
 export RKNN_YOLOV6_TEST_MODEL=/path/to/yolov6.rknn
 export RKNN_YOLOV6_TEST_LABELS="$PWD/ros2_ws/src/rknn_yolov6/config/coco_labels.txt"
 export RKNN_YOLOV6_TEST_IMAGE=/path/to/test.jpg
@@ -69,4 +202,4 @@ cd /tmp/ros-robot-rknn-build/rknn_yolov6
 ctest --output-on-failure
 ```
 
-For Haar, set `RKNN_YOLOV6_TEST_CASCADE=/path/to/haarcascade_frontalface_default.xml` and run `ctest` from that backend's package build directory. The tests exercise the public ROS interface and do not enable tracking actuation.
+Haar 构建需设置 `RKNN_YOLOV6_TEST_CASCADE=/path/to/haarcascade_frontalface_default.xml`，并在对应 Haar 构建目录运行 `ctest --output-on-failure`。测试不启用跟踪控制或硬件动作。
