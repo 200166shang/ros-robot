@@ -117,16 +117,18 @@ int process_float(const float *input,
             }
 
             if (best_class_score >= threshold) {
-                // 最高类别分也要达到阈值；通道 0–3 是 left、top、right、bottom 距离。
-                // stride 将网格坐标换算成模型像素坐标。
+                // 最高类别分也要达到阈值；通道 0–3 是网格中心到 left、top、right、bottom 边界的距离。
+                // row 和 column 从网格左上角起按 0 计数，+0.5 表示移动到当前网格单元的中心。
                 const float x1 = column + 0.5 - cell[0 * grid_length];
                 const float y1 = row + 0.5 - cell[1 * grid_length];
                 const float x2 = column + 0.5 + cell[2 * grid_length];
                 const float y2 = row + 0.5 + cell[3 * grid_length];
 
+                // x1/y1 是框左上角，x2/y2 是右下角；当前坐标仍以网格为单位。
                 // 按 x、y、宽、高及其类别信息保存候选框，留给外层排序和 NMS。
                 scores.push_back(best_class_score);
                 class_ids.push_back(best_class_id);
+                // 乘 stride 将网格坐标换算成模型输入像素坐标。
                 boxes.push_back(x1 * stride);
                 boxes.push_back(y1 * stride);
                 boxes.push_back((x2 - x1) * stride);
