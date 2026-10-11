@@ -1,0 +1,3 @@
+# Preserve detector behavior behind the ROS 2 interface
+
+Keep the existing YOLOv6 detector's ARM64 RKNN/RGA path, two-stage worker flow, and non-ARM Haar fallback while preserving its ROS 2 topics, message types, parameters, and detection semantics. The ROS-facing node owns ROS wiring and shared frame flow; build-selected production adapters own backend-specific initialization, input preparation, inference result interpretation, and resources. This puts the real backend variation at a seam without changing queue behavior or external model assets, and avoids coupling `object_track` to the migration.
