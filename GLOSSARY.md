@@ -22,3 +22,21 @@ The difference between published and received message totals after the receiver 
 
 **Publish-to-receive latency**:
 Elapsed time from the image message timestamp set at publication to the benchmark receiver callback.
+
+## Camera calibration
+
+**Camera calibration**:
+Camera model parameters, such as focal lengths, principal point, and lens distortion, used to relate image pixels to camera rays. Calibration information is separate from depth measurements.
+_Avoid_: Depth data
+
+## Camera perception
+
+**Detection**:
+A result for one image that identifies an object with a class, bounding box, and confidence. A detection does not associate the object with a persistent target across frames.
+_Avoid_: Track, tracked object
+
+**Detection-annotated image**:
+A camera image with object-detection results, such as bounding boxes and labels, drawn on it.
+
+**Tracking-annotated image**:
+A camera image with the selected target and tracking status drawn on it. It is a visual output of tracking, distinct from the detector's results.
