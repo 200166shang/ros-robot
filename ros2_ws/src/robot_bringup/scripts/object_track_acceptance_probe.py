@@ -69,21 +69,20 @@ class ObjectTrackAcceptanceProbe(Node):
         image.data = bytes(image.step * image.height)
         self.image_publisher.publish(image)
 
-    def publish_detections(self, sec, nanosec):
+    def publish_detections(self, sec, nanosec, boxes=None):
         detections = Dets()
         detections.header.stamp.sec = sec
         detections.header.stamp.nanosec = nanosec
         detections.image_width = 1280
         detections.image_height = 720
-        # 此框在 640×360 逻辑坐标中的面积最大，中心应产生 +1.7 rad/s。
-        largest = Det()
-        largest.x1, largest.y1, largest.x2, largest.y2 = 100, 100, 500, 700
-        largest.class_name = "person"
-        detections.detections.append(largest)
-        smaller = Det()
-        smaller.x1, smaller.y1, smaller.x2, smaller.y2 = 880, 100, 1200, 700
-        smaller.class_name = "person"
-        detections.detections.append(smaller)
+        if boxes is None:
+            # 此框在 640×360 逻辑坐标中的面积最大，中心应产生 +1.7 rad/s。
+            boxes = [(100, 100, 500, 700), (880, 100, 1200, 700)]
+        for x1, y1, x2, y2 in boxes:
+            person = Det()
+            person.x1, person.y1, person.x2, person.y2 = x1, y1, x2, y2
+            person.class_name = "person"
+            detections.detections.append(person)
         self.detections_publisher.publish(detections)
 
 
@@ -144,25 +143,67 @@ def main():
         pixel = (100 * annotated.step) + (100 * 3)
         if tuple(annotated.data[pixel:pixel + 3]) != (255, 0, 0):
             raise AcceptanceFailure("selected person box was not drawn on the output image")
+        status_pixels = sum(
+            1
+            for y in range(40)
+            for x in range(500)
+            if tuple(annotated.data[y * annotated.step + x * 3:y * annotated.step + x * 3 + 3])
+            == (255, 0, 0)
+        )
+        if status_pixels == 0:
+            raise AcceptanceFailure("tracking status text was not drawn on the output image")
         if node.count_publishers("/tracking/cmd_vel_safe") != 0:
             raise AcceptanceFailure("dry-run unexpectedly created a Twist publisher")
 
-        # 等待同一日志调用点的节流窗口结束，再验证精确配对的目标丢失会预览零角速度。
+        # 验证靠近左边缘的目标会将角速度限制在 +3.0 rad/s。
+        preview_deadline = time.monotonic() + 1.1
+        while time.monotonic() < preview_deadline:
+            rclpy.spin_once(node, timeout_sec=0.05)
+        node.publish_detections(53, 20, [(0, 100, 40, 700)])
+        node.publish_image(53, 20)
+        node.spin_until(
+            lambda: any("angular.z=3.000" in preview for preview in node.previews),
+            10.0,
+            "bounded angular command preview",
+        )
+
+        # 等待日志节流窗口结束，再验证目标丢失会预览零角速度。
         preview_deadline = time.monotonic() + 1.1
         while time.monotonic() < preview_deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
         lost_detections = Dets()
-        lost_detections.header.stamp.sec = 53
+        lost_detections.header.stamp.sec = 54
         lost_detections.header.stamp.nanosec = 21
         lost_detections.image_width = 1280
         lost_detections.image_height = 720
         node.detections_publisher.publish(lost_detections)
-        node.publish_image(53, 21)
+        node.publish_image(54, 21)
         node.spin_until(
             lambda: any("target lost" in preview and "angular.z=0.000" in preview
                         for preview in node.previews),
             10.0,
             "zero command preview after target loss",
+        )
+
+        node.publish_detections(55, 20)
+        node.publish_image(55, 20)
+        node.spin_until(
+            lambda: sum("angular.z=1.700" in preview for preview in node.previews) >= 2,
+            10.0,
+            "tracking command after new target acquisition",
+        )
+
+        # 在已选择目标时禁用，必须立即预览零命令。
+        preview_deadline = time.monotonic() + 1.1
+        while time.monotonic() < preview_deadline:
+            rclpy.spin_once(node, timeout_sec=0.05)
+        enabled.data = False
+        node.enable_publisher.publish(enabled)
+        node.spin_until(
+            lambda: any("disabled" in preview and "angular.z=0.000" in preview
+                        for preview in node.previews),
+            10.0,
+            "zero command preview when disabling an active target",
         )
 
         summary = {
