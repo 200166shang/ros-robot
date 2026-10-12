@@ -60,10 +60,12 @@ public:
 
     // 仅在显式关闭 dry-run 后创建并发布安全 Twist 消息。
     void publish(const object_track::VelocityCommand& command, const std::string& reason) override {
+        // 1. publisher 按需创建，保持 dry-run 路径不会意外创建速度话题。
         if (!publisher_) {
             publisher_ = node_.create_publisher<geometry_msgs::msg::Twist>(output_topic_, 10);
         }
 
+        // 2. 只填写 tracker 当前控制的平移 x 和旋转 z 分量，再发布并记录节流日志。
         geometry_msgs::msg::Twist message;
         message.linear.x  = command.linear_x;
         message.angular.z = command.angular_z;
@@ -83,8 +85,9 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
 };
 
-// 按实际图像宽高将检测框转换到 ROS 1 tracker 的逻辑坐标系。
+// 按 x/y 方向分别缩放检测框，将实际图像坐标转换到 ROS 1 tracker 的 640×360 逻辑坐标系。
 cv::Rect logical_box(const robot_interfaces::msg::Det& detection, std::uint32_t image_width, std::uint32_t image_height) {
+    // x 方向比例为 640/图像宽度，y 方向比例为 360/图像高度。
     const double width_scale  = kLogicalWidth / static_cast<double>(image_width);
     const double height_scale = kLogicalHeight / static_cast<double>(image_height);
     const int x1              = static_cast<int>(detection.x1 * width_scale);
@@ -94,20 +97,25 @@ cv::Rect logical_box(const robot_interfaces::msg::Det& detection, std::uint32_t 
     return {x1, y1, x2 - x1, y2 - y1};
 }
 
-// 按 ROS 1 规则选出面积严格大于阈值的最大 person 检测。
+// 依次过滤类别与无效框，再选出逻辑坐标面积严格大于阈值的最大目标框。
 const robot_interfaces::msg::Det* select_target(
     const Detections& detections, std::uint32_t image_width, std::uint32_t image_height, const std::string& target_class, int minimum_area) {
+    // 无效图像尺寸无法换算检测面积，直接返回“未选到目标”。
     if (image_width == 0 || image_height == 0) return nullptr;
 
     const robot_interfaces::msg::Det* selected = nullptr;
     std::int64_t selected_area                 = minimum_area;
     for (const auto& detection : detections.detections) {
+        // 类别不匹配、宽或高不为正的检测框都不参与面积比较。
         if (detection.class_name != target_class || detection.x2 <= detection.x1 || detection.y2 <= detection.y1) {
             continue;
         }
 
+        // 把面积统一换算到 640×360 逻辑坐标，保持阈值与 ROS 1 tracker 一致。
         const cv::Rect box      = logical_box(detection, image_width, image_height);
         const std::int64_t area = static_cast<std::int64_t>(box.width) * box.height;
+
+        // 仅当 area > minimum_area（或当前最大面积）时替换所选目标，面积相同时保留先出现者。
         if (area > selected_area) {
             selected      = &detection;
             selected_area = area;
@@ -119,8 +127,9 @@ const robot_interfaces::msg::Det* select_target(
 // 接收图像与检测，按 header stamp 精确同步后生成跟踪输出。
 class ObjectTrackNode : public rclcpp::Node {
 public:
-    // 声明兼容源行为的控制参数并连接输入、输出话题。
+    // 初始化链路：读取参数 → start_lidar_transform_wait → 创建输出/同步器 → 接入两个控制订阅。
     ObjectTrackNode() : Node("object_track"), tf_buffer_(get_clock()), tf_listener_(tf_buffer_) {
+        // 1. 读取输入输出话题、目标筛选条件、角速度控制参数和 dry-run 开关。
         image_topic_                       = declare_parameter<std::string>("image_topic", "/camera/image_det");
         detections_topic_                  = declare_parameter<std::string>("input_topic", "/ai_msg_det");
         annotated_topic_                   = declare_parameter<std::string>("annotated_topic", "/camera/image_det_track");
@@ -144,8 +153,11 @@ public:
         camera_frame_                      = declare_parameter<std::string>("camera_frame", "camera");
         laser_frame_                       = declare_parameter<std::string>("laser_frame", "laser_link");
         const double transform_timeout_sec = declare_parameter<double>("transform_timeout_sec", 10.0);
+
+        // 2. 启动固定雷达到相机外参的等待；轮询使用 wall timer，不阻塞后续订阅创建。
         start_lidar_transform_wait(transform_timeout_sec);
 
+        // 3. 创建 RosVelocityOutputPort 和标注 publisher；image/detections subscriber 接入 ExactTime 同步器并绑定 sync_callback。
         output_                     = std::make_unique<RosVelocityOutputPort>(*this, output_topic_);
         const auto sensor_qos       = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
         const auto image_output_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
@@ -154,6 +166,8 @@ public:
         detections_subscription_.subscribe(this, detections_topic_, sensor_qos.get_rmw_qos_profile());
         synchronizer_ = std::make_unique<ImageDetectionSynchronizer>(ExactTimePolicy(kSynchronizationQueueSize), image_subscription_, detections_subscription_);
         synchronizer_->registerCallback(std::bind(&ObjectTrackNode::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
+
+        // 4. 两个 Bool 订阅分别调用 set_enabled、set_lidar_enabled；后者在 /enable_lidar=true 时才创建扫描订阅。
         enable_subscription_ =
             create_subscription<std_msgs::msg::Bool>("/enable_tracking", 10, [this](std_msgs::msg::Bool::SharedPtr message) { set_enabled(message->data); });
         lidar_enable_subscription_ =
@@ -170,24 +184,29 @@ public:
     }
 
 private:
-    // 等待固定 laser 到 camera optical frame 的 TF，并在截止时间内完成一次读取。
+    // 记录 TF 等待期限并每 100 ms 检查一次；等待期间节点的图像和控制订阅仍可正常工作。
     void start_lidar_transform_wait(double timeout_sec) {
+        // 负超时按 0 秒处理，第一次轮询未找到 TF 时就会结束等待。
         const auto timeout  = std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(std::max(0.0, timeout_sec)));
         transform_deadline_ = std::chrono::steady_clock::now() + timeout;
         transform_timer_    = create_wall_timer(std::chrono::milliseconds(100), std::bind(&ObjectTrackNode::poll_lidar_transform, this));
     }
 
-    // 在 TF 到达后读取固定 laser 到 camera optical frame 的变换。
+    // 把 TF 树中的 camera_frame <- laser_frame 变换读入投影参数。
     bool load_lidar_transform() {
+        // 1. 先确认两个 frame 都已注册，避免 TF 尚未到达时反复执行失败查询。
         const bool frames_ready = tf_buffer_._frameExists(camera_frame_) && tf_buffer_._frameExists(laser_frame_);
         if (!frames_ready) {
             return false;
         }
 
         try {
+            // 2. 查询目标 camera、源 laser 的变换，即把雷达点转换到相机投影坐标系。
             const auto transform    = tf_buffer_.lookupTransform(camera_frame_, laser_frame_, rclcpp::Time(0));
             const auto& translation = transform.transform.translation;
             const auto& rotation    = transform.transform.rotation;
+
+            // 3. TF 四元数转成投影函数使用的 RPY 欧拉角，并保留平移分量。
             const tf2::Quaternion quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
             tf2::Matrix3x3(quaternion).getRPY(lidar_transform_.roll, lidar_transform_.pitch, lidar_transform_.yaw);
             lidar_transform_.x     = translation.x;
@@ -202,7 +221,7 @@ private:
         }
     }
 
-    // 定期检查 TF 到达状态，并在超时后停止等待。
+    // 轮询加载 TF；加载成功或超过截止时间后都取消定时器，避免重复处理。
     void poll_lidar_transform() {
         if (load_lidar_transform()) {
             transform_timer_->cancel();
@@ -214,53 +233,69 @@ private:
         }
     }
 
-    // 接收 ExactTime 同步器提供的图像和检测，并生成跟踪输出。
+    // 处理链路：select_target → 保存目标横边界 → 计算线/角速度 → emit_command → publish_annotation。
     void sync_callback(const Image::ConstSharedPtr& image, const Detections::ConstSharedPtr& detections) {
+        // 1. select_target 选最大目标框；保存 x1/x2，供下一次 scan_callback 的水平距离筛选使用。
         const auto* selected = select_target(*detections, image->width, image->height, target_class_, minimum_area_);
         if (selected != nullptr) {
             target_left_  = selected->x1;
             target_right_ = selected->x2;
         }
+
+        // 2. 有目标时由 linear_command 使用最近扫描距离计算线速度；angular_command 使用逻辑坐标中心计算角速度。
         last_angular_command_ = 0.0;
         last_linear_command_  = selected == nullptr ? 0.0 : object_track::linear_command(target_range_, linear_control_);
         if (selected != nullptr) {
             const cv::Rect target = logical_box(*selected, image->width, image->height);
             const double center_x = target.x + target.width * 0.5;
+
+            // 角速度公式为 w=angular_gain*(320-center_x)：目标在图像左侧时 w 为正，函数内再做 ±max_angular 限幅。
             last_angular_command_ = object_track::angular_command(center_x, kLogicalWidth, gain_, maximum_);
         }
+
+        // 3. 使能时 emit_command → emit_velocity → preview/publish；dry_run=true 只预览，不发布 Twist。
         if (enabled_) {
             const std::string reason = selected == nullptr ? "no target found" : "target acquired/updated range=" + std::to_string(target_range_) + "m";
             emit_command({last_linear_command_, last_angular_command_}, reason.c_str());
         }
+
+        // 4. publish_annotation 在输入图像副本上画点、目标框和状态，控制关闭时也照常发布图像。
         publish_annotation(*image, selected);
     }
 
-    // 收到独立 LaserScan 后变换并投影点位，同时更新目标水平跨度内的最近距离。
+    // 扫描处理链路：校验 TF → project_laser_scan → nearest_range_in_horizontal_span → 保存点和距离。
     void scan_callback(LaserScan::ConstSharedPtr scan) {
+        // 1. TF 未就绪时不使用默认外参，避免产生看似有效但坐标错误的投影点。
         if (!lidar_transform_ready_) {
             return;
         }
 
+        // 2. 用当前 scan 元数据解释 ranges；图像大小按 2*cx × 2*cy 推得（默认 1280×720）。
         const object_track::LaserScanGeometry scan_geometry{scan->angle_min, scan->angle_increment, scan->range_min, scan->range_max};
         const object_track::ImageSize image_size{camera_model_.cx * 2.0, camera_model_.cy * 2.0};
+
+        // 3. project_laser_scan 返回图像内点；nearest_range_in_horizontal_span 只检查目标框横向开区间。
         projected_points_ = object_track::project_laser_scan(scan->ranges, scan_geometry, lidar_transform_, camera_model_, image_size);
         target_range_     = object_track::nearest_range_in_horizontal_span(projected_points_, target_left_, target_right_);
         if (!std::isfinite(target_range_)) {
+            // 没有扫描点落入目标横向范围时，保留源逻辑的 range_max 初值。
             target_range_ = scan->range_max;
         }
     }
 
-    // 按 /enable_lidar 延迟创建或销毁扫描订阅，并清理禁用后的传感器状态。
+    // 按 /enable_lidar 延迟创建/销毁扫描订阅；禁用时清理旧扫描产生的状态。
     void set_lidar_enabled(bool enabled) {
         if (enabled == lidar_enabled_) {
             return;
         }
         lidar_enabled_ = enabled;
         if (lidar_enabled_) {
+            // 启用时才订阅传感器话题，并使用与扫描发布端兼容的 best-effort QoS。
             const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
             scan_subscription_ =
                 create_subscription<LaserScan>(lidar_topic_, sensor_qos, std::bind(&ObjectTrackNode::scan_callback, this, std::placeholders::_1));
         } else {
+            // 先销毁订阅，再清空点位和距离，后续图像不再受已停用的扫描影响。
             scan_subscription_.reset();
             projected_points_.clear();
             target_range_        = 0.0;
@@ -269,8 +304,9 @@ private:
         RCLCPP_INFO(get_logger(), "lidar %s", lidar_enabled_ ? "enabled" : "disabled");
     }
 
-    // 在输入图像副本上绘制目标框和当前跟踪状态并保留原始 header。
+    // 校验图像布局后，在副本上画投影点、目标框和控制状态，最后保留原始 header 发布。
     void publish_annotation(const Image& image, const robot_interfaces::msg::Det* selected) {
+        // 1. 仅接受有效尺寸、步长和三通道 RGB/BGR 图像；布局异常时不发布损坏输出。
         if (image.width == 0 || image.height == 0 || image.step < image.width * 3U || image.data.size() < static_cast<std::size_t>(image.step) * image.height ||
             (image.encoding != "rgb8" && image.encoding != "bgr8")) {
             RCLCPP_WARN_THROTTLE(get_logger(),
@@ -287,10 +323,14 @@ private:
         Image annotated = image;
         cv::Mat frame(static_cast<int>(annotated.height), static_cast<int>(annotated.width), CV_8UC3, annotated.data.data(), annotated.step);
         const cv::Scalar highlight(0, 255, 0);
+
+        // 2. 点半径按相机深度反比缩放：r=2/|Z|，并限制在 1 到 10 像素之间。
         for (const auto& point : projected_points_) {
             const double radius = std::max(1.0, std::min(2.0 / std::abs(point.depth), 10.0));
             cv::circle(frame, cv::Point(static_cast<int>(point.x), static_cast<int>(point.y)), static_cast<int>(radius), highlight, cv::FILLED);
         }
+
+        // 3. 有目标时显示像素中心、距离和速度；没有目标时显示源节点的提示文字。
         if (selected != nullptr) {
             cv::rectangle(frame, cv::Point(selected->x1, selected->y1), cv::Point(selected->x2, selected->y2), highlight, 3);
             const int object_center_x = selected->x1 + (selected->x2 - selected->x1) / 2;
@@ -299,16 +339,21 @@ private:
         } else {
             cv::putText(frame, "[No target found]", cv::Point(20, 20), cv::FONT_HERSHEY_SIMPLEX, 0.8, highlight, 2);
         }
+
+        // 4. 从输入图像复制像素再绘制，因此 header、时间戳和 frame_id 都保持不变。
         annotated_publisher_->publish(std::move(annotated));
     }
 
-    // 应用 enable 状态切换，立即清零输出并重置扫描投影状态。
+    // 开关处理链路：更新状态 → 清除旧点/距离/命令 → emit_stop → emit_command → emit_velocity。
     void set_enabled(bool enabled) {
+        // 1. 更新状态并清理启停之间不可复用的距离、点位和上次控制量。
         enabled_ = enabled;
         projected_points_.clear();
         target_range_         = 0.0;
         last_linear_command_  = 0.0;
         last_angular_command_ = 0.0;
+
+        // 2. emit_stop 生成零命令并复用统一出口：dry-run 只预览，关闭 dry-run 才发布 Twist。
         emit_stop(enabled_ ? "enabled" : "disabled");
         RCLCPP_INFO(get_logger(), "tracking %s", enabled_ ? "enabled" : "disabled");
     }
@@ -353,10 +398,15 @@ private:
 
 }  // namespace
 
-// 初始化 ROS 2 并运行跟踪节点 executor。
+// 入口顺序：初始化 ROS 2 → 构造并 spin 跟踪节点 → executor 退出后关闭 ROS 2。
 int main(int argc, char** argv) {
+    // 1. 初始化客户端库，使节点、订阅和发布端口可以创建。
     rclcpp::init(argc, argv);
+
+    // 2. 节点构造时完成参数和接口接线；spin 持续处理图像、检测、扫描与开关回调。
     rclcpp::spin(std::make_shared<ObjectTrackNode>());
+
+    // 3. spin 返回表示收到退出请求，随后统一释放 ROS 2 资源。
     rclcpp::shutdown();
     return 0;
 }

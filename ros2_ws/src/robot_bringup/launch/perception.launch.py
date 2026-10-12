@@ -8,6 +8,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+# 组合感知链路，并让静态 TF publisher 与 tracker 共用同一组 camera/laser frame 参数。
 def generate_launch_description():
     bringup_share = get_package_share_directory('robot_bringup')
     detector_share = get_package_share_directory('rknn_yolov6')

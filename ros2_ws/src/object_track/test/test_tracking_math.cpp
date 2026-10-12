@@ -5,7 +5,7 @@
 
 #include "object_track/tracking_math.hpp"
 
-// 验证固定外参将中心 scan 点投影到相机图像中的预期像素。
+// 验证默认外参下 r=0.5 m 的中心光线变为相机点 (0.2,0,0.5)，并满足针孔投影公式。
 void test_scan_projection() {
     const object_track::CameraProjectionModel camera;
     const object_track::LidarToCameraTransform transform;
@@ -20,7 +20,7 @@ void test_scan_projection() {
     assert(std::abs(points.front().range - std::sqrt(0.29)) < 1e-6);
 }
 
-// 验证目标仅按水平框跨度选取最近有效三维距离。
+// 验证目标按开区间水平跨度选最近三维距离，边界像素不计入且不检查垂直坐标。
 void test_nearest_range_in_horizontal_span() {
     const std::vector<object_track::ProjectedScanPoint> points{
         {300.0, 360.0, 0.7}, {800.0, 360.0, 0.1}, {900.0, 120.0, 1.4}, {1000.0, 600.0, 0.5}, {1100.0, 360.0, 0.2}};
@@ -29,7 +29,7 @@ void test_nearest_range_in_horizontal_span() {
     assert(std::isinf(object_track::nearest_range_in_horizontal_span(points, 400.0, 700.0)));
 }
 
-// 验证 ROS 1 距离比例命令、速度限幅和禁用条件。
+// 验证 v=0.5*(range-0.3) 的距离控制公式、±0.15 m/s 限幅和禁用条件。
 void test_linear_command() {
     const object_track::LinearControl control;
     assert(std::abs(object_track::linear_command(std::sqrt(0.29), control) - 0.1192582403567252) < 1e-9);

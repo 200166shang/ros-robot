@@ -4,6 +4,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+# 独立启动跟踪器：先发布可配置的 camera <- laser 静态 TF，再启动读取该 TF 的节点。
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('camera_frame', default_value='camera'),
