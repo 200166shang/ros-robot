@@ -24,6 +24,11 @@ ament_target_dependencies(object_track_node rclcpp geometry_msgs message_filters
 target_link_libraries(object_track_node ${OpenCV_LIBRARIES})
 
 if(BUILD_TESTING)
+  add_executable(test_tracking_math test/test_tracking_math.cpp)
+  target_include_directories(test_tracking_math PRIVATE include)
+  target_compile_options(test_tracking_math PRIVATE -Wall -Wextra -Wpedantic)
+  add_test(NAME tracking_math COMMAND test_tracking_math)
+
   add_executable(test_tracking_output test/test_tracking_output.cpp)
   target_include_directories(test_tracking_output PRIVATE include)
   target_compile_options(test_tracking_output PRIVATE -Wall -Wextra -Wpedantic)

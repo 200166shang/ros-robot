@@ -9,7 +9,7 @@ from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from robot_interfaces.msg import Det, Dets
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, LaserScan
 from std_msgs.msg import Bool
 
 
@@ -23,6 +23,7 @@ class ObjectTrackAcceptanceProbe(Node):
         self.images = []
         self.previews = []
         self.status_logs = []
+        self.lidar_logs = []
         sensor_qos = QoSProfile(depth=10)
         sensor_qos.reliability = ReliabilityPolicy.BEST_EFFORT
         sensor_qos.durability = DurabilityPolicy.VOLATILE
@@ -41,12 +42,16 @@ class ObjectTrackAcceptanceProbe(Node):
         self.image_publisher = self.create_publisher(Image, "/camera/image_det", fixture_qos)
         self.detections_publisher = self.create_publisher(Dets, "/ai_msg_det", fixture_qos)
         self.enable_publisher = self.create_publisher(Bool, "/enable_tracking", 10)
+        self.lidar_enable_publisher = self.create_publisher(Bool, "/enable_lidar", 10)
+        self.scan_publisher = self.create_publisher(LaserScan, "/scan", sensor_qos)
 
     def _on_log(self, message):
         if message.name.endswith("object_track") and "dry-run preview" in message.msg:
             self.previews.append(message.msg)
         if message.name.endswith("object_track") and message.msg.startswith("tracking "):
             self.status_logs.append(message.msg)
+        if message.name.endswith("object_track") and message.msg.startswith("lidar "):
+            self.lidar_logs.append(message.msg)
 
     def spin_until(self, predicate, timeout, description):
         deadline = time.monotonic() + timeout
@@ -84,6 +89,16 @@ class ObjectTrackAcceptanceProbe(Node):
             person.class_name = "person"
             detections.detections.append(person)
         self.detections_publisher.publish(detections)
+
+    def publish_scan_fixture(self):
+        scan = LaserScan()
+        scan.header.frame_id = "laser"
+        scan.angle_min = 0.0
+        scan.angle_increment = 1.0
+        scan.range_min = 0.1
+        scan.range_max = 10.0
+        scan.ranges = [0.5]
+        self.scan_publisher.publish(scan)
 
     def publish_pair_until(self, sec, nanosec, boxes, predicate, description, timeout=10.0):
         deadline = time.monotonic() + timeout
@@ -168,6 +183,71 @@ def main():
         if node.count_publishers("/tracking/cmd_vel_safe") != 0:
             raise AcceptanceFailure("dry-run unexpectedly created a Twist publisher")
 
+        # 验证启用 LiDAR 后，扫描点会投影到图像并产生距离线速度预览。
+        lidar_enabled = Bool()
+        lidar_enabled.data = True
+        node.lidar_enable_publisher.publish(lidar_enabled)
+        node.spin_until(
+            lambda: any(log == "lidar enabled" for log in node.lidar_logs)
+            and node.count_subscribers("/scan") > 0,
+            3.0,
+            "LiDAR subscription enable",
+        )
+        projected_box = [(600, 100, 1270, 700)]
+        node.images.clear()
+        node.publish_scan_fixture()
+        node.publish_pair_until(
+            56,
+            20,
+            projected_box,
+            lambda: any("range=0.538516m" in preview and "linear.x=0.119" in preview
+                        for preview in node.previews)
+            and any((image.header.stamp.sec, image.header.stamp.nanosec) == (56, 20)
+                    for image in node.images),
+            "projected scan range and distance-follow preview",
+        )
+        projected = next(image for image in node.images
+                         if (image.header.stamp.sec, image.header.stamp.nanosec) == (56, 20))
+        projected_pixel = 360 * projected.step + 1204 * 3
+        if tuple(projected.data[projected_pixel:projected_pixel + 3]) != (0, 255, 0):
+            raise AcceptanceFailure("projected LiDAR point was not drawn on the tracking image")
+        range_status_pixels = sum(
+            1
+            for y in range(40)
+            for x in range(500, 1100)
+            if tuple(projected.data[y * projected.step + x * 3:y * projected.step + x * 3 + 3])
+            == (255, 0, 0)
+        )
+        if range_status_pixels == 0:
+            raise AcceptanceFailure("tracking image did not draw range and command status")
+
+        # 禁用 LiDAR 后应移除订阅、清空点位和距离，并将线速度归零。
+        lidar_enabled.data = False
+        node.lidar_enable_publisher.publish(lidar_enabled)
+        node.spin_until(
+            lambda: any(log == "lidar disabled" for log in node.lidar_logs)
+            and node.count_subscribers("/scan") == 0,
+            3.0,
+            "LiDAR subscription disable",
+        )
+        node.images.clear()
+        node.publish_scan_fixture()
+        node.publish_pair_until(
+            57,
+            20,
+            projected_box,
+            lambda: any("range=--" in preview and "linear.x=0.000" in preview
+                        for preview in node.previews)
+            and any((image.header.stamp.sec, image.header.stamp.nanosec) == (57, 20)
+                    for image in node.images),
+            "zero linear preview with LiDAR disabled",
+        )
+        cleared = next(image for image in node.images
+                       if (image.header.stamp.sec, image.header.stamp.nanosec) == (57, 20))
+        cleared_pixel = 360 * cleared.step + 1204 * 3
+        if tuple(cleared.data[cleared_pixel:cleared_pixel + 3]) != (0, 0, 0):
+            raise AcceptanceFailure("disabling LiDAR did not clear projected points")
+
         # 验证靠近左边缘的目标会将角速度限制在 +3.0 rad/s。
         preview_deadline = time.monotonic() + 1.1
         while time.monotonic() < preview_deadline:
@@ -216,7 +296,7 @@ def main():
 
         summary = {
             "annotated_stamp": [annotated.header.stamp.sec, annotated.header.stamp.nanosec],
-            "preview": next(preview for preview in node.previews if "angular.z=1.700" in preview),
+            "preview": next(preview for preview in node.previews if "range=0.538516m" in preview),
             "selected_box_outline_rgb": list(annotated.data[pixel:pixel + 3]),
             "acceptance": "PASS",
         }
