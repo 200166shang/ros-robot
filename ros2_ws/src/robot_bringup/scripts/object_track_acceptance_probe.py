@@ -5,14 +5,13 @@ import json
 import time
 
 import rclpy
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from robot_interfaces.msg import Det, Dets
 from sensor_msgs.msg import Image, LaserScan
 from std_msgs.msg import Bool
-from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 
 class AcceptanceFailure(RuntimeError):
@@ -22,21 +21,11 @@ class AcceptanceFailure(RuntimeError):
 class ObjectTrackAcceptanceProbe(Node):
     def __init__(self):
         super().__init__("object_track_acceptance_probe")
-        self.transform_broadcaster = StaticTransformBroadcaster(self)
-        transform = TransformStamped()
-        transform.header.stamp = self.get_clock().now().to_msg()
-        transform.header.frame_id = "camera"
-        transform.child_frame_id = "laser_link"
-        transform.transform.translation.x = 0.20
-        transform.transform.rotation.x = 0.5
-        transform.transform.rotation.y = -0.5
-        transform.transform.rotation.z = 0.5
-        transform.transform.rotation.w = 0.5
-        self.transform_broadcaster.sendTransform(transform)
         self.images = []
         self.previews = []
         self.status_logs = []
         self.lidar_logs = []
+        self.command_messages = []
         sensor_qos = QoSProfile(depth=10)
         sensor_qos.reliability = ReliabilityPolicy.BEST_EFFORT
         sensor_qos.durability = DurabilityPolicy.VOLATILE
@@ -48,6 +37,7 @@ class ObjectTrackAcceptanceProbe(Node):
         log_qos.durability = DurabilityPolicy.VOLATILE
 
         self.create_subscription(Image, "/camera/image_det_track", self.images.append, output_qos)
+        self.create_subscription(Twist, "/tracking/cmd_vel_safe", self.command_messages.append, 10)
         self.create_subscription(Log, "/rosout", self._on_log, log_qos)
         fixture_qos = QoSProfile(depth=10)
         fixture_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -309,6 +299,15 @@ def main():
             10.0,
             "zero command preview when disabling an active target",
         )
+
+        command_observation_deadline = time.monotonic() + 0.5
+        while time.monotonic() < command_observation_deadline:
+            rclpy.spin_once(node, timeout_sec=0.05)
+
+        if node.command_messages:
+            raise AcceptanceFailure(
+                "dry-run published Twist messages on /tracking/cmd_vel_safe"
+            )
 
         summary = {
             "annotated_stamp": [annotated.header.stamp.sec, annotated.header.stamp.nanosec],
