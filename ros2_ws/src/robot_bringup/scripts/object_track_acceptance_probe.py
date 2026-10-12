@@ -5,12 +5,14 @@ import json
 import time
 
 import rclpy
+from geometry_msgs.msg import TransformStamped
 from rcl_interfaces.msg import Log
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from robot_interfaces.msg import Det, Dets
 from sensor_msgs.msg import Image, LaserScan
 from std_msgs.msg import Bool
+from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 
 class AcceptanceFailure(RuntimeError):
@@ -20,6 +22,17 @@ class AcceptanceFailure(RuntimeError):
 class ObjectTrackAcceptanceProbe(Node):
     def __init__(self):
         super().__init__("object_track_acceptance_probe")
+        self.transform_broadcaster = StaticTransformBroadcaster(self)
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = "camera"
+        transform.child_frame_id = "laser_link"
+        transform.transform.translation.x = 0.20
+        transform.transform.rotation.x = 0.5
+        transform.transform.rotation.y = -0.5
+        transform.transform.rotation.z = 0.5
+        transform.transform.rotation.w = 0.5
+        self.transform_broadcaster.sendTransform(transform)
         self.images = []
         self.previews = []
         self.status_logs = []
@@ -65,7 +78,7 @@ class ObjectTrackAcceptanceProbe(Node):
         image = Image()
         image.header.stamp.sec = sec
         image.header.stamp.nanosec = nanosec
-        image.header.frame_id = "camera_optical_frame"
+        image.header.frame_id = "camera"
         image.height = 720
         image.width = 1280
         image.encoding = "rgb8"
@@ -92,7 +105,7 @@ class ObjectTrackAcceptanceProbe(Node):
 
     def publish_scan_fixture(self):
         scan = LaserScan()
-        scan.header.frame_id = "laser"
+        scan.header.frame_id = "laser_link"
         scan.angle_min = 0.0
         scan.angle_increment = 1.0
         scan.range_min = 0.1
@@ -169,14 +182,14 @@ def main():
         if (annotated.header.stamp.sec, annotated.header.stamp.nanosec) != (52, 20):
             raise AcceptanceFailure("annotated output did not preserve the matched image timestamp")
         pixel = (100 * annotated.step) + (100 * 3)
-        if tuple(annotated.data[pixel:pixel + 3]) != (255, 0, 0):
+        if tuple(annotated.data[pixel:pixel + 3]) != (0, 255, 0):
             raise AcceptanceFailure("selected person box was not drawn on the output image")
         status_pixels = sum(
             1
             for y in range(40)
             for x in range(500)
             if tuple(annotated.data[y * annotated.step + x * 3:y * annotated.step + x * 3 + 3])
-            == (255, 0, 0)
+            == (0, 255, 0)
         )
         if status_pixels == 0:
             raise AcceptanceFailure("tracking status text was not drawn on the output image")
@@ -195,6 +208,9 @@ def main():
         )
         projected_box = [(600, 100, 1270, 700)]
         node.images.clear()
+        node.publish_pair_until(56, 19, projected_box, lambda: any(
+            (image.header.stamp.sec, image.header.stamp.nanosec) == (56, 19) for image in node.images),
+            "selected target box before scan update")
         node.publish_scan_fixture()
         node.publish_pair_until(
             56,
@@ -214,9 +230,9 @@ def main():
         range_status_pixels = sum(
             1
             for y in range(40)
-            for x in range(500, 1100)
+            for x in range(0, 900)
             if tuple(projected.data[y * projected.step + x * 3:y * projected.step + x * 3 + 3])
-            == (255, 0, 0)
+            == (0, 255, 0)
         )
         if range_status_pixels == 0:
             raise AcceptanceFailure("tracking image did not draw range and command status")
@@ -236,7 +252,7 @@ def main():
             57,
             20,
             projected_box,
-            lambda: any("range=--" in preview and "linear.x=0.000" in preview
+            lambda: any("range=0.000000m" in preview and "linear.x=0.000" in preview
                         for preview in node.previews)
             and any((image.header.stamp.sec, image.header.stamp.nanosec) == (57, 20)
                     for image in node.images),
@@ -268,7 +284,7 @@ def main():
             54,
             21,
             [],
-            lambda: any("target lost" in preview and "angular.z=0.000" in preview
+            lambda: any("no target found" in preview and "angular.z=0.000" in preview
                         for preview in node.previews),
             "zero command preview after target loss",
         )

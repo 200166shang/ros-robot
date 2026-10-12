@@ -11,7 +11,7 @@ void test_scan_projection() {
     const object_track::LidarToCameraTransform transform;
     const object_track::LaserScanGeometry scan{0.0, 0.0, 0.1, 10.0};
     const object_track::ImageSize image{1280.0, 720.0};
-    const std::vector<float> ranges{0.5F, std::numeric_limits<float>::infinity(), 0.05F};
+    const std::vector<float> ranges{0.5F, std::numeric_limits<float>::infinity(), 0.05F, 10.0F};
     const auto points = object_track::project_laser_scan(ranges, scan, transform, camera, image);
 
     assert(points.size() == 1U);
@@ -22,7 +22,8 @@ void test_scan_projection() {
 
 // 验证目标仅按水平框跨度选取最近有效三维距离。
 void test_nearest_range_in_horizontal_span() {
-    const std::vector<object_track::ProjectedScanPoint> points{{300.0, 360.0, 0.7}, {900.0, 120.0, 1.4}, {1000.0, 600.0, 0.5}};
+    const std::vector<object_track::ProjectedScanPoint> points{
+        {300.0, 360.0, 0.7}, {800.0, 360.0, 0.1}, {900.0, 120.0, 1.4}, {1000.0, 600.0, 0.5}, {1100.0, 360.0, 0.2}};
 
     assert(std::abs(object_track::nearest_range_in_horizontal_span(points, 800.0, 1100.0) - 0.5) < 1e-9);
     assert(std::isinf(object_track::nearest_range_in_horizontal_span(points, 400.0, 700.0)));

@@ -28,6 +28,7 @@ struct ProjectedScanPoint {
     double x{0.0};
     double y{0.0};
     double range{0.0};
+    double depth{0.0};
 };
 
 struct LaserScanGeometry {
@@ -80,7 +81,7 @@ inline std::vector<ProjectedScanPoint> project_laser_scan(const std::vector<floa
 
     for (std::size_t index = 0; index < ranges.size(); ++index) {
         const double range = ranges[index];
-        if (!std::isfinite(range) || range < scan.range_min || range > scan.range_max) {
+        if (!std::isfinite(range) || range <= scan.range_min || range >= scan.range_max) {
             continue;
         }
 
@@ -108,7 +109,7 @@ inline std::vector<ProjectedScanPoint> project_laser_scan(const std::vector<floa
             continue;
         }
 
-        projected.push_back({pixel_x, pixel_y, std::sqrt(camera_x * camera_x + camera_y * camera_y + camera_z * camera_z)});
+        projected.push_back({pixel_x, pixel_y, std::sqrt(camera_x * camera_x + camera_y * camera_y + camera_z * camera_z), camera_z});
     }
     return projected;
 }
@@ -117,7 +118,8 @@ inline std::vector<ProjectedScanPoint> project_laser_scan(const std::vector<floa
 inline double nearest_range_in_horizontal_span(const std::vector<ProjectedScanPoint>& points, double left, double right) {
     double nearest = std::numeric_limits<double>::infinity();
     for (const auto& point : points) {
-        if (point.x >= left && point.x <= right && point.range < nearest) {
+        const int pixel_x = static_cast<int>(point.x);
+        if (pixel_x > left && pixel_x < right && point.range < nearest) {
             nearest = point.range;
         }
     }

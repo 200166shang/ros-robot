@@ -18,6 +18,10 @@ def generate_launch_description():
         'model_path': LaunchConfiguration('model_path'),
         'labels_path': os.path.join(detector_share, 'config', 'coco_labels.txt'),
     }
+    tracker_parameters = {
+        'camera_frame': LaunchConfiguration('camera_frame'),
+        'laser_frame': LaunchConfiguration('laser_frame'),
+    }
     return LaunchDescription([
         DeclareLaunchArgument(
             'model_path',
@@ -27,6 +31,14 @@ def generate_launch_description():
         DeclareLaunchArgument('with_detector', default_value='true'),
         DeclareLaunchArgument('with_agent', default_value='true'),
         DeclareLaunchArgument('with_web', default_value='true'),
+        DeclareLaunchArgument('camera_frame', default_value='camera'),
+        DeclareLaunchArgument('laser_frame', default_value='laser_link'),
+        DeclareLaunchArgument('lidar_camera_x', default_value='0.20'),
+        DeclareLaunchArgument('lidar_camera_y', default_value='0.0'),
+        DeclareLaunchArgument('lidar_camera_z', default_value='0.0'),
+        DeclareLaunchArgument('lidar_camera_yaw', default_value='0.0'),
+        DeclareLaunchArgument('lidar_camera_pitch', default_value='-1.5707963267948966'),
+        DeclareLaunchArgument('lidar_camera_roll', default_value='1.5707963267948966'),
         Node(package='usb_camera', executable='usb_camera_node', name='usb_camera',
              output='screen', parameters=[config]),
         Node(package='img_decode', executable='img_decode_node', name='img_decode',
@@ -35,8 +47,14 @@ def generate_launch_description():
         Node(package='rknn_yolov6', executable='rknn_yolov6_node', name='rknn_yolov6',
              output='screen', parameters=[config, detector_parameters],
              condition=IfCondition(LaunchConfiguration('with_detector'))),
+        Node(package='tf2_ros', executable='static_transform_publisher', name='lidar_camera_static_transform',
+             arguments=[LaunchConfiguration('lidar_camera_x'), LaunchConfiguration('lidar_camera_y'),
+                        LaunchConfiguration('lidar_camera_z'), LaunchConfiguration('lidar_camera_yaw'),
+                        LaunchConfiguration('lidar_camera_pitch'), LaunchConfiguration('lidar_camera_roll'),
+                        LaunchConfiguration('camera_frame'), LaunchConfiguration('laser_frame')],
+             output='screen'),
         Node(package='object_track', executable='object_track_node', name='object_track',
-             output='screen', parameters=[config, safety_config],
+             output='screen', parameters=[config, safety_config, tracker_parameters],
              condition=IfCondition(LaunchConfiguration('with_detector'))),
         Node(package='robot_agent', executable='command_agent', name='command_agent',
              output='screen', condition=IfCondition(LaunchConfiguration('with_agent'))),

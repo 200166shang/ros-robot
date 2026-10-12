@@ -46,13 +46,9 @@ object_track:
     camera_fy: 1410.6
     camera_cx: 640.0
     camera_cy: 360.0
-    # Temporary LaserScan-to-camera optical-frame transform; replace after rigid mounting.
-    lidar_to_camera_x: 0.20
-    lidar_to_camera_y: 0.0
-    lidar_to_camera_z: 0.0
-    lidar_to_camera_roll: 1.5707963267948966
-    lidar_to_camera_pitch: -1.5707963267948966
-    lidar_to_camera_yaw: 0.0
+    camera_frame: camera
+    laser_frame: laser_link
+    transform_timeout_sec: 10.0
 
 web_video_server:
   ros__parameters:
