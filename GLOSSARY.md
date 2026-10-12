@@ -40,3 +40,11 @@ A camera image with object-detection results, such as bounding boxes and labels,
 
 **Tracking-annotated image**:
 A camera image with the selected target and tracking status drawn on it. It is a visual output of tracking, distinct from the detector's results.
+
+**Tracking target**:
+A person detection currently selected as the subject of following. It is distinct from the full set of detections and does not imply a persistent identity across frames.
+_Avoid_: Detection, tracked identity
+
+**Target range estimate**:
+An estimated distance associated with the current tracking target and used by the follow behavior.
+_Avoid_: Ground-truth range

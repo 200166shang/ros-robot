@@ -1,0 +1,3 @@
+# Preserve object_track behavior in the ROS 2 migration
+
+The ROS 1 `object_track` module synchronizes image and detection messages, projects LiDAR scans into the image, publishes a tracking-annotated image, and computes follow commands; the existing ROS 2 package is a reduced implementation. Port the ROS 1 runtime behavior while adapting messages and preserving the current 1280×720 ROS 2 camera pipeline through internal coordinate scaling. Keep command routing on `/tracking/cmd_vel_safe` with dry-run enabled by default. Use replaceable Logitech C270 field-of-view estimates and a configurable approximate camera-to-LiDAR transform for the first demo; accurate range validation requires measured camera calibration and a fixed sensor transform.
