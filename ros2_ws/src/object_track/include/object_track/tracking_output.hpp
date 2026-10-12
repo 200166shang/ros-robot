@@ -9,7 +9,7 @@ struct VelocityCommand {
   double angular_z{0.0};
 };
 
-// Side-effect boundary: preview is observational; publish may reach consumers.
+// 速度输出的副作用边界：preview 仅展示命令，publish 可能将命令发送给下游。
 class VelocityOutputPort {
  public:
   virtual ~VelocityOutputPort() = default;

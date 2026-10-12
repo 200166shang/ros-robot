@@ -25,14 +25,15 @@ rknn_yolov6:
 
 object_track:
   ros__parameters:
+    image_topic: /camera/image_det
     input_topic: /ai_msg_det
+    annotated_topic: /camera/image_det_track
     output_topic: /tracking/cmd_vel_safe
     target_class: person
     dry_run: true
-    angular_gain: 0.003
-    max_angular: 1.0
-    minimum_area: 400
-    target_timeout_ms: 500
+    angular_gain: 0.01
+    max_angular: 3.0
+    minimum_area: 20
 
 web_video_server:
   ros__parameters:
