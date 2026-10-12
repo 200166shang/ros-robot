@@ -282,6 +282,7 @@ class YdLidarEnvironmentTests(unittest.TestCase):
             library_file.parent.mkdir(parents=True, exist_ok=True)
             library_source = root / "ydlidar_sdk_stub.cpp"
             library_source.write_text(
+                "// 用于验证自定义前缀下共享库的链接入口。\n"
                 'extern "C" int ydlidar_sdk_probe() { return 0; }\n',
                 encoding="utf-8",
             )
@@ -318,6 +319,7 @@ class YdLidarEnvironmentTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (project / "main.cpp").write_text(
+                "// 调用 SDK 探针以验证链接后的可执行文件。\n"
                 'extern "C" int ydlidar_sdk_probe();\n'
                 "int main() { return ydlidar_sdk_probe(); }\n",
                 encoding="utf-8",
