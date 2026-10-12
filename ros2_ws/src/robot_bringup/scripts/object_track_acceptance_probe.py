@@ -85,6 +85,18 @@ class ObjectTrackAcceptanceProbe(Node):
             detections.detections.append(person)
         self.detections_publisher.publish(detections)
 
+    def publish_pair_until(self, sec, nanosec, boxes, predicate, description, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.publish_detections(sec, nanosec, boxes)
+            self.publish_image(sec, nanosec)
+            retry_deadline = min(deadline, time.monotonic() + 0.5)
+            while time.monotonic() < retry_deadline:
+                rclpy.spin_once(self, timeout_sec=0.05)
+                if predicate():
+                    return
+        raise AcceptanceFailure("timed out waiting for " + description)
+
 
 def main():
     rclpy.init()
@@ -128,13 +140,14 @@ def main():
         if node.images:
             raise AcceptanceFailure("unmatched image and detections produced output")
 
-        node.publish_detections(52, 20)
-        node.publish_image(52, 20)
-        node.spin_until(lambda: node.images, 10.0, "exact-time annotated image")
-        node.spin_until(
-            lambda: any("angular.z=1.700" in preview for preview in node.previews),
-            10.0,
-            "largest-person angular preview",
+        node.publish_pair_until(
+            52,
+            20,
+            None,
+            lambda: any((image.header.stamp.sec, image.header.stamp.nanosec) == (52, 20)
+                        for image in node.images)
+            and any("angular.z=1.700" in preview for preview in node.previews),
+            "exact-time annotated image and largest-person command",
         )
 
         annotated = node.images[-1]
@@ -159,11 +172,11 @@ def main():
         preview_deadline = time.monotonic() + 1.1
         while time.monotonic() < preview_deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
-        node.publish_detections(53, 20, [(0, 100, 40, 700)])
-        node.publish_image(53, 20)
-        node.spin_until(
+        node.publish_pair_until(
+            53,
+            20,
+            [(0, 100, 40, 700)],
             lambda: any("angular.z=3.000" in preview for preview in node.previews),
-            10.0,
             "bounded angular command preview",
         )
 
@@ -171,25 +184,20 @@ def main():
         preview_deadline = time.monotonic() + 1.1
         while time.monotonic() < preview_deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
-        lost_detections = Dets()
-        lost_detections.header.stamp.sec = 54
-        lost_detections.header.stamp.nanosec = 21
-        lost_detections.image_width = 1280
-        lost_detections.image_height = 720
-        node.detections_publisher.publish(lost_detections)
-        node.publish_image(54, 21)
-        node.spin_until(
+        node.publish_pair_until(
+            54,
+            21,
+            [],
             lambda: any("target lost" in preview and "angular.z=0.000" in preview
                         for preview in node.previews),
-            10.0,
             "zero command preview after target loss",
         )
 
-        node.publish_detections(55, 20)
-        node.publish_image(55, 20)
-        node.spin_until(
+        node.publish_pair_until(
+            55,
+            20,
+            None,
             lambda: sum("angular.z=1.700" in preview for preview in node.previews) >= 2,
-            10.0,
             "tracking command after new target acquisition",
         )
 

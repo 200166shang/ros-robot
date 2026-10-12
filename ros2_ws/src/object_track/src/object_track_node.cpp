@@ -1,8 +1,11 @@
+#include <message_filters/subscriber.h>
+#include <message_filters/sync_policies/exact_time.h>
+#include <message_filters/synchronizer.h>
+
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <geometry_msgs/msg/twist.hpp>
-#include <map>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -18,13 +21,14 @@
 
 namespace {
 
-using Image      = sensor_msgs::msg::Image;
-using Detections = robot_interfaces::msg::Dets;
-using Stamp      = std::pair<std::int32_t, std::uint32_t>;
+using Image                      = sensor_msgs::msg::Image;
+using Detections                 = robot_interfaces::msg::Dets;
+using ExactTimePolicy            = message_filters::sync_policies::ExactTime<Image, Detections>;
+using ImageDetectionSynchronizer = message_filters::Synchronizer<ExactTimePolicy>;
 
-constexpr std::size_t kMaximumPendingFrames = 10;
-constexpr double kLogicalWidth              = 640.0;
-constexpr double kLogicalHeight             = 360.0;
+constexpr std::uint32_t kSynchronizationQueueSize = 10;
+constexpr double kLogicalWidth                    = 640.0;
+constexpr double kLogicalHeight                   = 360.0;
 
 // 提供可观察的 dry-run 预览和按需创建的 ROS 速度输出端口。
 class RosVelocityOutputPort final : public object_track::VelocityOutputPort {
@@ -67,9 +71,6 @@ private:
     std::string output_topic_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
 };
-
-// 基于 ROS header 时间戳建立图像与检测的精确配对键。
-Stamp stamp_of(const std_msgs::msg::Header& header) { return {header.stamp.sec, header.stamp.nanosec}; }
 
 // 按实际图像宽高将检测框转换到 ROS 1 tracker 的逻辑坐标系。
 cv::Rect logical_box(const robot_interfaces::msg::Det& detection, std::uint32_t image_width, std::uint32_t image_height) {
@@ -123,10 +124,10 @@ public:
         const auto sensor_qos       = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
         const auto image_output_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
         annotated_publisher_        = create_publisher<Image>(annotated_topic_, image_output_qos);
-        image_subscription_ =
-            create_subscription<Image>(image_topic_, sensor_qos, [this](Image::ConstSharedPtr message) { receive_image(std::move(message)); });
-        detections_subscription_ = create_subscription<Detections>(
-            detections_topic_, sensor_qos, [this](Detections::ConstSharedPtr message) { receive_detections(std::move(message)); });
+        image_subscription_.subscribe(this, image_topic_, sensor_qos.get_rmw_qos_profile());
+        detections_subscription_.subscribe(this, detections_topic_, sensor_qos.get_rmw_qos_profile());
+        synchronizer_ = std::make_unique<ImageDetectionSynchronizer>(ExactTimePolicy(kSynchronizationQueueSize), image_subscription_, detections_subscription_);
+        synchronizer_->registerCallback(std::bind(&ObjectTrackNode::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
         enable_subscription_ =
             create_subscription<std_msgs::msg::Bool>("/enable_tracking", 10, [this](std_msgs::msg::Bool::SharedPtr message) { set_enabled(message->data); });
 
@@ -140,45 +141,8 @@ public:
     }
 
 private:
-    // 缓存图像，遇到时间戳完全相同的检测时处理该帧。
-    void receive_image(Image::ConstSharedPtr image) {
-        const Stamp stamp      = stamp_of(image->header);
-        pending_images_[stamp] = std::move(image);
-        const auto detections  = pending_detections_.find(stamp);
-        if (detections != pending_detections_.end()) {
-            auto matched_image      = pending_images_.at(stamp);
-            auto matched_detections = detections->second;
-            pending_images_.erase(stamp);
-            pending_detections_.erase(detections);
-            process_pair(matched_image, matched_detections);
-        }
-        trim_pending(pending_images_);
-    }
-
-    // 缓存检测，遇到时间戳完全相同的图像时处理该帧。
-    void receive_detections(Detections::ConstSharedPtr detections) {
-        const Stamp stamp          = stamp_of(detections->header);
-        pending_detections_[stamp] = std::move(detections);
-        const auto image           = pending_images_.find(stamp);
-        if (image != pending_images_.end()) {
-            auto matched_image      = image->second;
-            auto matched_detections = pending_detections_.at(stamp);
-            pending_images_.erase(image);
-            pending_detections_.erase(stamp);
-            process_pair(matched_image, matched_detections);
-        }
-        trim_pending(pending_detections_);
-    }
-
-    // 限制未配对缓存，避免不同步输入使节点持续占用内存。
-    template <typename Message>
-    void trim_pending(std::map<Stamp, std::shared_ptr<const Message>>& pending) {
-        while (pending.size() > kMaximumPendingFrames)
-            pending.erase(pending.begin());
-    }
-
-    // 为同步帧选择目标、更新命令状态并发布跟踪标注图像。
-    void process_pair(const Image::ConstSharedPtr& image, const Detections::ConstSharedPtr& detections) {
+    // 接收 ExactTime 同步器提供的图像和检测，并生成跟踪输出。
+    void sync_callback(const Image::ConstSharedPtr& image, const Detections::ConstSharedPtr& detections) {
         const auto* selected = select_target(*detections, image->width, image->height, target_class_, minimum_area_);
         if (enabled_ && selected != nullptr) {
             const cv::Rect target = logical_box(*selected, image->width, image->height);
@@ -243,12 +207,11 @@ private:
     bool dry_run_{true};
     bool enabled_{false};
     bool has_target_{false};
-    std::map<Stamp, Image::ConstSharedPtr> pending_images_;
-    std::map<Stamp, Detections::ConstSharedPtr> pending_detections_;
     std::unique_ptr<object_track::VelocityOutputPort> output_;
     rclcpp::Publisher<Image>::SharedPtr annotated_publisher_;
-    rclcpp::Subscription<Image>::SharedPtr image_subscription_;
-    rclcpp::Subscription<Detections>::SharedPtr detections_subscription_;
+    message_filters::Subscriber<Image> image_subscription_;
+    message_filters::Subscriber<Detections> detections_subscription_;
+    std::unique_ptr<ImageDetectionSynchronizer> synchronizer_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr enable_subscription_;
 };
 
