@@ -62,7 +62,7 @@ source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
 ./scripts/colcon.sh build --packages-select ydlidar
 ```
 
-SDK 环境脚本设置 CMake 包搜索路径和动态库搜索路径。首次构建后，按下一节加载工作区并独立启动驱动。
+SDK 环境脚本设置 CMake 包搜索路径、链接器路径和运行时动态库搜索路径。首次构建后，按下一节加载工作区并独立启动驱动。
 
 ### 在 Orange Pi 上使用 RViz2
 
@@ -253,9 +253,9 @@ source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
 ./scripts/colcon.sh build --packages-select ydlidar
 ```
 
-The environment script sets CMake package and runtime shared-library search
-paths. After the first build, follow the next section to load the workspace and
-start the standalone driver.
+The environment script sets CMake package, linker, and runtime shared-library
+search paths. After the first build, follow the next section to load the
+workspace and start the standalone driver.
 
 ### RViz2 on the Orange Pi
 

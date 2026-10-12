@@ -6,7 +6,7 @@ Date: 2026-10-13 (Asia/Shanghai)
 
 - `python3 tests/test_install_ydlidar_sdk.py`: 6 tests passed. This includes
   mocked install/reuse/failure cases, Zsh environment exports, and a CMake
-  `find_package(ydlidar_sdk 1.2.7)` probe.
+  configure/link probe for `ydlidar_sdk 1.2.7`.
 - `bash -n scripts/install-ydlidar-sdk.sh`, `zsh -n
   scripts/ydlidar-sdk-env.zsh`, `bash -n scripts/ydlidar-sdk-env.zsh`, and
   `git diff --check`: passed.

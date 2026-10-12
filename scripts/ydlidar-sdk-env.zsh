@@ -23,6 +23,7 @@ fi
 export YDLIDAR_SDK_PREFIX
 export ydlidar_sdk_DIR="$ydlidar_sdk_config_dir"
 export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
 export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 unset ydlidar_sdk_config_dir ydlidar_sdk_config_file ydlidar_sdk_library_file

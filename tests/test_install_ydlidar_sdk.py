@@ -217,6 +217,7 @@ class YdLidarEnvironmentTests(unittest.TestCase):
                 {
                     "YDLIDAR_SDK_PREFIX": str(prefix),
                     "CMAKE_PREFIX_PATH": "/opt/ros/foxy",
+                    "LIBRARY_PATH": "/usr/local/lib",
                     "LD_LIBRARY_PATH": "/usr/lib",
                 }
             )
@@ -228,6 +229,7 @@ class YdLidarEnvironmentTests(unittest.TestCase):
                     'source "$1"; print -r -- "$YDLIDAR_SDK_PREFIX"; '
                     'print -r -- "$ydlidar_sdk_DIR"; '
                     'print -r -- "$CMAKE_PREFIX_PATH"; '
+                    'print -r -- "$LIBRARY_PATH"; '
                     'print -r -- "$LD_LIBRARY_PATH"',
                     "zsh",
                     str(ENVIRONMENT_LOADER),
@@ -246,6 +248,7 @@ class YdLidarEnvironmentTests(unittest.TestCase):
                 str(prefix),
                 str(config_dir),
                 str(prefix) + ":/opt/ros/foxy",
+                str(prefix / "lib") + ":/usr/local/lib",
                 str(prefix / "lib") + ":/usr/lib",
             ],
         )
@@ -253,8 +256,9 @@ class YdLidarEnvironmentTests(unittest.TestCase):
     def test_cmake_finds_sdk_package_after_loading_environment(self):
         zsh = shutil.which("zsh")
         cmake = shutil.which("cmake")
-        if zsh is None or cmake is None:
-            self.skipTest("zsh and cmake are required for this integration check")
+        compiler = shutil.which("c++")
+        if zsh is None or cmake is None or compiler is None:
+            self.skipTest("zsh, cmake, and a C++ compiler are required")
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -262,7 +266,10 @@ class YdLidarEnvironmentTests(unittest.TestCase):
             config_dir = prefix / "lib/cmake/ydlidar_sdk"
             config_dir.mkdir(parents=True)
             (config_dir / "ydlidar_sdkConfig.cmake").write_text(
-                "set(ydlidar_sdk_FOUND TRUE)\n", encoding="utf-8"
+                "set(ydlidar_sdk_FOUND TRUE)\n"
+                "set(YDLIDAR_SDK_LIBRARIES ydlidar_sdk)\n"
+                "set(YDLIDAR_SDK_LIBRARY_DIRS \"\")\n",
+                encoding="utf-8",
             )
             (config_dir / "ydlidar_sdkConfigVersion.cmake").write_text(
                 "set(PACKAGE_VERSION \"1.2.7\")\n"
@@ -273,13 +280,46 @@ class YdLidarEnvironmentTests(unittest.TestCase):
             )
             library_file = prefix / "lib/libydlidar_sdk.so"
             library_file.parent.mkdir(parents=True, exist_ok=True)
-            library_file.touch()
+            library_source = root / "ydlidar_sdk_stub.cpp"
+            library_source.write_text(
+                'extern "C" int ydlidar_sdk_probe() { return 0; }\n',
+                encoding="utf-8",
+            )
+            compile_library = subprocess.run(
+                [
+                    compiler,
+                    "-shared",
+                    "-fPIC",
+                    str(library_source),
+                    "-o",
+                    str(library_file),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                compile_library.returncode,
+                0,
+                compile_library.stdout + compile_library.stderr,
+            )
             project = root / "cmake-probe"
             project.mkdir()
             (project / "CMakeLists.txt").write_text(
                 "cmake_minimum_required(VERSION 3.5)\n"
-                "project(ydlidar_sdk_environment_probe NONE)\n"
-                "find_package(ydlidar_sdk 1.2.7 REQUIRED)\n",
+                "project(ydlidar_sdk_environment_probe CXX)\n"
+                "find_package(ydlidar_sdk 1.2.7 REQUIRED)\n"
+                "add_executable(sdk_link_probe main.cpp)\n"
+                "target_link_directories(sdk_link_probe PRIVATE "
+                "${YDLIDAR_SDK_LIBRARY_DIRS})\n"
+                "target_link_libraries(sdk_link_probe "
+                "${YDLIDAR_SDK_LIBRARIES})\n",
+                encoding="utf-8",
+            )
+            (project / "main.cpp").write_text(
+                'extern "C" int ydlidar_sdk_probe();\n'
+                "int main() { return ydlidar_sdk_probe(); }\n",
                 encoding="utf-8",
             )
 
@@ -290,7 +330,8 @@ class YdLidarEnvironmentTests(unittest.TestCase):
                     zsh,
                     "-f",
                     "-c",
-                    'source "$1" && "$2" -S "$3" -B "$4"',
+                    'source "$1" && "$2" -S "$3" -B "$4" && '
+                    '"$2" --build "$4"',
                     "zsh",
                     str(ENVIRONMENT_LOADER),
                     cmake,
