@@ -6,6 +6,7 @@ install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(PROGRAMS
   scripts/acceptance_probe.py
   scripts/voice_tracking_acceptance_probe.py
+  scripts/object_track_acceptance_probe.py
   DESTINATION lib/${PROJECT_NAME}
 )
 ament_package()
