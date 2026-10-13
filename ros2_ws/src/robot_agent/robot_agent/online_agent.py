@@ -1,21 +1,22 @@
 """Online Agent interaction Interface, independent of ROS and provider SDKs."""
 
+from __future__ import annotations
+
 import ast
 import csv
 import io
+import json
 import math
 import re
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional
-
-import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 class SimulatedDevices:
     """Explicit simulation Adapter; unsupported actions fail closed."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._volume = 50.0
         self._muted = False
@@ -23,7 +24,8 @@ class SimulatedDevices:
         self._expression = "正常"
         self._head = "center"
 
-    def execute(self, name, args):
+    def execute(self, name: str, args: List[Union[str, int, float]]) -> Dict[str, Any]:
+        """执行模拟动作，返回确认结果；无效参数抛出 ValueError。"""
         result: Dict[str, Any]
         with self._lock:
             if name in {"volume_set", "volume_up", "volume_down"}:
@@ -32,18 +34,12 @@ class SimulatedDevices:
                 value = float(args[0]) if args else (50 if name == "volume_set" else 5)
                 if not math.isfinite(value):
                     raise ValueError("invalid volume")
-                self._volume = max(
-                    0,
-                    min(
-                        100,
-                        (
-                            value
-                            if name == "volume_set"
-                            else self._volume
-                            + value * (1 if name == "volume_up" else -1)
-                        ),
-                    ),
-                )
+                if name == "volume_set":
+                    target_volume = value
+                else:
+                    direction = 1 if name == "volume_up" else -1
+                    target_volume = self._volume + value * direction
+                self._volume = max(0, min(100, target_volume))
                 result = {"volume": self._volume}
             elif name in {"volume_mute", "volume_unmute", "volume_status"}:
                 if args:
@@ -52,11 +48,7 @@ class SimulatedDevices:
                     self._muted = name == "volume_mute"
                 result = {"volume": self._volume, "muted": self._muted}
             elif name in {"play_music", "play_song"}:
-                if (
-                    len(args) != 1
-                    or not isinstance(args[0], str)
-                    or not args[0].strip()
-                ):
+                if len(args) != 1 or not isinstance(args[0], str) or not args[0].strip():
                     raise ValueError("song required")
                 self._song = args[0]
                 result = {"song": self._song}
@@ -110,7 +102,7 @@ class SimulatedDevices:
             return {"success": True, "simulated": True, "result": result}
 
 
-def _parse_call(call):
+def _parse_call(call: str) -> Tuple[str, List[Union[str, int, float]]]:
     match = re.fullmatch(r"([A-Za-z_][A-Za-z_0-9]*)(?:\((.*)\))?", call.strip())
     if not match:
         raise ValueError("invalid call")
@@ -123,9 +115,7 @@ def _parse_call(call):
         args = ast.literal_eval("[" + arguments + "]")
     except (ValueError, SyntaxError):
         args = next(csv.reader(io.StringIO(arguments), skipinitialspace=True))
-    if any(
-        not isinstance(arg, (str, int, float)) or isinstance(arg, bool) for arg in args
-    ):
+    if any(not isinstance(arg, (str, int, float)) or isinstance(arg, bool) for arg in args):
         raise ValueError("invalid argument")
     return name, args
 
@@ -133,12 +123,14 @@ def _parse_call(call):
 class OnlineAgent:
     """Submit text and observe a reply plus confirmed action results."""
 
-    def __init__(self, provider, devices):
+    def __init__(self, provider: Any, devices: Any) -> None:
+        """注入提供 complete(text) 和 execute(name, args) 的可替换 Adapters。"""
         self._provider = provider
         self._devices = devices
         self._turn_lock = threading.Lock()
 
-    def submit(self, text):
+    def submit(self, text: str) -> Dict[str, Any]:
+        """提交一轮文本，返回回复和动作结果；失败通过 error 或 success 表达。"""
         with self._turn_lock:
             if not isinstance(text, str) or not text.strip():
                 return {
@@ -182,31 +174,19 @@ class OnlineAgent:
             with ThreadPoolExecutor(max_workers=8) as pool:
                 actions = list(pool.map(self._execute, calls))
             success = all(action["success"] for action in actions)
-            response = (
-                payload["response"]
-                if success
-                else "请求中的动作未全部完成，请查看动作结果。"
-            )
+            response = payload["response"] if success else "请求中的动作未全部完成，请查看动作结果。"
             if actions:
                 # A model's claim is not confirmation; append actual device outcomes.
                 response += "\n" + "\n".join(
-                    (
-                        "模拟动作已完成："
-                        if action["success"] and action.get("simulated", False)
-                        else "动作失败："
-                    )
-                    + action["call"]
-                    for action in actions
+                    ("模拟动作已完成：" if action["success"] and action.get("simulated", False) else "动作失败：") + action["call"] for action in actions
                 )
             return {"success": success, "response": response, "actions": actions}
 
-    def _execute(self, call):
+    def _execute(self, call: str) -> Dict[str, Any]:
         try:
             name, args = _parse_call(call)
             result = self._devices.execute(name, args)
-            if not isinstance(result, dict) or not isinstance(
-                result.get("success"), bool
-            ):
+            if not isinstance(result, dict) or not isinstance(result.get("success"), bool):
                 raise ValueError("invalid device result")
             return dict(result, call=call)
         except Exception:
@@ -218,7 +198,7 @@ class OnlineAgent:
             }
 
 
-def _unique_object(pairs):
+def _unique_object(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
     result = {}
     for key, value in pairs:
         if key in result:

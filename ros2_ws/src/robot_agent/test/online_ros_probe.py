@@ -1,5 +1,7 @@
 """Exercise ROS input/reply/action topics with deterministic or real provider."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import time
@@ -15,7 +17,10 @@ from robot_agent.online_ros_node import OnlineRosNode
 
 
 class FixedProvider:
-    def complete(self, text):
+    """为 ROS 收发探针提供确定的协议响应。"""
+
+    def complete(self, text: str) -> str:
+        """根据输入返回聊天或模拟音量动作响应。"""
         return json.dumps(
             {
                 "function": ["volume_set(30)"] if "音量" in text else [],
@@ -24,17 +29,12 @@ class FixedProvider:
         )
 
 
-def main():
+def main() -> None:
+    """通过 ROS 主题验证普通聊天和模拟动作的输入到回复链路。"""
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config", help="external configuration; omit for fixed responses"
-    )
+    parser.add_argument("--config", help="external configuration; omit for fixed responses")
     options = parser.parse_args()
-    provider = (
-        OnlineProvider(load_config(options.config))
-        if options.config
-        else FixedProvider()
-    )
+    provider = OnlineProvider(load_config(options.config)) if options.config else FixedProvider()
     rclpy.init()
     agent_node = OnlineRosNode(OnlineAgent(provider, SimulatedDevices()))
     observer = Node("online_agent_probe")
@@ -45,9 +45,7 @@ def main():
         lambda msg: results.append(json.loads(msg.data)),
         10,
     )
-    observer.create_subscription(
-        String, "/online_agent/response", lambda msg: replies.append(msg.data), 10
-    )
+    observer.create_subscription(String, "/online_agent/response", lambda msg: replies.append(msg.data), 10)
     observer.create_subscription(
         String,
         "/online_agent/action_events",
@@ -77,13 +75,9 @@ def main():
         deadline = time.monotonic() + 5
         while (len(replies) < 2 or not events) and time.monotonic() < deadline:
             executor.spin_once(timeout_sec=0.1)
-        assert len(results) == 2 and all(
-            result["success"] for result in results
-        ), results
+        assert len(results) == 2 and all(result["success"] for result in results), results
         assert not results[0]["actions"] and results[0]["response"]
-        assert results[1]["actions"] and all(
-            action["simulated"] for action in results[1]["actions"]
-        )
+        assert results[1]["actions"] and all(action["simulated"] for action in results[1]["actions"])
         assert events and len(replies) == 2
         print(
             json.dumps(

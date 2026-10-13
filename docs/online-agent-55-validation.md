@@ -37,3 +37,14 @@ call=volume_set(30)，result.volume=30。探针确认了真实 ROS 主题传输�
 没有物理硬件动作。真实对话原文未提交。
 
 #55 的真实在线文本验收已补齐；语音与其他完整迁移内容仍属于 #54 后续工作。
+
+## Python 规范调整后的验证
+
+当前 PR 改动的7个 Python 文件按最新 pyproject.toml 应用 Ruff 格式与导入排序；
+新增函数补齐参数和返回值注解，公共接口补充简洁 Docstring。
+使用延迟注解兼容 Python 3.8 和系统 pytest，运行行为及异常、安全约束保持一致。
+
+- 当前 PR Python 文件的 Ruff check 与 format --check 全部通过。
+- mypy 检查6个新增运行/测试模块通过。
+- 全套 Python 回归：46 passed；固定 provider ROS 收发探针通过；robot_agent 构建通过。
+- 全仓 Ruff 尚有11处存量导入排序问题及34个待格式化文件，均不在当前 PR 改动范围内。
