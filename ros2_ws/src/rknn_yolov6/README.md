@@ -29,17 +29,18 @@ package launch 默认 `always_process=true`，即使观察端没有订阅者也�
 
 设备需安装 ROS 2 Foxy、RKNN runtime、RGA 头文件与库，以及与 runtime 兼容的官方 `rknn_api.h`。SDK 头文件、模型权重和运行时库不放入仓库。已验证的 RKNN runtime 1.4.0 对应头文件可从 [Rockchip rknpu2 v1.4.0](https://github.com/airockchip/rknpu2/blob/v1.4.0/runtime/RK356X/Linux/librknn_api/include/rknn_api.h) 获取。
 
-以下命令从仓库根目录运行；构建和安装输出放在 `/tmp`：
+RGA 在当前 RK3566 板端只能访问 4 GiB 以下的物理内存。RKNN adapter 使用 `/dev/dma_heap/system-uncached-dma32` 分配并复用缩放源、目标缓冲区，通过 DMA-BUF fd 导入 RGA；运行用户需要该设备的读写权限（当前设备属于 `video` 组）。该 heap 不存在、分配失败或 RGA 缩放失败会明确报错，不会切换到 CPU 缩放。缩放目标取自 RKNN 模型输入张量：当前模型为 640×352；检测消息和标注图像仍使用原始相机的 1280×720 坐标。
+
+以下命令从仓库根目录运行，输出保存在被 Git 忽略的 `ros2_ws/build`、`ros2_ws/install` 和 `ros2_ws/log`：
 
 ```zsh
 source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
-./scripts/colcon.sh --log-base /tmp/ros-robot-rknn-log build \
-  --base-paths src --packages-up-to rknn_yolov6 \
-  --build-base /tmp/ros-robot-rknn-build \
-  --install-base /tmp/ros-robot-rknn-install \
+MAKEFLAGS=-j1 ./scripts/colcon.sh build \
+  --packages-up-to rknn_yolov6 --parallel-workers 1 \
   --cmake-args -DRKNN_YOLOV6_BACKEND=RKNN \
   -DRKNN_API_INCLUDE_DIR=/path/to/rknn/include
+source ros2_ws/install/setup.zsh
 ```
 
 ### Haar 后端（普通开发机或接口验证）
@@ -47,11 +48,10 @@ cd ~/code/ros-robot
 ```zsh
 source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
-./scripts/colcon.sh --log-base /tmp/ros-robot-haar-log build \
-  --base-paths src --packages-up-to rknn_yolov6 \
-  --build-base /tmp/ros-robot-haar-build \
-  --install-base /tmp/ros-robot-haar-install \
+MAKEFLAGS=-j1 ./scripts/colcon.sh build \
+  --packages-up-to rknn_yolov6 --parallel-workers 1 \
   --cmake-args -DRKNN_YOLOV6_BACKEND=HAAR
+source ros2_ws/install/setup.zsh
 ```
 
 `RKNN_YOLOV6_BACKEND=AUTO` 会在 AArch64 选择 RKNN，在其它架构选择 Haar。Haar 模式需要外部 Haar cascade 文件；它是备用检测后端，不等同于 YOLOv6 模型。
@@ -67,12 +67,11 @@ source /opt/ros/foxy/setup.zsh
 ./scripts/colcon.sh build --packages-select img_decode --cmake-args -DIMG_DECODE_BACKEND=ROCKCHIP
 ```
 
-若系统没有 Rockchip MPP/RGA 开发库，将 `ROCKCHIP` 改为 `OPENCV`。每个新终端都要按顺序加载 ROS、相机工作区和检测器安装环境：
+若系统没有 Rockchip MPP/RGA 开发库，将 `ROCKCHIP` 改为 `OPENCV`。每个新终端都要按顺序加载 ROS 和工作区环境：
 
 ```zsh
 source /opt/ros/foxy/setup.zsh
 source ~/code/ros-robot/ros2_ws/install/setup.zsh
-source /tmp/ros-robot-rknn-install/setup.zsh
 ```
 
 **终端 1：启动 USB 相机**
@@ -191,17 +190,17 @@ ros2 bag record -o /tmp/rknn-yolov6-run \
 
 ## 测试
 
-包内测试覆盖后处理和 ROS 话题接口。话题测试发布合成 `rgb8` 图像，并检查检测消息和标注图像；测试使用外部 RKNN 模型/标签或 Haar cascade。离线用例还会检查标注图片是否写入。`RKNN_YOLOV6_TEST_IMAGE` 可指定离线测试图像。
+包内测试覆盖后处理和 ROS 话题接口。话题测试发布 1280×720 的合成 `rgb8` 图像，并检查检测消息和标注图像；测试使用外部 RKNN 模型/标签或 Haar cascade。离线用例还会检查标注图片是否写入。`RKNN_YOLOV6_TEST_IMAGE` 可指定离线测试图像。
 
 RKNN 构建的示例：
 
 ```zsh
 source /opt/ros/foxy/setup.zsh
-source /tmp/ros-robot-rknn-install/setup.zsh
+source ros2_ws/install/setup.zsh
 export RKNN_YOLOV6_TEST_MODEL=/path/to/yolov6.rknn
 export RKNN_YOLOV6_TEST_LABELS="$PWD/ros2_ws/src/rknn_yolov6/config/coco_labels.txt"
 export RKNN_YOLOV6_TEST_IMAGE=/path/to/test.jpg
-cd /tmp/ros-robot-rknn-build/rknn_yolov6
+cd ros2_ws/build/rknn_yolov6
 ctest --output-on-failure
 ```
 
