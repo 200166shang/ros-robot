@@ -48,3 +48,18 @@ call=volume_set(30)，result.volume=30。探针确认了真实 ROS 主题传输�
 - mypy 检查6个新增运行/测试模块通过。
 - 全套 Python 回归：46 passed；固定 provider ROS 收发探针通过；robot_agent 构建通过。
 - 全仓 Ruff 尚有11处存量导入排序问题及34个待格式化文件，均不在当前 PR 改动范围内。
+
+## 工程化局部重构与复审
+
+- 主调用链：ROS 输入 → OnlineAgent.submit → provider.complete → 协议校验 →
+  同轮去重/并发动作 → 确认结果汇总 → ROS 回复与动作事件。
+- 对已有真实/固定 provider 和模拟/测试 device Seam 使用 Protocol；设备结果、动作事件、
+  轮次结果用 TypedDict 明确必需字段与可选字段，保留原 JSON 表示。
+- 解析与汇总函数按实际职责拆分，公开能力放在内部实现之前；减少复杂表达式。
+- 任意异常隔离仅覆盖外部 provider/device 调用，返回原失败语义并记录无敏感详情的业务日志。
+- 当前 PR 的7个 Python 文件 Ruff check/format --check 通过，6个模块 mypy 通过，
+  全套46项回归通过，修正类型必需字段后相关16项测试通过，ROS固定响应探针及构建通过。
+- 真实在线复验首次：聊天成功、动作请求发生 URLError，Agent 正确返回 provider_failed。
+  随后重试退出码0，真实聊天和模拟 volume_set(30) 均成功，收到2条回复与1个动作事件。
+- code-review：Standards 发现必需字段被标为可选，已修正并复审通过；Spec 未发现行为回归。
+- 全仓 Ruff 存量基线仍为11处导入排序问题、34个待格式化文件，未扩大本次重构范围。

@@ -17,28 +17,34 @@ LOGGER = logging.getLogger(__name__)
 Argument = Union[str, int, float]
 
 
-class DeviceResult(TypedDict, total=False):
-    """设备确认：success 为必需字段，其余字段依执行结果提供。"""
-
-    success: bool
+class _DeviceDetails(TypedDict, total=False):
     simulated: bool
     result: Dict[str, Union[str, float, bool, None]]
     error: str
 
 
-class ActionResult(DeviceResult, total=False):
-    """动作事件额外包含原始调用字符串 call。"""
+class DeviceResult(_DeviceDetails):
+    """设备确认必须包含 success，其余字段依执行结果提供。"""
+
+    success: bool
+
+
+class ActionResult(DeviceResult):
+    """动作事件必须包含确认状态及原始调用字符串。"""
 
     call: str
 
 
-class TurnResult(TypedDict, total=False):
-    """一轮交互的 JSON 契约；失败可通过 error 补充原因。"""
+class _TurnFailure(TypedDict, total=False):
+    error: str
+
+
+class TurnResult(_TurnFailure):
+    """一轮交互必须包含状态、回复和动作事件，失败时可补充 error。"""
 
     success: bool
     response: str
     actions: List[ActionResult]
-    error: str
 
 
 class Provider(Protocol):
@@ -99,7 +105,7 @@ class OnlineAgent:
         try:
             result = self._devices.execute(name, args)
         except Exception as error:
-            LOGGER.warning("Online Agent device action failed (%s)", type(error).__name__)
+            LOGGER.warning("Online Agent device action %s failed (%s)", name, type(error).__name__)
             return {"call": call, "success": False, "simulated": False, "error": "action_failed"}
 
         if not isinstance(result, dict) or not isinstance(result.get("success"), bool):
