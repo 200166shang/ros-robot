@@ -20,6 +20,22 @@ void test_scan_projection() {
     assert(std::abs(points.front().range - std::sqrt(0.29)) < 1e-6);
 }
 
+// 验证平台四元数 (0.5,-0.5,0.5,0.5) 的旋转矩阵保留整条水平扫描线，而非退化为中心射线。
+void test_platform_rotation_projection() {
+    object_track::LidarToCameraTransform transform;
+    transform.rotation = {{0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0}};
+    const object_track::LaserScanGeometry scan{0.0, 0.26, 0.1, 10.0};
+    const std::vector<float> ranges{0.5F, std::numeric_limits<float>::infinity(), 0.5F, 0.5F};
+    const auto points = object_track::project_laser_scan(ranges, scan, transform, {}, {1280.0, 720.0});
+
+    assert(points.size() == 3U);
+    assert(std::abs(points[1].x - 482.52581) < 1e-4);
+    assert(std::abs(points[1].y - 360.0) < 1e-4);
+    assert(std::abs(points[1].range - 0.436605053) < 1e-8);
+    assert(std::abs(points[2].x - 38.23069) < 1e-4);
+    assert(std::abs(points[2].y - 360.0) < 1e-4);
+}
+
 // 验证目标按开区间水平跨度选最近三维距离，边界像素不计入且不检查垂直坐标。
 void test_nearest_range_in_horizontal_span() {
     const std::vector<object_track::ProjectedScanPoint> points{
@@ -44,6 +60,7 @@ void test_linear_command() {
 // 运行 LiDAR 投影、目标距离和线速度数学用例。
 int main() {
     test_scan_projection();
+    test_platform_rotation_projection();
     test_nearest_range_in_horizontal_span();
     test_linear_command();
     return 0;
