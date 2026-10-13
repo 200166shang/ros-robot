@@ -56,6 +56,16 @@ ros2 launch robot_bringup tracking.launch.py with_foxglove:=true
 
 固定组合只包含日常相机、检测、雷达、平台 TF 与跟踪链路；Agent、Voice 和 Web 视频演示由另一个入口负责。不要传入 `mode` 或逐模块开关，这些不是该 Launch 支持的参数。
 
+### 使用已有 ROSBridge 观看
+
+当前板子已安装 `rosbridge_server`。在另一个已加载 ROS 环境的终端启动观察桥接：
+
+```bash
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+```
+
+网页或 Foxglove 选择 ROSBridge 连接，地址为 `ws://<板子 IP>:9090`，观看 `/camera/image_det_track` 和 `/scan`。组合仍使用 `with_foxglove:=false`，避免重复启动 Bridge；ROSBridge 由自己的终端管理，不属于固定组合的六个进程。
+
 ### 启用融合与 Follow
 
 启动时 LiDAR Fusion 关闭、Follow 处于 standby。先确认扫描、相机检测输入和平台 TF 正常：
@@ -91,7 +101,7 @@ ros2 service call /tracking/set_lidar_enabled std_srvs/srv/SetBool "{data: false
 
 ROS Launch 按普通生命周期管理本次启动的进程。按 Ctrl-C 会关闭该 Launch 启动的进程；节点退出后不会自动重启，也不会关闭其他终端或外部启动的 ROS 进程。故障恢复由操作者检查原因并重新启动相应进程。
 
-Foxglove 是观察端；断开浏览器连接不是停止 Launch 的操作。板端验收时应断开再连接 Foxglove，并确认 `/scan` 仍在更新，再记录实际结果。本指南和合成输入探针不代表已完成物理设备上的断连/重连观察。
+Foxglove 是观察端；断开浏览器连接不是停止 Launch 的操作。板端验收时应断开再连接 Foxglove，并确认 `/scan` 仍在更新，再记录实际结果。本次板端记录及已验证、跳过的项目见 [验收报告](../../../docs/reports/tracking-orange-pi-2026-10-13.md)。
 
 ### 故障排查
 
@@ -159,6 +169,16 @@ ros2 launch robot_bringup tracking.launch.py with_foxglove:=true
 
 The fixed composition handles the daily camera, detection, lidar, platform TF, and tracking pipeline. The Agent, Voice, and Web video demo has a separate entry point. Do not pass `mode` or per-module switches; this launch does not support them.
 
+### Observe through an existing ROSBridge
+
+The current board has `rosbridge_server` installed. Start it in a separate terminal with the ROS environment loaded:
+
+```bash
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+```
+
+Choose a ROSBridge connection in the browser or Foxglove, using `ws://<board IP>:9090`, and view `/camera/image_det_track` and `/scan`. Keep `with_foxglove:=false` for the composition. ROSBridge belongs to its own terminal and is separate from the six processes in the fixed composition.
+
 ### Enable Fusion and Follow
 
 LiDAR Fusion starts disabled and Follow starts in standby. Check that scans, camera detection inputs, and platform TF are available:
@@ -194,7 +214,7 @@ Disabling Fusion clears the tracker's scan and range state. If Follow is still e
 
 ROS Launch manages the processes started by this launch. Ctrl-C shuts down those processes. A node exit does not trigger an automatic restart or stop ROS processes started in another shell. The operator diagnoses the cause and restarts the affected process.
 
-Treat Foxglove as an observer; disconnecting its browser client is not a request to stop ROS Launch. During board acceptance, disconnect and reconnect Foxglove and confirm `/scan` continues to update, then record the observed result. This guide and the synthetic-input probe do not claim a physical disconnect/reconnect observation.
+Treat Foxglove as an observer; disconnecting its browser client is not a request to stop ROS Launch. During board acceptance, disconnect and reconnect Foxglove and confirm `/scan` continues to update, then record the observed result. See the [board acceptance report](../../../docs/reports/tracking-orange-pi-2026-10-13.md) for verified and skipped scenarios.
 
 ### Troubleshooting
 
