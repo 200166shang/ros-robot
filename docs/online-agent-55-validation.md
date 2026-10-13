@@ -14,12 +14,26 @@
 
 - 全套 Python 回归测试：46 passed（tests、robot_agent、robot_voice、robot_bringup）。
 - mypy `--check-untyped-defs --ignore-missing-imports` 检查三个新增运行模块；ROS 第三方类型忽略。
-- code-review 双轴审查：Standards 无违规/可行动异味；Spec 仅真实在线验收待凭证。
+- code-review 双轴审查：Standards 无违规/可行动异味；Spec 初次审查仅真实在线验收待凭证；现已补齐。
 
-## 未完成的验收
+## 真实在线验收
 
-真实在线请求 **未完成**。已检查旧 Agent 默认 `src/agent/config.json`、当前项目配置文件、
-相关环境变量及专用外部配置目录，未发现可用凭证。用户确认尚未配置。
-已创建权限600的 `/home/orangepi/.config/robot_agent/online.json` 空密钥模板，未提交源码。
-没有账户密钥，无法完成真实模型普通对话及模拟动作请求；固定响应结果不能代替这一项。
-PR 保持 draft，不关闭 #55，待外部配置密钥后运行文档中的 `--config` 探针并更新记录。
+2026-10-13 已通过真实 DashScope `qwen-plus` 请求完成 ROS 输入→在线模型→回复及模拟动作链路。
+配置使用北京 DashScope HTTPS endpoint、60秒超时，凭证来自用户提供的百炼 API Key，
+仅写入权限600的 `/home/orangepi/.config/robot_agent/online.json`，不提交附件或密钥。
+
+执行命令：
+
+```bash
+source /opt/ros/foxy/setup.bash
+PYTHONPATH=ros2_ws/src/robot_agent:$PYTHONPATH python3 \
+  ros2_ws/src/robot_agent/test/online_ros_probe.py \
+  --config /home/orangepi/.config/robot_agent/online.json
+```
+
+结果：进程退出码0，mode=real_online，2条回复、1个动作事件。
+普通对话 success=true，actions=[]；模拟音量动作 success=true、simulated=true，
+call=volume_set(30)，result.volume=30。探针确认了真实 ROS 主题传输及真实在线模型请求，
+没有物理硬件动作。真实对话原文未提交。
+
+#55 的真实在线文本验收已补齐；语音与其他完整迁移内容仍属于 #54 后续工作。
