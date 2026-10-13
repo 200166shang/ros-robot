@@ -1,0 +1,9 @@
+img_decode:
+  ros__parameters:
+    input_topic: /image_raw/compressed
+    output_topic: /camera/image_raw
+    width: 1280
+    height: 720
+    scale: 1.0
+    frame_divider: 1
+    lazy: false

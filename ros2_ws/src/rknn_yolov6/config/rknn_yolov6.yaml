@@ -1,0 +1,16 @@
+rknn_yolov6:
+  ros__parameters:
+    model_path: /home/orangepi/models/ros-robot/vision/yolov6n_85.rknn
+    haar_cascade_path: ''
+    input_topic: /camera/image_raw
+    detections_topic: /ai_msg_det
+    annotated_topic: /camera/image_det
+    confidence_threshold: 0.30
+    nms_threshold: 0.30
+    enabled: true
+    always_process: true
+    print_perf_detail: false
+    use_multi_npu_core: false
+    is_offline_image_mode: false
+    offline_images_path: ''
+    offline_output_path: ''

@@ -19,7 +19,6 @@
 /docs/*
 !/docs/agents/
 !/docs/adr/
-!/docs/reports/
 **/*.rknn
 **/*.gguf
 **/*.onnx

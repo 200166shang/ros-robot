@@ -21,17 +21,25 @@ source ros2_ws/install/setup.bash
 ros2 launch usb_camera usb_camera.launch.py
 ```
 
-默认按 `device_candidates` 顺序尝试 `/dev/video0`，采集 1280×720、请求帧率 30 FPS 的 MJPEG 图像，并发布到 `/image_raw/compressed`。设备打开失败时节点会轮到下一候选路径；当前 launch 只配置 `/dev/video0`。Launch 默认启用 `lazy`：没有图像订阅者时不会持续打开相机。`frame_divider` 默认是 `1`，设为 `N` 时每采集 N 帧发布一帧。`/enable_camera` 上的 `std_msgs/Bool` 可暂停或恢复相机采集。可以在另一个终端运行下面的命令建立订阅并查看实际发布帧率：
+默认按 `device_candidates` 顺序尝试 `/dev/video0`，采集 1280×720、请求帧率 30 FPS 的 MJPEG 图像，并发布到 `/image_raw/compressed`。设备打开失败时节点会轮到下一候选路径。package launch 从 `config/usb_camera.yaml` 加载配置并设置 `lazy=false`，相机采集不会受观察端订阅数影响。`frame_divider` 默认是 `1`，设为 `N` 时每采集 N 帧发布一帧。`/enable_camera` 上的 `std_msgs/Bool` 可暂停或恢复相机采集。可以在另一个终端运行下面的命令查看实际发布帧率：
 
 ```bash
 ros2 topic hz /image_raw/compressed
 ```
 
-例如，以 divider 2 启动节点：
+需要长期修改设备、帧率或分频时，编辑 `config/usb_camera.yaml` 并重新构建、source 工作区。下面以分频 2 为例，先在 YAML 中修改 `frame_divider`：
+
+```yaml
+usb_camera:
+  ros__parameters:
+    frame_divider: 2
+```
 
 ```bash
-ros2 launch usb_camera usb_camera.launch.py frame_divider:=2
+ros2 launch usb_camera usb_camera.launch.py
 ```
+
+Launch 不再提供相机参数命令行覆盖。直接运行节点时可用 ROS 参数覆盖做一次性诊断；常规使用应修改 YAML。
 
 ## 运行相机性能基准
 

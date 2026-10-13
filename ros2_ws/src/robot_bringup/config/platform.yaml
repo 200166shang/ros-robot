@@ -1,0 +1,10 @@
+tracking_platform:
+  camera_frame: camera
+  laser_frame: laser_link
+  laser_to_camera:
+    x: 0.20
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+    pitch: -1.5707963267948966
+    roll: 1.5707963267948966

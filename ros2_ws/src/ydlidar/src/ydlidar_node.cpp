@@ -13,6 +13,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_srvs/srv/empty.hpp"
 
+// 读取 ROS 参数并建立驱动控制、扫描发布和启动重试流程。
 YdLidarNode::YdLidarNode(std::unique_ptr<ydlidar::LidarSource> source)
     : Node("ydlidar"), source_(std::move(source)) {
     if (!source_) {
@@ -84,12 +85,14 @@ YdLidarNode::YdLidarNode(std::unique_ptr<ydlidar::LidarSource> source)
     // 启动顺序：配置数据源、初始化设备、自动启扫；启扫失败时定时器会继续重试。
     initialized_ = source_->initialize(configuration_);
     if (!initialized_) {
-        RCLCPP_FATAL(get_logger(), "YDLIDAR initialization failed: %s", source_->error().c_str());
-    } else {
-        scanning_ = source_->start();
-        if (!scanning_) {
-            RCLCPP_WARN(get_logger(), "Could not start scan yet: %s", source_->error().c_str());
-        }
+        // 构造失败会使主函数返回非零状态，让组合 Launch 按统一策略监督重启。
+        throw std::runtime_error(
+            "YDLIDAR initialization failed: " + source_->error());
+    }
+
+    scanning_ = source_->start();
+    if (!scanning_) {
+        RCLCPP_WARN(get_logger(), "Could not start scan yet: %s", source_->error().c_str());
     }
 
     scan_timer_ = create_wall_timer(std::chrono::milliseconds(33),

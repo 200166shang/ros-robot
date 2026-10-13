@@ -1,8 +1,4 @@
-"""Composable one-shot voice-to-person-tracking demo.
-
-The launch file composes existing package launch files. It does not duplicate
-camera, decoder, detector, tracker, Agent, or voice node implementations.
-"""
+"""组合基础视觉跟踪、语音 Agent 与 Web 视频服务的演示入口。"""
 
 import os
 
@@ -15,66 +11,73 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
-    bringup_share = get_package_share_directory("robot_bringup")
-    voice_share = get_package_share_directory("robot_voice")
-    perception_launch = os.path.join(
-        bringup_share, "launch", "perception.launch.py"
-    )
-    voice_launch = os.path.join(voice_share, "launch", "voice_frontend.launch.py")
+def generate_launch_description() -> LaunchDescription:
+    """声明演示参数，并组合跟踪、Agent、Web 和语音节点。"""
+    bringup_share = get_package_share_directory('robot_bringup')
+    voice_share = get_package_share_directory('robot_voice')
+    tracking_launch = os.path.join(bringup_share, 'launch', 'tracking.launch.py')
+    web_config = os.path.join(bringup_share, 'config', 'web_video_server.yaml')
+    voice_launch = os.path.join(voice_share, 'launch', 'voice_frontend.launch.py')
     local_voice_fixture = (
-        "/home/orangepi/local-data/ros-robot/voice-fixtures/"
-        "start_person_tracking_zh_2026-09-24.wav"
+        '/home/orangepi/local-data/ros-robot/voice-fixtures/'
+        'start_person_tracking_zh_2026-09-24.wav'
     )
 
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                "audio_source",
-                default_value="wav_file",
-                description="Use the local deterministic sample by default; microphone is opt-in.",
+                'audio_source',
+                default_value='wav_file',
+                description=(
+                    '默认使用本地 WAV 样例；麦克风输入需显式选择。'
+                ),
             ),
             DeclareLaunchArgument(
-                "input_wav_path",
+                'input_wav_path',
                 default_value=local_voice_fixture,
-                description="Local, untracked WAV fixture used when audio_source=wav_file.",
+                description='audio_source=wav_file 时使用的本地样例路径。',
             ),
-            DeclareLaunchArgument(
-                "model_path",
-                default_value="/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn",
-                description="Path to the local RKNN model; model weights are not stored in Git.",
-            ),
-            DeclareLaunchArgument("run_acceptance_probe", default_value="true"),
+            DeclareLaunchArgument('run_acceptance_probe', default_value='true'),
             IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(perception_launch),
+                PythonLaunchDescriptionSource(tracking_launch),
                 launch_arguments={
-                    "with_detector": "true",
-                    "with_agent": "true",
-                    "with_web": "true",
-                    "model_path": LaunchConfiguration("model_path"),
+                    'with_foxglove': 'false',
                 }.items(),
             ),
             Node(
-                package="robot_agent",
-                executable="llm_ros_node",
-                name="qwen_ros_bridge",
-                output="screen",
-                parameters=[{"enable_commands": True}],
+                package='robot_agent',
+                executable='command_agent',
+                name='command_agent',
+                output='screen',
+            ),
+            Node(
+                package='web_video_server',
+                executable='web_video_node',
+                name='web_video_server',
+                output='screen',
+                parameters=[web_config],
+            ),
+            Node(
+                package='robot_agent',
+                executable='llm_ros_node',
+                name='qwen_ros_bridge',
+                output='screen',
+                parameters=[{'enable_commands': True}],
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(voice_launch),
                 launch_arguments={
-                    "audio_source": LaunchConfiguration("audio_source"),
-                    "input_wav_path": LaunchConfiguration("input_wav_path"),
-                    "play_audio": "false",
+                    'audio_source': LaunchConfiguration('audio_source'),
+                    'input_wav_path': LaunchConfiguration('input_wav_path'),
+                    'play_audio': 'false',
                 }.items(),
             ),
             Node(
-                package="robot_bringup",
-                executable="voice_tracking_acceptance_probe.py",
-                name="voice_tracking_acceptance_probe",
-                output="screen",
-                condition=IfCondition(LaunchConfiguration("run_acceptance_probe")),
+                package='robot_bringup',
+                executable='voice_tracking_acceptance_probe.py',
+                name='voice_tracking_acceptance_probe',
+                output='screen',
+                condition=IfCondition(LaunchConfiguration('run_acceptance_probe')),
             ),
         ]
     )

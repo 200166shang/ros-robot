@@ -21,7 +21,7 @@ USB 相机
 | 标注图像 | `/camera/image_det` | `sensor_msgs/msg/Image` | RGB 原图上绘制检测框和类别置信度 |
 | 启停控制 | `/enable_detector` | `std_msgs/msg/Bool` | `false` 暂停接收检测帧，`true` 恢复 |
 
-实时模式默认 `always_process=false`。当 `/ai_msg_det` 和 `/camera/image_det` 都没有订阅者时，节点会跳过输入图像；订阅任一输出即可触发检测。标注图像也只在有订阅者时发布。队列容量为 2，队列已满时丢弃最旧帧，以减少实时处理延迟。
+package launch 默认 `always_process=true`，即使观察端没有订阅者也持续处理输入；直接运行节点时参数默认仍为 `false`。标注图像只在有订阅者时发布。队列容量为 2，队列已满时丢弃最旧帧，以减少实时处理延迟。
 
 ## 构建
 
@@ -75,24 +75,29 @@ source ~/code/ros-robot/ros2_ws/install/setup.zsh
 source /tmp/ros-robot-rknn-install/setup.zsh
 ```
 
-**终端 1：启动 USB 相机和 JPEG 解码器**
+**终端 1：启动 USB 相机**
 
 ```zsh
-ros2 launch img_decode camera_decode.launch.py
+ros2 launch usb_camera usb_camera.launch.py
 ```
 
-该 launch 从 `/dev/video0` 发布压缩 JPEG，再解码为 `/camera/image_raw` 的 `rgb8` 图像。
-
-**终端 2：启动检测节点**
+**终端 2：启动 JPEG 解码器**
 
 ```zsh
-ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
-  model_path:=/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn
+ros2 launch img_decode img_decode.launch.py
 ```
 
-RKNN 模型和 Haar cascade 是外部资源，需在设备上提供可读取的文件。Launch 默认标签文件为包内的 `config/coco_labels.txt`。
+相机从 YAML 配置的设备发布压缩 JPEG；解码器将其转换为 `/camera/image_raw` 的 `rgb8` 图像。
 
-**终端 3：订阅检测结果并触发实时推理**
+**终端 3：启动检测节点**
+
+```zsh
+ros2 launch rknn_yolov6 rknn_yolov6.launch.py
+```
+
+RKNN 模型和 Haar cascade 是外部资源，需在设备上提供可读取的文件。通过修改 `rknn_yolov6/config/rknn_yolov6.yaml` 配置模型路径和算法参数；标签文件由 launch 从包内 `config/coco_labels.txt` 定位。修改 YAML 后重新构建并 source 工作区。
+
+**终端 4：订阅检测结果并触发实时推理**
 
 ```zsh
 ros2 topic echo /ai_msg_det
@@ -104,27 +109,26 @@ ros2 topic echo /ai_msg_det
 
 ## 参数
 
-Launch 参数可以通过 `name:=value` 覆盖：
+常规 package launch 直接读取 `config/rknn_yolov6.yaml`，不提供 ROS 参数的 launch 命令行覆盖。持久配置请改 YAML，再重新构建并加载工作区。表中 YAML 参数可用于 detector 节点；标签路径由 launch 从包 share 目录注入：
 
-| 参数 | 默认值 | 说明 |
+| YAML 参数 | 默认值 | 说明 |
 |---|---|---|
-| `model_path` | `/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn` | RKNN 模型路径；RKNN 后端必填 |
-| `labels_path` | 包内 `config/coco_labels.txt` | 类别标签文件 |
-| `haar_cascade_path` | 空 | Haar 后端的 cascade 文件路径 |
+| `model_path` | `/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn` | RKNN 模型路径；RKNN 后端必填，模型文件保存在仓库外 |
+| `haar_cascade_path` | 空 | Haar 后端的 cascade 文件路径；资源文件保存在仓库外 |
 | `input_topic` | `/camera/image_raw` | RGB 输入图像话题 |
 | `detections_topic` | `/ai_msg_det` | 检测消息输出话题 |
 | `annotated_topic` | `/camera/image_det` | 标注图像输出话题 |
 | `confidence_threshold` | `0.30` | 候选检测置信度阈值 |
 | `nms_threshold` | `0.30` | 非极大值抑制阈值 |
 | `enabled` | `true` | 是否处理输入；可由 `/enable_detector` 动态切换 |
-| `always_process` | `false` | 为 `true` 时即使没有输出订阅者也处理实时图像 |
+| `always_process` | `true`（package launch） | 为 `true` 时即使没有输出订阅者也处理实时图像；直接运行节点的默认值为 `false` |
 | `print_perf_detail` | `false` | 为 `true` 时输出 RKNN runtime 的逐层性能详情 |
 | `use_multi_npu_core` | `false` | 是否请求多 NPU 核心；是否支持取决于设备/runtime |
 | `is_offline_image_mode` | `false` | 是否从图片目录离线处理 |
 | `offline_images_path` | 空 | OpenCV 图片 glob，例如 `/data/images/*.jpg` |
 | `offline_output_path` | 空 | 离线标注图像输出目录；其父目录需已存在 |
 
-控制节点启停示例：
+`enabled` 也可通过已有 `/enable_detector` Bool Topic 动态切换。控制节点启停示例：
 
 ```zsh
 ros2 topic pub --once /enable_detector std_msgs/msg/Bool "{data: false}"
@@ -133,14 +137,14 @@ ros2 topic pub --once /enable_detector std_msgs/msg/Bool "{data: true}"
 
 ## 离线图片检测
 
-离线模式会复用同一推理与后处理流程，将标注结果保存为按处理顺序编号的 JPG 文件（`0.jpg`、`1.jpg`……）。
+离线模式会复用同一推理与后处理流程，将标注结果保存为按处理顺序编号的 JPG 文件（`0.jpg`、`1.jpg`……）。运行前在 `rknn_yolov6/config/rknn_yolov6.yaml` 中设置 `is_offline_image_mode: true`、`offline_images_path` 和 `offline_output_path`，然后重新构建并 source 工作区：
 
-```zsh
-ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
-  model_path:=/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn \
-  is_offline_image_mode:=true \
-  'offline_images_path:=/data/images/*.jpg' \
-  offline_output_path:=/tmp/rknn-yolov6-results
+```yaml
+rknn_yolov6:
+  ros__parameters:
+    is_offline_image_mode: true
+    offline_images_path: "/data/images/*.jpg"
+    offline_output_path: /tmp/rknn-yolov6-results
 ```
 
 离线模式不要求检测结果订阅者；检测消息和标注图像仍会发布。`offline_output_path` 不存在时节点会尝试创建该目录，但不会递归创建缺失的父目录。
@@ -152,7 +156,7 @@ ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
 - `RKNN runtime=... driver=...`：RKNN 初始化成功后打印的 runtime 和驱动版本。
 - `rknn_set_core_mask: No implementation found for current platform`：部分平台/runtime 会在核心选择时打印此信息。若之后继续打印 runtime 版本和 `inference` 日志，说明节点继续运行；若节点随后退出，应结合后续错误和退出码判断。
 - `inference X fps, detections=N`：每当处理线程完成一帧，且距离上次报告至少 5 秒时打印。`X` 是**节点启动以来已完成处理帧数除以节点启动以来经过的秒数**，包含没有输入帧或没有订阅者时的空闲时间；它不是最近 5 秒的帧率，也不是 RKNN 单次推理耗时。`N` 是本次报告对应的最近一帧检测框数量。
-- `print_perf_detail:=true`：请求 RKNN runtime 输出逐层性能详情。它会增加日志量；不开启时不会打印 `RKNN perf detail`。
+- `print_perf_detail: true`（detector YAML）：请求 RKNN runtime 输出逐层性能详情。它会增加日志量；不开启时不会打印 `RKNN perf detail`。
 
 要观察实时话题频率，请在其它终端运行：
 
@@ -171,7 +175,6 @@ Launch 默认将节点日志输出到控制台，ROS 日志文件默认保存在
 mkdir -p /tmp/rknn-yolov6-logs
 ROS_LOG_DIR=/tmp/rknn-yolov6-logs \
   ros2 launch rknn_yolov6 rknn_yolov6.launch.py \
-  model_path:=/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn \
   2>&1 | tee /tmp/rknn-yolov6-logs/console.log
 ```
 

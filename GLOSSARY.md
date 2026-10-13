@@ -48,3 +48,17 @@ _Avoid_: Detection, tracked identity
 **Target range estimate**:
 An estimated distance associated with the current tracking target and used by the follow behavior.
 _Avoid_: Ground-truth range
+
+## Tracking lifecycle
+
+**Tracking bringup**:
+The fixed process composition that starts the camera, decoder, detector, LiDAR, platform transform, and ObjectTrack. Runtime Follow and LiDAR fusion remain disabled until explicitly enabled through their services.
+
+**Follow standby**:
+The follow behavior is inactive while sensing, detection, and visual observation may remain available. Starting the perception pipeline does not itself activate following.
+
+**Follow enabled**:
+The follow behavior is active and evaluates the current tracking target to determine follow commands. An absent target does not disable the behavior; target selection resumes when a matching person appears.
+
+**LiDAR fusion**:
+The association of LiDAR measurements with camera detections to estimate the tracking target's range. It is distinct from the LiDAR device acquiring measurements.

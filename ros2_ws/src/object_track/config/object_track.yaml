@@ -1,0 +1,26 @@
+object_track:
+  ros__parameters:
+    image_topic: /camera/image_det
+    input_topic: /ai_msg_det
+    annotated_topic: /camera/image_det_track
+    output_topic: /tracking/cmd_vel_safe
+    lidar_topic: /scan
+    camera_frame: camera
+    laser_frame: laser_link
+    target_class: person
+    dry_run: true
+    angular_gain: 0.01
+    max_angular: 3.0
+    minimum_area: 20
+    control_linear: true
+    linear_gain: 0.5
+    max_linear: 0.15
+    keep_distance: 0.3
+    minimum_range: 0.05
+    maximum_range: 5.0
+    camera_fx: 1410.6
+    camera_fy: 1410.6
+    camera_cx: 640.0
+    camera_cy: 360.0
+    transform_timeout_sec: 10.0
+    lidar_scan_timeout_sec: 1.0

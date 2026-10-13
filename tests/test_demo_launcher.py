@@ -230,6 +230,9 @@ class ProcessOwnershipTests(unittest.TestCase):
         ])
         self.assertIn("audio_source:=microphone", command)
         self.assertIn("run_acceptance_probe:=false", command)
+        self.assertFalse(
+            any(argument.startswith("model_path:=") for argument in command)
+        )
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
     def test_signal_is_forwarded_only_to_active_ros_launcher(self):

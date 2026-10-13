@@ -19,7 +19,7 @@ source /opt/ros/foxy/setup.zsh
 source ros2_ws/install/setup.zsh
 ```
 
-这里分别构建相机发布器和解码器，因为 `camera_decode.launch.py` 会启动这两个包中的节点。在不需要相机 launch 的环境中，只构建 `img_decode` 即可。
+相机发布器和解码器是独立包，各自有自己的 launch 与 YAML。运行完整相机数据流时需分别构建这两个包；只调试解码器时只构建 `img_decode` 即可。
 
 后端在构建时选择：
 
@@ -40,13 +40,17 @@ source ros2_ws/install/setup.zsh
 
 ## 使用相机运行完整数据流
 
-工作区已构建 `usb_camera` 和 `img_decode` 并 source 后，在一个终端启动相机与解码节点：
+工作区已构建 `usb_camera` 和 `img_decode` 并 source 后，分别在两个终端启动相机和解码节点：
 
 ```zsh
-ros2 launch img_decode camera_decode.launch.py
+ros2 launch usb_camera usb_camera.launch.py
 ```
 
-此 launch 会启动 `/dev/video0` 上的 `usb_camera_node` 和 `img_decode_node`。相机默认请求 MJPEG 1280×720、30 FPS，并发布到 `/image_raw/compressed`；解码器默认缩放到 640×360 并发布到 `/camera/image_raw`。启动时如果看到 `decoder subscribed`，表示解码器已订阅输入；若没有输出订阅者，默认的 `lazy` 行为会暂停输入订阅。
+```zsh
+ros2 launch img_decode img_decode.launch.py
+```
+
+相机默认请求 MJPEG 1280×720、30 FPS，并发布到 `/image_raw/compressed`；解码器默认按 1.0 比例输出 1280×720 图像到 `/camera/image_raw`。各自的 package launch 加载所属 YAML，使用 `lazy=false`，相机采集和解码不依赖观察端订阅数。
 
 在另一个已加载 ROS 2 与工作区环境的 Zsh 终端查看解码输出帧率：
 
@@ -58,7 +62,7 @@ ros2 topic hz /camera/image_raw
 
 Run these commands from the repository root. In each new terminal, source both the ROS installation and this workspace before using ROS commands.
 
-`ros2 topic hz` 自身会订阅输出话题，因此也会唤醒 lazy 解码器和相机。刚启动时短暂出现 `topic does not appear to be published yet` 可能只是尚未收到第一帧；持续无输出时检查相机节点、输入话题和解码器日志。另开终端可以查看图像消息的尺寸、编码和 header：
+`ros2 topic hz` 自身会订阅输出话题，因此可以观察输出帧率；package launch 已设置 `lazy=false`，不需要观察端唤醒相机或解码器。刚启动时短暂出现 `topic does not appear to be published yet` 可能只是尚未收到第一帧；持续无输出时检查相机节点、输入话题和解码器日志。另开终端可以查看图像消息的尺寸、编码和 header：
 
 ```zsh
 ros2 topic echo /camera/image_raw --no-arr
@@ -76,7 +80,7 @@ ros2 run img_decode image_monitor --ros-args \
   -p snapshot_path:=/tmp/img_decode.png
 ```
 
-它会建立输出订阅，因此同样可用于触发默认 lazy 数据流。停止后检查截图：
+它会建立输出订阅并保存第一张有效图像。停止后检查截图：
 
 ```zsh
 file /tmp/img_decode.png
@@ -95,13 +99,17 @@ file /tmp/img_decode.png
 source ros2_ws/install/setup.zsh
 ```
 
-软件路径将两个后端值都改成 `OPENCV`。在一个终端启动物理相机和解码器：
+软件路径将两个后端值都改成 `OPENCV`。在两个终端分别启动物理相机与解码器：
 
 ```zsh
-ros2 launch img_decode camera_decode.launch.py
+ros2 launch usb_camera usb_camera.launch.py
 ```
 
-相机默认以 1280×720 MJPEG、请求 30 FPS 运行；解码输出默认缩放为 640×360。预览使用工作区内的 RViz2 预设。它订阅 `/camera/image_raw`，并采用与图像发布器匹配的 Best Effort QoS：
+```zsh
+ros2 launch img_decode img_decode.launch.py
+```
+
+相机默认以 1280×720 MJPEG、请求 30 FPS 运行；解码输出默认保持 1280×720。预览使用工作区内的 RViz2 预设。它订阅 `/camera/image_raw`，并采用与图像发布器匹配的 Best Effort QoS：
 
 ```zsh
 cd ..
@@ -114,19 +122,19 @@ headless RViz2 和 Mac noVNC SSH 隧道的安装及连接步骤见 [`ydlidar/REA
 
 速率观测时，先等待相机首帧和约 8 秒预热，再观察约 10 秒。`usb_camera_node` 每 5 秒报告实际采集 FPS 和发布 FPS；启动 `image_monitor` 可观察解码输出 FPS，也可分别在终端中用 `ros2 topic hz /image_raw/compressed` 和 `ros2 topic hz /camera/image_raw` 查看话题频率。测 ROS 消息带宽时，在另外两个终端运行 `ros2 topic bw --window 20 /image_raw/compressed` 和 `ros2 topic bw --window 20 /camera/image_raw`；每个新终端先 source ROS 和工作区。`bw` 每秒报告最近 20 条消息的带宽和平均大小，建议预热后记录 3–5 次稳定读数。它测量订阅端收到的 ROS 消息数据速率，不代表网络接口总流量。报告中应记录实际后端、测量窗口、采集/相机发布/解码输出 FPS 和带宽，不设置固定 FPS 门槛。
 
-要核对帧分频，先停止组合 launch，再将相机发布器单独设为 divider 2，并独立运行默认 decoder：
+要核对帧分频，先停止相机 launch，将 `usb_camera/config/usb_camera.yaml` 中的 `frame_divider` 改为 `2`，重新构建并加载工作区，然后启动相机：
 
 ```zsh
-ros2 launch usb_camera usb_camera.launch.py frame_divider:=2
+ros2 launch usb_camera usb_camera.launch.py
 ```
 
-另开终端启动 decoder：
+保持 `img_decode/config/img_decode.yaml` 中的 `frame_divider` 为 `1`，在另一个终端启动 decoder：
 
 ```zsh
 ros2 run img_decode img_decode_node
 ```
 
-在其它终端订阅 `/camera/image_raw`（例如运行 `ros2 topic hz /camera/image_raw`）以唤醒 lazy decoder。相机日志中的采集 FPS 应约为未分频值，发布 FPS 应约为其一半；解码输出 FPS 应跟随压缩输入话题。不要同时运行 `camera_bench`，因为它会独占打开相同的 V4L2 设备。
+在其它终端订阅 `/camera/image_raw`（例如运行 `ros2 topic hz /camera/image_raw`）查看解码输出。package launch 不启用 lazy；相机日志中的采集 FPS 应约为未分频值，发布 FPS 应约为其一半，解码输出 FPS 应跟随压缩输入话题。不要同时运行 `camera_bench`，因为它会独占打开相同的 V4L2 设备。
 
 要检查摄像头本身能否超过 30 FPS，先停止其他相机节点，再查看 UVC 模式并单独请求 60 FPS：
 
@@ -155,7 +163,7 @@ JPEG 编码到 ROS 解码的端到端往返命令见 [`img_encode/README.md`](..
 ros2 run img_decode img_decode_node
 ```
 
-直接运行节点时可用 ROS 参数覆盖默认值。例如，将缩放设为 0.75、每 2 个输入处理 1 帧：
+日常配置请修改 `img_decode/config/img_decode.yaml`，例如将 `scale` 设为 `0.75`、`frame_divider` 设为 `2`，然后重新构建并 source 工作区。直接运行节点时仍可用 ROS 参数做一次性诊断覆盖：
 
 ```zsh
 ros2 run img_decode img_decode_node --ros-args \
@@ -167,16 +175,16 @@ ros2 run img_decode img_decode_node --ros-args \
 |---|---:|---|
 | `input_topic` | `/image_raw/compressed` | `CompressedImage` 输入话题 |
 | `output_topic` | `/camera/image_raw` | `rgb8` 输出话题 |
-| `scale` | `0.5` | 宽、高的缩放比例，必须在 `(0, 1]` |
+| `scale` | `1.0`（YAML） | 宽、高的缩放比例，必须在 `(0, 1]`；直接运行节点时默认值为 `0.5` |
 | `frame_divider` | `1` | 按收到的压缩输入计数，每 N 帧处理一帧；小于 1 时按 1 处理 |
 | `width` | `1280` | Rockchip 解码输出缓冲区的最大配置宽度，范围 `[1, 8192]` |
 | `height` | `720` | Rockchip 解码输出缓冲区的最大配置高度，范围 `[1, 8192]` |
-| `lazy` | `true` | 没有输出订阅者时暂停输入订阅 |
+| `lazy` | `false`（YAML）；直接运行节点默认 `true` | `true` 时没有输出订阅者便暂停输入订阅 |
 
-`camera_decode.launch.py` 使用相机和解码器的默认参数。要自定义解码器参数，请单独启动相机，再用 `ros2 run img_decode img_decode_node --ros-args -p name:=value` 启动解码器；例如先在一个终端运行 `ros2 launch usb_camera usb_camera.launch.py`，再在另一个终端运行上面的解码命令。`width` 和 `height` 主要用于配置 Rockchip 后端缓冲区，不会覆盖输入图像的实际尺寸；实际输出尺寸由输入尺寸乘以 `scale` 决定。
+Package launch 从各自配置文件读取参数。要自定义解码器参数，请编辑 `img_decode/config/img_decode.yaml`；一次性诊断覆盖可单独运行 `ros2 run img_decode img_decode_node --ros-args -p name:=value`。`width` 和 `height` 主要用于配置 Rockchip 后端缓冲区，不会覆盖输入图像的实际尺寸；实际输出尺寸由输入尺寸乘以 `scale` 决定。
 
 ## img_decode usage
 
-`img_decode_node` converts compressed JPEG images on `/image_raw/compressed` into `rgb8` images on `/camera/image_raw`, preserving the input header. Run `ros2 launch img_decode camera_decode.launch.py` to start the camera and decoder together, then use `ros2 topic hz /camera/image_raw` or `ros2 run img_decode image_monitor` to check output. The Chinese guide above gives the Zsh build steps, backend choices, snapshot example, and all parameter defaults and constraints. For custom node parameters, start `usb_camera` separately and pass ROS parameter overrides to `img_decode_node`.
+`img_decode_node` converts compressed JPEG images on `/image_raw/compressed` into `rgb8` images on `/camera/image_raw`, preserving the input header. Start `usb_camera` and `img_decode` with their separate package launches, then use `ros2 topic hz /camera/image_raw` or `ros2 run img_decode image_monitor` to check output. The Chinese guide above gives the Zsh build steps, backend choices, snapshot example, and all parameter defaults and constraints. For persistent parameter changes, edit the package YAML; direct ROS parameter overrides are useful for one-off node diagnostics.
 
 For Orange Pi preview and full-pipeline rate validation, use the RViz2 camera preset and noVNC workflow in the Chinese guide above. Repeat the run with both `IMG_DECODE_BACKEND=OPENCV` and `ROCKCHIP`.

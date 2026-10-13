@@ -3,20 +3,32 @@ import json
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool
 
 
 class CommandAgent(Node):
-    """Small deterministic function executor; no cloud, motors, lidar, GPIO or shell calls."""
+    """处理有限命令集，不直接调用云端、底盘、电机、GPIO 或 Shell。"""
 
     def __init__(self):
         super().__init__('command_agent')
         self.camera_enabled = True
         self.tracking_enabled = False
         self.camera_pub = self.create_publisher(Bool, '/enable_camera', 10)
-        self.tracking_pub = self.create_publisher(Bool, '/enable_tracking', 10)
+        self.tracking_client = self.create_client(
+            SetBool,
+            '/tracking/set_enabled',
+        )
         self.response_pub = self.create_publisher(String, '/agent/response', 10)
-        self.command_sub = self.create_subscription(String, '/agent/command', self.on_command, 10)
-        self.get_logger().info('commands: start_camera, stop_camera, start_tracking, stop_tracking, status')
+        self.command_sub = self.create_subscription(
+            String,
+            '/agent/command',
+            self.on_command,
+            10,
+        )
+        self.get_logger().info(
+            'commands: start_camera, stop_camera, start_tracking, '
+            'stop_tracking, status'
+        )
 
     def publish_bool(self, publisher, value):
         message = Bool()
@@ -38,6 +50,37 @@ class CommandAgent(Node):
         self.response_pub.publish(message)
         self.get_logger().info(message.data)
 
+    def request_tracking_state(self, command, enabled):
+        """请求 Follow 状态变更，并反馈控制服务不可用的情况。"""
+        if not self.tracking_client.service_is_ready():
+            self.respond(command, False, 'tracking control service is unavailable')
+            return
+
+        request = SetBool.Request()
+        request.data = enabled
+        future = self.tracking_client.call_async(request)
+        future.add_done_callback(
+            lambda result: self.on_tracking_response(command, enabled, result)
+        )
+
+    def on_tracking_response(self, command, enabled, future):
+        """处理控制服务响应，并仅在成功时更新 Follow 状态。"""
+        try:
+            response = future.result()
+        except Exception as error:  # noqa: BLE001
+            self.respond(command, False, f'tracking service failed: {error}')
+            return
+
+        if response is None:
+            self.respond(command, False, 'tracking service returned no response')
+            return
+        if not response.success:
+            self.respond(command, False, response.message)
+            return
+
+        self.tracking_enabled = enabled
+        self.respond(command)
+
     def on_command(self, message):
         raw = message.data.strip()
         try:
@@ -52,17 +95,17 @@ class CommandAgent(Node):
             self.publish_bool(self.camera_pub, True)
         elif command == 'stop_camera':
             self.camera_enabled = False
-            self.tracking_enabled = False
-            self.publish_bool(self.tracking_pub, False)
             self.publish_bool(self.camera_pub, False)
+            self.request_tracking_state(command, False)
+            return
         elif command == 'start_tracking':
             self.camera_enabled = True
-            self.tracking_enabled = True
             self.publish_bool(self.camera_pub, True)
-            self.publish_bool(self.tracking_pub, True)
+            self.request_tracking_state(command, True)
+            return
         elif command == 'stop_tracking':
-            self.tracking_enabled = False
-            self.publish_bool(self.tracking_pub, False)
+            self.request_tracking_state(command, False)
+            return
         elif command != 'status':
             self.respond(command, False, 'unsupported command')
             return
