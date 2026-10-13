@@ -7,16 +7,20 @@
 
 ### 首次安装与构建
 
-首次在 Orange Pi 上准备 YDLIDAR SDK 并构建带硬件驱动的 ROS 工作区：
+先按 [detector 准备说明](../rknn_yolov6/README.md) 安装匹配的 RKNN runtime、Rockchip MPP/RGA 开发库，并把官方 `rknn_api.h` 放在仓库外。当前板子的头文件目录为 `$HOME/sdk/rknn/include`。随后准备持久 YDLIDAR SDK 并构建硬件组合：
 
 ```bash
 cd ~/code/ros-robot
 ./scripts/install-ydlidar-sdk.sh
 source /opt/ros/foxy/setup.bash
 source scripts/ydlidar-sdk-env.zsh
-./scripts/colcon.sh build --symlink-install
+./scripts/colcon.sh build --symlink-install --packages-up-to robot_bringup \
+  --parallel-workers 1 --cmake-args -DBUILD_TESTING=OFF \
+  -DRKNN_API_INCLUDE_DIR="$HOME/sdk/rknn/include"
 source ros2_ws/install/setup.bash
 ```
+
+此命令逐包构建硬件运行目标，减少 Orange Pi 上的编译内存压力；开发测试仍按各 package 的测试说明运行。`RKNN_API_INCLUDE_DIR` 按实际外部头文件位置调整。
 
 安装器将固定版本的 SDK 放在 `$HOME/.local/opt/ydlidar-sdk/1.2.7`，源码和构建目录使用仓库外的临时目录。若要使用其他持久前缀，在安装前设置 `YDLIDAR_SDK_PREFIX`；不要把 SDK 或生成的构建文件放进 Git 源码。
 
@@ -24,10 +28,10 @@ source ros2_ws/install/setup.bash
 
 ### 启动固定组合
 
-从仓库根目录启动：
+当前 Orange Pi Foxy 环境没有 `foxglove_bridge` 包，因此从仓库根目录先排除可选 Bridge 启动：
 
 ```bash
-./scripts/run-tracking.sh
+./scripts/run-tracking.sh with_foxglove:=false
 ```
 
 该薄包装加载 Foxy、本 checkout 的 `ros2_ws/install` 和持久 SDK 环境，然后直接交给 `ros2 launch robot_bringup tracking.launch.py`。它将命令行参数原样传给同一 Launch。
@@ -39,15 +43,15 @@ cd ~/code/ros-robot
 source /opt/ros/foxy/setup.bash
 source scripts/ydlidar-sdk-env.zsh
 source ros2_ws/install/setup.bash
-ros2 launch robot_bringup tracking.launch.py
+ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
 ```
 
-唯一的 Launch 参数是 `with_foxglove`，默认 `true`。需要关闭可选 Foxglove Bridge 时使用：
+唯一的 Launch 参数是 `with_foxglove`，默认 `true`。安装了兼容当前 ROS 版本的 Foxglove Bridge 后，可省略参数或明确开启：
 
 ```bash
-./scripts/run-tracking.sh with_foxglove:=false
+./scripts/run-tracking.sh with_foxglove:=true
 # 或直接运行：
-ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
+ros2 launch robot_bringup tracking.launch.py with_foxglove:=true
 ```
 
 固定组合只包含日常相机、检测、雷达、平台 TF 与跟踪链路；Agent、Voice 和 Web 视频演示由另一个入口负责。不要传入 `mode` 或逐模块开关，这些不是该 Launch 支持的参数。
@@ -106,16 +110,20 @@ This guide covers installation, startup, debugging, and safe operation of the fi
 
 ### First-time SDK installation and build
 
-Install the persistent YDLIDAR SDK and build the hardware driver on the Orange Pi:
+First follow the [detector setup guide](../rknn_yolov6/README.md) to install compatible RKNN runtime and Rockchip MPP/RGA development libraries, and keep the official `rknn_api.h` outside the repository. The current board uses `$HOME/sdk/rknn/include`. Then install the persistent YDLIDAR SDK and build the hardware composition:
 
 ```bash
 cd ~/code/ros-robot
 ./scripts/install-ydlidar-sdk.sh
 source /opt/ros/foxy/setup.bash
 source scripts/ydlidar-sdk-env.zsh
-./scripts/colcon.sh build --symlink-install
+./scripts/colcon.sh build --symlink-install --packages-up-to robot_bringup \
+  --parallel-workers 1 --cmake-args -DBUILD_TESTING=OFF \
+  -DRKNN_API_INCLUDE_DIR="$HOME/sdk/rknn/include"
 source ros2_ws/install/setup.bash
 ```
+
+The command builds hardware runtime targets one package at a time to reduce compiler memory pressure on the Orange Pi. Run development tests using the package test instructions. Adjust `RKNN_API_INCLUDE_DIR` to the actual external header directory.
 
 The installer places the pinned SDK under `$HOME/.local/opt/ydlidar-sdk/1.2.7` by default and uses a temporary directory outside the repository for source and build files. Set `YDLIDAR_SDK_PREFIX` before installation only when choosing another persistent prefix. Keep the SDK and generated build output out of Git source.
 
@@ -123,10 +131,10 @@ Load ROS, the SDK environment, and the workspace in each new shell. Zsh users sh
 
 ### Start the fixed composition
 
-From the repository root, run:
+The current Orange Pi Foxy environment has no `foxglove_bridge` package. Start from the repository root with the optional Bridge excluded:
 
 ```bash
-./scripts/run-tracking.sh
+./scripts/run-tracking.sh with_foxglove:=false
 ```
 
 This thin wrapper loads Foxy, this checkout's `ros2_ws/install`, and the persistent SDK environment, then hands off directly to `ros2 launch robot_bringup tracking.launch.py`. It forwards command-line arguments unchanged.
@@ -138,15 +146,15 @@ cd ~/code/ros-robot
 source /opt/ros/foxy/setup.bash
 source scripts/ydlidar-sdk-env.zsh
 source ros2_ws/install/setup.bash
-ros2 launch robot_bringup tracking.launch.py
+ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
 ```
 
-The only launch argument is `with_foxglove`, which defaults to `true`. To omit the optional Foxglove Bridge:
+The only launch argument is `with_foxglove`, which defaults to `true`. Once a Bridge compatible with the current ROS version is installed, omit the argument or enable it explicitly:
 
 ```bash
-./scripts/run-tracking.sh with_foxglove:=false
+./scripts/run-tracking.sh with_foxglove:=true
 # Or launch directly:
-ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
+ros2 launch robot_bringup tracking.launch.py with_foxglove:=true
 ```
 
 The fixed composition handles the daily camera, detection, lidar, platform TF, and tracking pipeline. The Agent, Voice, and Web video demo has a separate entry point. Do not pass `mode` or per-module switches; this launch does not support them.
