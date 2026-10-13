@@ -31,20 +31,17 @@ source ros2_ws/install/setup.zsh
 预期结果是 `test_ydlidar_ros_interface` 通过。该模式只验证 ROS 接口和节点生命周期，
 不会构建可连接雷达的 `ydlidar_node`。
 
-如果需要构建硬件节点，先安装 YDLIDAR SDK 1.2.7，并让 CMake 找到其中的
-`ydlidar_sdkConfig.cmake`。例如 SDK 安装前缀为 `/path/to/ydlidar-sdk-install` 时：
+如果需要构建硬件节点，使用仓库安装器准备持久的 YDLIDAR SDK 1.2.7，再加载统一的环境脚本：
 
 ```bash
-export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
-export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd ~/code/ros-robot
-find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
+./scripts/install-ydlidar-sdk.sh
+source /opt/ros/foxy/setup.zsh
+source scripts/ydlidar-sdk-env.zsh
 ./scripts/colcon.sh build --packages-select ydlidar
 ```
 
-`find` 应输出 SDK 的 CMake 配置文件路径；如果 SDK 安装布局不同，请按实际位置设置
-`CMAKE_PREFIX_PATH` 或 `ydlidar_sdk_DIR`，并将 SDK 动态库目录加入 `LD_LIBRARY_PATH`。
+安装器默认将 SDK 放在 `$HOME/.local/opt/ydlidar-sdk/1.2.7`，不需要手动设置 CMake 或动态库搜索路径。若使用自定义持久前缀，安装前设置 `YDLIDAR_SDK_PREFIX`；之后仍通过 `scripts/ydlidar-sdk-env.zsh` 加载环境。
 
 ### 在 Orange Pi 上使用 RViz2
 
@@ -54,14 +51,13 @@ find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
 sudo apt install ros-foxy-rviz2
 ```
 
-当前 Orange Pi 终端使用 Zsh，因此要加载 `.zsh` 环境脚本（Bash 用户请将
-`.zsh` 替换为 `.bash`）。SDK 安装在 `/tmp/ydlidar-sdk-install`，启动驱动前
-还需将它的动态库目录加入搜索路径；如果 SDK 安装在其他位置，请相应替换路径：
+当前 Orange Pi 终端使用 Zsh。每个新终端加载 Foxy、持久 SDK 环境和工作区后即可启动驱动；Bash 用户将 ROS 的 `setup.zsh` 换成 `setup.bash`：
 
 ```bash
+cd ~/code/ros-robot
 source /opt/ros/foxy/setup.zsh
-source ~/code/ros-robot/ros2_ws/install/setup.zsh
-export LD_LIBRARY_PATH="/tmp/ydlidar-sdk-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+source scripts/ydlidar-sdk-env.zsh
+source ros2_ws/install/setup.zsh
 ros2 launch ydlidar ydlidar.launch.py
 ```
 
@@ -186,22 +182,21 @@ The expected result is a passing `test_ydlidar_ros_interface`. This mode tests
 the ROS interface and node lifecycle; it does not build the hardware-connected
 `ydlidar_node`.
 
-To build the hardware node, first install YDLIDAR SDK 1.2.7 and make its
-`ydlidar_sdkConfig.cmake` visible to CMake. For an SDK installed under
-`/path/to/ydlidar-sdk-install`:
+To build the hardware node, use the repository installer for the persistent
+YDLIDAR SDK 1.2.7 and load its environment script:
 
 ```bash
-export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
-export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd ~/code/ros-robot
-find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
+./scripts/install-ydlidar-sdk.sh
+source /opt/ros/foxy/setup.zsh
+source scripts/ydlidar-sdk-env.zsh
 ./scripts/colcon.sh build --packages-select ydlidar
 ```
 
-`find` should print the SDK CMake config path. If the SDK uses a different
-layout, set `CMAKE_PREFIX_PATH` or `ydlidar_sdk_DIR` to its actual config
-location, and add its shared-library directory to `LD_LIBRARY_PATH`.
+The installer defaults to `$HOME/.local/opt/ydlidar-sdk/1.2.7`; no manual CMake
+or dynamic-library search paths are needed. To use another persistent prefix,
+set `YDLIDAR_SDK_PREFIX` before installation and continue to load the environment
+with `scripts/ydlidar-sdk-env.zsh`.
 
 ### RViz2 on the Orange Pi
 
@@ -211,15 +206,15 @@ Install RViz2 if it is not already present:
 sudo apt install ros-foxy-rviz2
 ```
 
-The Orange Pi terminal in this setup uses Zsh, so source the `.zsh` setup files
-(Bash users should replace `.zsh` with `.bash`). The SDK is installed under
-`/tmp/ydlidar-sdk-install`, so add its library directory to the loader path before
-starting the driver. If the SDK is installed elsewhere, replace this path:
+The Orange Pi terminal in this setup uses Zsh. In each new terminal, load Foxy,
+the persistent SDK environment, and the workspace before starting the driver.
+Bash users should replace ROS `setup.zsh` with `setup.bash`:
 
 ```bash
+cd ~/code/ros-robot
 source /opt/ros/foxy/setup.zsh
-source ~/code/ros-robot/ros2_ws/install/setup.zsh
-export LD_LIBRARY_PATH="/tmp/ydlidar-sdk-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+source scripts/ydlidar-sdk-env.zsh
+source ros2_ws/install/setup.zsh
 ros2 launch ydlidar ydlidar.launch.py
 ```
 

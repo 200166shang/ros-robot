@@ -144,14 +144,15 @@ class ObjectTrackAcceptanceProbe(Node):
             detections.detections.append(person)
         self.detections_publisher.publish(detections)
 
-    def publish_scan_fixture(self):
+    def publish_scan_fixture(self, valid=True):
         scan = LaserScan()
         scan.header.frame_id = "laser_link"
         scan.angle_min = 0.0
-        scan.angle_increment = 1.0
+        scan.angle_increment = 0.26
         scan.range_min = 0.1
         scan.range_max = 10.0
-        scan.ranges = [0.5]
+        # 已知外参下有效射线投影到约 x=1204、483、38，保留 500..600 的空区间。
+        scan.ranges = [0.5, float("inf"), 0.5, 0.5] if valid else [float("inf")] * 4
         self.scan_publisher.publish(scan)
 
     def publish_tracking_transform(self):
@@ -167,13 +168,13 @@ class ObjectTrackAcceptanceProbe(Node):
         transform.transform.rotation.w = 0.5
         self.transform_broadcaster.sendTransform(transform)
 
-    def start_scan_fixture_stream(self):
+    def start_scan_fixture_stream(self, valid=True):
         """处理大图样例期间持续发布扫描数据。"""
         self._stop_scan_stream.clear()
 
         def publish_scans():
             while not self._stop_scan_stream.is_set():
-                self.publish_scan_fixture()
+                self.publish_scan_fixture(valid)
                 self._stop_scan_stream.wait(0.1)
 
         self._scan_stream_thread = Thread(target=publish_scans, daemon=True)
@@ -305,7 +306,9 @@ def main():
                 for image in node.images
             )
             and any(
-                "angular.z=1.700" in preview for preview in node.previews
+                "angular.z=1.700" in preview
+                and "linear.x=0.068" in preview
+                for preview in node.previews
             ),
             "exact-time annotated image and largest-person command",
         )
@@ -389,6 +392,46 @@ def main():
             raise AcceptanceFailure(
                 "tracking image did not draw range and command status"
             )
+
+        # 图像中断但扫描继续到达时，无效量程必须由扫描回调立即清零两个速度。
+        preview_deadline = time.monotonic() + 1.1
+        while time.monotonic() < preview_deadline:
+            rclpy.spin_once(node, timeout_sec=0.05)
+        node.stop_scan_fixture_stream()
+        previews_before_invalid_scan = len(node.previews)
+        node.start_scan_fixture_stream(valid=False)
+        node.spin_until(
+            lambda: any(
+                "target range unavailable" in preview
+                and "linear.x=0.000" in preview
+                and "angular.z=0.000" in preview
+                for preview in node.previews[previews_before_invalid_scan:]
+            ),
+            3.0,
+            "zero command after fresh invalid scans without another image",
+        )
+        node.stop_scan_fixture_stream()
+        node.start_scan_fixture_stream()
+
+        # 偏离中心的目标没有投影点时，两个速度分量都必须为零。
+        no_match_box = [(500, 100, 600, 700)]
+        previews_before_no_match = len(node.previews)
+        node.publish_pair_until(
+            56,
+            21,
+            no_match_box,
+            lambda: any(
+                "range=infm" in preview
+                and "linear.x=0.000" in preview
+                and "angular.z=0.000" in preview
+                for preview in node.previews[previews_before_no_match:]
+            )
+            and any(
+                (image.header.stamp.sec, image.header.stamp.nanosec) == (56, 21)
+                for image in node.images
+            ),
+            "zero follow command when no scan point matches the target span",
+        )
 
         # 验证靠近左边缘的目标会将角速度限制在 +3.0 rad/s。
         preview_deadline = time.monotonic() + 1.1

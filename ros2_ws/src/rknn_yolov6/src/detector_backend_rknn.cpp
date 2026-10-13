@@ -1,5 +1,10 @@
+#include <fcntl.h>
 #include <rknn_api.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
+#include <cerrno>
 #include <cstdint>
 #include <fstream>
 #include <im2d.hpp>
@@ -7,6 +12,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -15,6 +21,80 @@
 namespace rknn_yolov6 {
 namespace detail {
 namespace {
+
+// 本机系统头文件尚未提供 dma-heap.h；布局和 ioctl 编号遵循 Linux DMA-BUF heaps UAPI。
+// 参考：https://github.com/torvalds/linux/blob/master/include/uapi/linux/dma-heap.h
+struct DmaHeapAllocationData {
+    std::uint64_t len;
+    std::uint32_t fd;
+    std::uint32_t fd_flags;
+    std::uint64_t heap_flags;
+};
+
+// 持有 RK3566 RGA 可寻址的 DMA32 内存及其 RGA 导入句柄。
+class Dma32ImageBuffer final {
+public:
+    // 从低于 4 GiB 的 uncached heap 分配 RGB 内存，并导入 RGA。
+    Dma32ImageBuffer(int width, int height) : width_(width), height_(height), size_(static_cast<std::size_t>(width) * height * 3) {
+        // 1. 分配 DMA32 内存；heap fd 仅供分配，DMA-BUF fd 随对象持有。
+        const int heap_fd = open("/dev/dma_heap/system-uncached-dma32", O_RDWR | O_CLOEXEC);
+        if (heap_fd < 0) {
+            throw std::system_error(errno, std::generic_category(), "open RGA DMA32 heap");
+        }
+
+        DmaHeapAllocationData allocation{};
+        allocation.len             = size_;
+        allocation.fd_flags        = O_RDWR | O_CLOEXEC;
+        const int result           = ioctl(heap_fd, _IOWR('H', 0, DmaHeapAllocationData), &allocation);
+        const int allocation_error = errno;
+        close(heap_fd);
+        if (result < 0) {
+            throw std::system_error(allocation_error, std::generic_category(), "allocate RGA DMA32 buffer");
+        }
+        fd_ = static_cast<int>(allocation.fd);
+
+        // 2. 建立 CPU 映射，供原图拷贝和 RKNN 输入读取。
+        data_ = mmap(nullptr, size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+        if (data_ == MAP_FAILED) {
+            const int mapping_error = errno;
+            close(fd_);
+            throw std::system_error(mapping_error, std::generic_category(), "map RGA DMA32 buffer");
+        }
+        // 3. 导入设备句柄，后续帧复用相同物理内存。
+        handle_ = importbuffer_fd(fd_, static_cast<int>(size_));
+        if (handle_ == 0) {
+            munmap(data_, size_);
+            close(fd_);
+            throw std::runtime_error("import RGA DMA32 buffer failed");
+        }
+    }
+
+    // 先释放设备导入，再解除 CPU 映射并关闭 DMA-BUF。
+    ~Dma32ImageBuffer() {
+        releasebuffer_handle(handle_);
+        munmap(data_, size_);
+        close(fd_);
+    }
+
+    // 禁止复制设备资源的所有权。
+    Dma32ImageBuffer(const Dma32ImageBuffer &) = delete;
+    // 禁止通过赋值复制设备资源的所有权。
+    Dma32ImageBuffer &operator=(const Dma32ImageBuffer &) = delete;
+
+    // 返回借用 DMA 内存的 RGB 视图，缓冲区自身负责资源生命周期。
+    cv::Mat image() const { return cv::Mat(height_, width_, CV_8UC3, data_); }
+
+    // 返回供同步 RGA 调用使用的设备缓冲区描述。
+    rga_buffer_t rga_buffer() const { return wrapbuffer_handle_t(handle_, width_, height_, width_, height_, RK_FORMAT_RGB_888); }
+
+private:
+    int width_;
+    int height_;
+    std::size_t size_;
+    int fd_;
+    void *data_;
+    rga_buffer_handle_t handle_;
+};
 
 // 持有 RKNN 输出张量，并在帧离开两阶段流程时释放运行时资源。
 class RknnFrameResult final : public DetectorBackendFrameResult {
@@ -73,6 +153,7 @@ public:
         try {
             load_labels(config.labels_path);
             initialize_rknn(config.model_path);
+            model_input_ = std::make_unique<Dma32ImageBuffer>(model_width_, model_height_);
             initialize_postprocessor();
         } catch (...) {
             destroy_context();
@@ -89,10 +170,10 @@ public:
         cv::Mat resized;
         const cv::Mat *input_image = &image;
         if (image.cols != model_width_ || image.rows != model_height_) {
-            resized.create(model_height_, model_width_, CV_8UC3);
-            if (!resize_with_rga(image, resized)) {
+            if (!resize_with_rga(image)) {
                 return nullptr;
             }
+            resized     = model_input_->image();
             input_image = &resized;
         }
 
@@ -237,9 +318,17 @@ private:
     }
 
     // 通过 RGA 将 RGB 图像缩放到模型输入尺寸。
-    bool resize_with_rga(const cv::Mat &source, cv::Mat &destination) {
-        auto src = wrapbuffer_virtualaddr_t(const_cast<std::uint8_t *>(source.data), source.cols, source.rows, source.cols, source.rows, RK_FORMAT_RGB_888);
-        auto dst = wrapbuffer_virtualaddr_t(destination.data, destination.cols, destination.rows, destination.cols, destination.rows, RK_FORMAT_RGB_888);
+    bool resize_with_rga(const cv::Mat &source) {
+        // 1. 复用当前相机尺寸的 DMA32 缓冲区；CPU 拷贝将 ROS 图像交给 RGA。
+        if (!source_input_ || source_input_->image().size() != source.size()) {
+            source_input_ = std::make_unique<Dma32ImageBuffer>(source.cols, source.rows);
+        }
+        cv::Mat dma_source = source_input_->image();
+        source.copyTo(dma_source);
+
+        // 2. 两端均使用 DMA32 导入句柄，目标尺寸来自模型张量而非相机。
+        auto src = source_input_->rga_buffer();
+        auto dst = model_input_->rga_buffer();
         const im_rect source_rect{};
         const im_rect destination_rect{};
         const int check_result = imcheck_t(src, dst, rga_buffer_t{}, source_rect, destination_rect, im_rect{}, 0);
@@ -278,6 +367,10 @@ private:
     std::vector<std::uint8_t> model_data_;
     std::vector<std::string> labels_;
     std::unique_ptr<YoloV6Postprocessor> postprocessor_;
+
+    // 仅推理线程访问，缓冲区持续复用到图像尺寸变化或后端销毁。
+    std::unique_ptr<Dma32ImageBuffer> source_input_;
+    std::unique_ptr<Dma32ImageBuffer> model_input_;
 };
 
 }  // namespace
