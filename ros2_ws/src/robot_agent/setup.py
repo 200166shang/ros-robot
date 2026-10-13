@@ -20,6 +20,7 @@ setup(
         'console_scripts': [
             'command_agent = robot_agent.command_agent:main',
             'llm_ros_node = robot_agent.llm_ros_node:main',
+            'online_agent = robot_agent.online_ros_node:main',
         ]
     },
 )
