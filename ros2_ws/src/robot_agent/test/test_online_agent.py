@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, List, Union
+from typing import Iterable, List, Union
 
-from robot_agent.online_agent import OnlineAgent, SimulatedDevices
+from robot_agent.online_agent import DeviceResult, OnlineAgent, SimulatedDevices
 
 
 class FixedProvider:
@@ -55,14 +55,14 @@ def test_different_actions_can_execute_concurrently() -> None:
         def __init__(self) -> None:
             self.ready = threading.Barrier(2)
 
-        def execute(self, name: str, args: List[Union[str, int, float]]) -> Dict[str, Any]:
+        def execute(self, name: str, args: List[Union[str, int, float]]) -> DeviceResult:
             """等待两个动作同时到达，验证并发执行的可观察结果。"""
             self.ready.wait(timeout=2)
-            return {"success": True, "simulated": True, "result": name}
+            return {"success": True, "simulated": True, "result": {"name": name}}
 
     result = OnlineAgent(FixedProvider(output(["head_left", "volume_mute"])), ConcurrentDevices()).submit("做两个动作")
     assert result["success"]
-    assert {a["result"] for a in result["actions"]} == {"head_left", "volume_mute"}
+    assert {a["result"]["name"] for a in result["actions"]} == {"head_left", "volume_mute"}
 
 
 def test_invalid_unknown_and_unimplemented_actions_never_report_success() -> None:

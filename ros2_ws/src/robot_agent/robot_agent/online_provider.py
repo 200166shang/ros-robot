@@ -28,7 +28,7 @@ def load_config(path: Union[str, Path]) -> Dict[str, Any]:
     if not path.is_absolute():
         raise ValueError("configuration path must be absolute")
     path = path.resolve()
-    # Prevent accidental use of a checked-out credential file.
+    # 凭证配置必须留在源码之外，避免误提交。
     if any((parent / ".git").exists() for parent in path.parents):
         raise ValueError("configuration must be outside a source checkout")
     with path.open(encoding="utf-8") as stream:
@@ -36,13 +36,6 @@ def load_config(path: Union[str, Path]) -> Dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("invalid configuration")
     return config
-
-
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request: Request, file_pointer: IO[bytes], code: int, message: str, headers: HTTPMessage, new_url: str) -> Optional[Request]:
-        """拒绝重定向，防止认证凭证被转发。"""
-        # Never forward a bearer token to a redirect target.
-        return None
 
 
 class OnlineProvider:
@@ -90,8 +83,19 @@ class OnlineProvider:
             raw = response.read(1024 * 1024 + 1)
         if len(raw) > 1024 * 1024:
             raise ValueError("provider response too large")
-        result = json.loads(raw)
-        content = result["choices"][0]["message"]["content"]
-        if not isinstance(content, str):
-            raise ValueError("missing completion text")
-        return content
+        return _completion_text(raw)
+
+
+def _completion_text(raw: bytes) -> str:
+    """从在线 HTTP 响应提取协议文本，格式错误交由请求边界处理。"""
+    result = json.loads(raw)
+    content = result["choices"][0]["message"]["content"]
+    if not isinstance(content, str):
+        raise ValueError("missing completion text")
+    return content
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request: Request, file_pointer: IO[bytes], code: int, message: str, headers: HTTPMessage, new_url: str) -> Optional[Request]:
+        """拒绝重定向，防止认证凭证被转发。"""
+        return None
