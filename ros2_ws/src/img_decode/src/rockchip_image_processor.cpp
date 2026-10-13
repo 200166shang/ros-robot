@@ -1,8 +1,12 @@
 // clang-format off
 #include <cstddef>
 #include <cstring>
+#include <fcntl.h>
 #include <RgaUtils.h>
 #include <im2d.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
 // clang-format on
 
 #include <rockchip/mpp_buffer.h>
@@ -15,9 +19,12 @@
 #include <rockchip/rk_mpi_cmd.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cerrno>
 #include <opencv2/core/fast_math.hpp>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 
 #include "img_decode/image_processor.hpp"
 
@@ -28,6 +35,93 @@ constexpr uint32_t kStrideAlignment = 16;
 
 // 将像素尺寸按 MPP 解码输出要求对齐。
 uint32_t align_dimension(uint32_t value) { return (value + kStrideAlignment - 1) & ~(kStrideAlignment - 1); }
+
+// 持有 RGA 可寻址的 RGB DMA32 缓冲区及导入句柄。
+class Dma32RgbBuffer final {
+public:
+    // 从系统 DMA32 heap 分配可供 RGA 访问的 RGB 缓冲区。
+    Dma32RgbBuffer(uint32_t width, uint32_t height)
+        : width_(width), height_(height), stride_((width + 3U) & ~3U), size_(static_cast<size_t>(stride_) * height_ * 3) {
+        const int heap_fd = open("/dev/dma_heap/system-uncached-dma32", O_RDWR | O_CLOEXEC);
+        if (heap_fd < 0) {
+            throw std::system_error(errno, std::generic_category(), "open RGA DMA32 heap");
+        }
+
+        DmaHeapAllocationData allocation{};
+        allocation.len             = size_;
+        allocation.fd_flags        = O_RDWR | O_CLOEXEC;
+        const int result           = ioctl(heap_fd, _IOWR('H', 0, DmaHeapAllocationData), &allocation);
+        const int allocation_error = errno;
+        close(heap_fd);
+        if (result < 0) {
+            throw std::system_error(allocation_error, std::generic_category(), "allocate RGA DMA32 buffer");
+        }
+        fd_ = static_cast<int>(allocation.fd);
+
+        data_ = mmap(nullptr, size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+        if (data_ == MAP_FAILED) {
+            const int mapping_error = errno;
+            close(fd_);
+            fd_ = -1;
+            throw std::system_error(mapping_error, std::generic_category(), "map RGA DMA32 buffer");
+        }
+
+        handle_ = importbuffer_fd(fd_, static_cast<int>(size_));
+        if (handle_ == 0) {
+            munmap(data_, size_);
+            close(fd_);
+            data_ = MAP_FAILED;
+            fd_   = -1;
+            throw std::runtime_error("import RGA DMA32 buffer failed");
+        }
+    }
+
+    // 释放 RGA 导入句柄、CPU 映射和 DMA-BUF fd。
+    ~Dma32RgbBuffer() {
+        releasebuffer_handle(handle_);
+        munmap(data_, size_);
+        close(fd_);
+    }
+
+    // 禁止复制 DMA-BUF 资源所有权。
+    Dma32RgbBuffer(const Dma32RgbBuffer &) = delete;
+    // 禁止赋值复制 DMA-BUF 资源所有权。
+    Dma32RgbBuffer &operator=(const Dma32RgbBuffer &) = delete;
+
+    // 返回可供 CPU 拷贝像素的缓冲区起始地址。
+    uint8_t *data() const { return static_cast<uint8_t *>(data_); }
+
+    // 返回缓冲区可见宽度。
+    uint32_t width() const { return width_; }
+
+    // 返回缓冲区可见高度。
+    uint32_t height() const { return height_; }
+
+    // 返回包含 RGB 行填充的像素 stride。
+    uint32_t stride() const { return stride_; }
+
+    // 返回含可见宽度和对齐 stride 的 RGA 缓冲区描述。
+    rga_buffer_t rga_buffer() const {
+        return wrapbuffer_handle_t(
+            handle_, static_cast<int>(width_), static_cast<int>(height_), static_cast<int>(stride_), static_cast<int>(height_), RK_FORMAT_RGB_888);
+    }
+
+private:
+    struct DmaHeapAllocationData {
+        uint64_t len;
+        uint32_t fd;
+        uint32_t fd_flags;
+        uint64_t heap_flags;
+    };
+
+    uint32_t width_;
+    uint32_t height_;
+    uint32_t stride_;
+    size_t size_;
+    int fd_{-1};
+    void *data_{MAP_FAILED};
+    rga_buffer_handle_t handle_{0};
+};
 
 class RockchipImageProcessor final : public ImageProcessor {
 public:
@@ -157,7 +251,7 @@ private:
         }
     }
 
-    // 读取 MPP 返回的 RGB frame 并通过 RGA 写入连续的缩放图像。
+    // 读取 MPP RGB frame；同尺寸时按 stride 拷贝，缩放时交由 RGA 处理。
     bool resize_frame(MppFrame frame, double scale, DecodedImage &image, std::string &error) {
         // 读取解码图像的可见尺寸、对齐 stride 和底层像素缓冲区。
         const uint32_t width                    = mpp_frame_get_width(frame);
@@ -182,27 +276,37 @@ private:
         image.height = static_cast<uint32_t>(std::max(1, cvRound(height * scale)));
         image.rgb.resize(static_cast<size_t>(image.width) * image.height * 3);
 
-        // RGA 的 RGB888 目标 stride 需按像素对齐；尺寸不对齐时先写入临时缓冲区。
-        const uint32_t destination_stride = (image.width + 3U) & ~3U;
-        std::vector<uint8_t> padded_rgb;
-        uint8_t *destination_data = image.rgb.data();
-        if (destination_stride != image.width) {
-            padded_rgb.resize(static_cast<size_t>(destination_stride) * image.height * 3);
-            destination_data = padded_rgb.data();
+        const size_t output_row_bytes = static_cast<size_t>(image.width) * 3;
+        if (image.width == width && image.height == height) {
+            // 相机当前配置不缩放；逐行跳过 MPP 对齐填充，避免无意义的 RGA 地址映射。
+            for (uint32_t row = 0; row < height; ++row) {
+                std::copy_n(pixels + row * horizontal_stride_bytes, output_row_bytes, image.rgb.data() + row * output_row_bytes);
+            }
+            return true;
         }
 
-        // 将 MPP 源帧和 RGA 目标缓冲区包装为 RGA 描述，并检查是否可执行。
-        rga_buffer_t source =
-            wrapbuffer_virtualaddr(pixels, width, height, RK_FORMAT_RGB_888, static_cast<int>(horizontal_stride_pixels), static_cast<int>(vertical_stride));
-        rga_buffer_t destination = wrapbuffer_virtualaddr(
-            destination_data, image.width, image.height, RK_FORMAT_RGB_888, static_cast<int>(destination_stride), static_cast<int>(image.height));
+        // 1. 将 MPP stride 帧拷贝到 RGA 支持的 DMA32 源缓冲区。
+        if (!source_buffer_ || source_buffer_->width() != width || source_buffer_->height() != height) {
+            source_buffer_ = std::make_unique<Dma32RgbBuffer>(width, height);
+        }
+        uint8_t *source_data          = source_buffer_->data();
+        const size_t source_row_bytes = static_cast<size_t>(source_buffer_->stride()) * 3;
+        for (uint32_t row = 0; row < height; ++row) {
+            std::copy_n(pixels + row * horizontal_stride_bytes, static_cast<size_t>(width) * 3, source_data + row * source_row_bytes);
+        }
+
+        // 2. 使用 DMA32 目标缓冲区执行真正的缩放；RGA 不直接映射 MPP 或 std::vector 虚拟地址。
+        if (!destination_buffer_ || destination_buffer_->width() != image.width || destination_buffer_->height() != image.height) {
+            destination_buffer_ = std::make_unique<Dma32RgbBuffer>(image.width, image.height);
+        }
+        const rga_buffer_t source      = source_buffer_->rga_buffer();
+        const rga_buffer_t destination = destination_buffer_->rga_buffer();
         im_rect source_rect{};
         im_rect destination_rect{};
         IM_STATUS status = imcheck(source, destination, source_rect, destination_rect, IM_SYNC);
 
-        // 尺寸不变时直接复制，否则由 RGA 执行缩放。
         if (status == IM_STATUS_NOERROR) {
-            status = image.width == width && image.height == height ? imcopy(source, destination) : imresize(source, destination);
+            status = imresize(source, destination);
         }
         const bool resize_succeeded = status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
         if (!resize_succeeded) {
@@ -211,13 +315,11 @@ private:
             return false;
         }
 
-        // 去掉临时缓冲区每行的 stride 填充，形成 ROS rgb8 所需的紧凑像素排列。
-        if (destination_stride != image.width) {
-            const size_t output_row_bytes = static_cast<size_t>(image.width) * 3;
-            const size_t padded_row_bytes = static_cast<size_t>(destination_stride) * 3;
-            for (uint32_t row = 0; row < image.height; ++row) {
-                std::copy_n(padded_rgb.data() + row * padded_row_bytes, output_row_bytes, image.rgb.data() + row * output_row_bytes);
-            }
+        // 3. 从 DMA32 输出逐行取出可见像素，形成 ROS rgb8 的紧凑排列。
+        const size_t destination_row_bytes = static_cast<size_t>(destination_buffer_->stride()) * 3;
+        const uint8_t *destination_data    = destination_buffer_->data();
+        for (uint32_t row = 0; row < image.height; ++row) {
+            std::copy_n(destination_data + row * destination_row_bytes, output_row_bytes, image.rgb.data() + row * output_row_bytes);
         }
         return true;
     }
@@ -267,6 +369,8 @@ private:
     MppPacket packet_{nullptr};
     MppFrame frame_{nullptr};
     uint8_t *packet_data_{nullptr};
+    std::unique_ptr<Dma32RgbBuffer> source_buffer_;
+    std::unique_ptr<Dma32RgbBuffer> destination_buffer_;
 };
 
 }  // namespace

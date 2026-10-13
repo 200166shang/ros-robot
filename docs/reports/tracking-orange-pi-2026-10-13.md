@@ -7,11 +7,12 @@
 | 项目 | 实际观察 |
 |---|---|
 | 持久 SDK 和硬件程序 | 薄包装成功启动 Camera、Decoder、Detector、YDLIDAR、平台 TF、ObjectTrack 六个进程；没有缺失共享库或可执行文件。SDK 重启后加载由操作者在 #48 确认。 |
-| 相机与检测 | `/dev/video0` MJPEG 1280×720，经 MPP 解码后进行 RKNN 推理。模型输入为 640×352；输出检测坐标和图像保持原始 1280×720，不把模型尺寸当作原图坐标。 |
-| RGA | 原先真实 ROS 图像引发 `RGA_MMU unsupported memory larger than 4G` 和 resize 错误；改用持久 DMA32 源/目标缓冲后，分进程 10 帧探针及整套真实相机运行未再出现该 resize 错误。 |
+| 相机与检测 | `/dev/video0` MJPEG 1280×720，经 MPP 解码后进行 RKNN 推理。模型输入为 640×352；输出检测坐标和图像保持原始 1280×720，不把模型尺寸当作原图坐标。修复后实机记录相机发布约 24 fps、检测约 6 fps。 |
+| MPP 解码输出 | 初次启动时报 `RGA_MMU unsupported memory larger than 4G`，导致解码器未发布 `/camera/image_raw`。根因是 `scale=1.0` 仍调用 RGA `imcopy` 映射 MPP 和 vector 虚拟地址。等尺寸帧现按 MPP stride 直接逐行拷贝；真正缩放时两端使用 DMA32 缓冲区。修复后完整 launch 中 `/camera/image_raw` 有发布者，解码和检测持续出帧，未再出现该错误。 |
+| RKNN 输入缩放 | Detector 将普通 ROS 图像复制到持久 DMA32 源/目标缓冲后执行 RGA 缩放；分进程 10 帧探针及真实相机运行均未再出现 `RGA_MMU unsupported memory larger than 4G`。 |
 | 雷达与 TF | F2 串口扫描正常；Tracker 日志确认 `loaded transform camera <- laser_link`。一个 15 秒观察窗口收到 91 帧 `/scan`，末帧 255 个采样、144 个有效量程。 |
 | 投影与距离 | 真实 `/camera/image_det_track` 中，绿色扫描点沿画面中部横向分布；选中的检测框曾显示约 0.10 m 的距离估计。此帧模型把沙发上物体误识别为 person，证明真实扫描的投影和距离计算，不证明真人识别或距离精度。投影仍沿用平台外参与相机参数，未进行标定精度验收。 |
-| 服务顺序 | 同步输入存在但 Fusion 关闭时，Follow 返回 `success=false`、`enable LiDAR fusion first`。Fusion 开启后返回成功；新鲜扫描到达后 Follow 返回成功。 |
+| 服务顺序 | Fusion 开启后，解码器修复后的实机 `/tracking/set_enabled` 返回 `success=true`、`Follow enabled`。此时 `dry_run=true`，只记录零速度预览，没有发布底盘命令。 |
 | Fusion 关闭 | Follow 开启期间关闭 Fusion，日志产生 `linear.x=0.000 angular.z=0.000; not published`，随后 `tracking standby because LiDAR fusion was disabled`；再次开启 Follow 被拒绝。 |
 | 扫描停止且同步图像停止 | 对本次 Detector 与 YDLIDAR 子进程发 SIGINT，其他四个进程继续运行；没有新的同步检测输入时，独立定时器仍记录 `tracking waiting for LiDAR range` 的两个零速度。 |
 | 生命周期 | 上述两个子进程没有重启，也未结束其他节点。随后退出 Launch，剩余四个自建进程全部清理；单独启动的 ROSBridge（PID 57161）仍监听 9090，没有被组合接管。 |
@@ -39,15 +40,18 @@ ros2 service call /tracking/set_enabled std_srvs/srv/SetBool "{data: true}"
 
 ## 本次修复依据
 
-1. 普通虚拟内存的实际物理页可能超出板上 RGA 的 32 位 DMA 寻址范围。使用 `system-uncached-dma32` 堆，并由局部资源对象持有 fd、映射和 RGA handle；失败明确报告，没有 CPU 降级。
-2. Foxy 的 `getRPY()` 在平台 `pitch=-π/2` 时丢失旋转，扫描投影退化为中心射线。直接传递 TF 旋转矩阵，保留 `R*p+t` 的完整坐标变换。
-3. 每帧按当前目标重新筛选新鲜投影点；没有有效目标量程时，线速度和角速度均为零，不使用旧值或 `range_max`。
-4. 新鲜扫描也可能没有有效目标量程；扫描回调立即清零缓存命令并撤销非零输出，不等待下一帧图像或扫描超时。公共 ROS 专项场景由 RED（没有零命令）转为 GREEN；完整探针和 `ctest` 再次通过。
-5. 启动 TF 等待结束后，Fusion 服务重新查询实际 TF，允许操作者在独立模块启动就绪后重试。
+1. 解码器配置为 `scale=1.0` 时无需 RGA。按 MPP 的字节 stride 直接复制可见 RGB 行，避免把高位 MPP 虚拟地址传入 RGA。
+2. 真正需要缩放时，MPP 虚拟地址和 `std::vector` 地址同样不适合板上 RGA。将可见源像素复制到 `system-uncached-dma32`，RGA 写入 DMA32 输出后再整理为紧凑 ROS `rgb8` 数据；资源对象持有 DMA-BUF fd、CPU 映射和 RGA handle。
+3. Detector 的 RGA 调整也使用持久 DMA32 源/目标缓冲，避免普通虚拟内存的实际物理页超出板上 RGA 的 32 位 DMA 寻址范围。
+4. Foxy 的 `getRPY()` 在平台 `pitch=-π/2` 时丢失旋转，扫描投影退化为中心射线。直接传递 TF 旋转矩阵，保留 `R*p+t` 的完整坐标变换。
+5. 每帧按当前目标重新筛选新鲜投影点；没有有效目标量程时，线速度和角速度均为零，不使用旧值或 `range_max`。
+6. 新鲜扫描也可能没有有效目标量程；扫描回调立即清零缓存命令并撤销非零输出，不等待下一帧图像或扫描超时。公共 ROS 专项场景由 RED（没有零命令）转为 GREEN；完整探针和 `ctest` 再次通过。
+7. 启动 TF 等待结束后，Fusion 服务重新查询实际 TF，允许操作者在独立模块启动就绪后重试。
 
 ## 验证边界与操作者确认
 
 - 操作者明确要求跳过两个人的真实最大目标选择、人工离开/返回场景；相应算法行为由受控公开接口探针验证，未声称完成这些物理场景。
+- 本次图像解码器的板端运行使用 `scale=1.0`，覆盖了此前失败的等尺寸路径；真正缩放时的 DMA32 MPP/RGA 分支已编译，但本次没有在板端切换比例运行该分支。
 - 当前 Foxy 未安装 `foxglove_bridge`。操作者确认使用已有 ROSBridge；真实观察断连/重连通过该协议完成。`with_foxglove:=true` 的包分支由 Launch 测试检查，本板没有执行原生 Foxglove Bridge 启动。
 - 已安装 ROSBridge 对同一话题混用网页的 `cbor-raw` 和 JSON 订阅会报转换错误；观察探针与网页统一使用 `cbor-raw` 后通过。此环境问题没有通过修改跟踪逻辑掩盖。
 - RKNN runtime 仍打印本板不支持 `rknn_set_core_mask` 的诊断；推理实际正常。报告中的“resize 错误消失”不表示所有外部库诊断都消失。
