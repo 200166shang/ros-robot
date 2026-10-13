@@ -18,7 +18,6 @@
 硬件节点并查找 YDLIDAR SDK 1.2.7，因此在没有 SDK 的环境中，构建测试时要关闭硬件节点：
 
 ```bash
-export ROS_DOMAIN_ID=88  # 使用空闲域，避免连接到现场运行的 ROS 节点
 source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
 ./scripts/colcon.sh build --packages-select ydlidar \
@@ -32,40 +31,20 @@ source ros2_ws/install/setup.zsh
 预期结果是 `test_ydlidar_ros_interface` 通过。该模式只验证 ROS 接口和节点生命周期，
 不会构建可连接雷达的 `ydlidar_node`。
 
-### 安装固定版本 YDLIDAR SDK
-
-安装入口从官方 YDLIDAR SDK 仓库获取固定的 `V1.2.7`，在临时目录构建共享库，
-再安装到用户拥有、重启后仍保留的 `~/.local/opt/ydlidar-sdk/1.2.7`。重复运行时，
-已验证的安装会直接复用。下载、源码和构建目录不会写进仓库。
+如果需要构建硬件节点，先安装 YDLIDAR SDK 1.2.7，并让 CMake 找到其中的
+`ydlidar_sdkConfig.cmake`。例如 SDK 安装前缀为 `/path/to/ydlidar-sdk-install` 时：
 
 ```bash
+export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
+export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd ~/code/ros-robot
-./scripts/install-ydlidar-sdk.sh
+find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
+./scripts/colcon.sh build --packages-select ydlidar
 ```
 
-如需使用其他持久前缀，在安装和后续每个终端中设置相同的环境变量：
-
-```bash
-export YDLIDAR_SDK_PREFIX="$HOME/opt/ydlidar-sdk/1.2.7"
-./scripts/install-ydlidar-sdk.sh
-```
-
-安装脚本需要 `git`、CMake、可用的 C/C++ 编译器和联网能力。安装失败会以非零状态退出并说明失败阶段；
-修复网络、工具或写入权限后可重新运行。不要将 SDK 前缀设在仓库内或临时目录。
-
-每个用于构建或运行驱动的 Zsh 终端都要加载 ROS、工作区和 SDK 环境。首次构建时工作区尚未生成，
-只需加载 ROS 和 SDK 环境：
-
-```zsh
-source /opt/ros/foxy/setup.zsh
-source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
-./scripts/colcon.sh build --packages-select ydlidar \
-  --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=ON
-```
-
-SDK 环境脚本设置 CMake 包搜索路径、链接器路径和运行时动态库搜索路径。
-显式启用硬件节点可覆盖接口测试留下的 `OFF` CMake 缓存值。首次构建后，
-按下一节加载工作区并独立启动驱动。
+`find` 应输出 SDK 的 CMake 配置文件路径；如果 SDK 安装布局不同，请按实际位置设置
+`CMAKE_PREFIX_PATH` 或 `ydlidar_sdk_DIR`，并将 SDK 动态库目录加入 `LD_LIBRARY_PATH`。
 
 ### 在 Orange Pi 上使用 RViz2
 
@@ -75,29 +54,16 @@ SDK 环境脚本设置 CMake 包搜索路径、链接器路径和运行时动态
 sudo apt install ros-foxy-rviz2
 ```
 
-每个运行终端都加载 ROS、已构建的工作区和 SDK 环境。SDK 安装在持久前缀，
-不会依赖 `/tmp` 或安装时的临时构建目录：
+当前 Orange Pi 终端使用 Zsh，因此要加载 `.zsh` 环境脚本（Bash 用户请将
+`.zsh` 替换为 `.bash`）。SDK 安装在 `/tmp/ydlidar-sdk-install`，启动驱动前
+还需将它的动态库目录加入搜索路径；如果 SDK 安装在其他位置，请相应替换路径：
 
 ```bash
 source /opt/ros/foxy/setup.zsh
 source ~/code/ros-robot/ros2_ws/install/setup.zsh
-source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
+export LD_LIBRARY_PATH="/tmp/ydlidar-sdk-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ros2 launch ydlidar ydlidar.launch.py
 ```
-
-驱动独立运行并持续发布 `/scan`，不需要启动 tracker。用 `ldd` 检查硬件节点没有
-`not found` 依赖，再用 `ros2 topic hz /scan` 确认雷达数据；`ros2 topic echo /scan`
-可查看消息内容。驱动的 `start_scan`/`stop_scan` 控制雷达采集，tracker 的 LiDAR
-fusion 开关只控制 tracker 是否使用扫描数据，两者职责不同。
-
-```bash
-ldd "$(ros2 pkg prefix ydlidar)/lib/ydlidar/ydlidar_node"
-ros2 topic hz /scan
-```
-
-自动化安装测试使用替代工具，不会下载或编译真实 SDK，也不会连接物理雷达。
-真实板端构建、`ldd`、`/scan` 发布和设备重启后重新加载环境的结果要另行记录；
-在这些步骤完成前，不应标记板端验收通过。
 
 在另一个已加载相同环境的终端中打开预设视图：
 
@@ -206,7 +172,6 @@ looks for YDLIDAR SDK 1.2.7, so disable that node when building the test without
 the SDK:
 
 ```bash
-export ROS_DOMAIN_ID=88  # Use an unused domain to isolate the test from live ROS nodes.
 source /opt/ros/foxy/setup.zsh
 cd ~/code/ros-robot
 ./scripts/colcon.sh build --packages-select ydlidar \
@@ -221,46 +186,22 @@ The expected result is a passing `test_ydlidar_ros_interface`. This mode tests
 the ROS interface and node lifecycle; it does not build the hardware-connected
 `ydlidar_node`.
 
-### Install the pinned YDLIDAR SDK
-
-The installer fetches official upstream tag `V1.2.7`, builds a shared library
-in a temporary directory, and installs it under the user-owned persistent
-prefix `~/.local/opt/ydlidar-sdk/1.2.7`. A verified install is reused on later
-runs. The downloaded source and build tree stay outside the repository.
+To build the hardware node, first install YDLIDAR SDK 1.2.7 and make its
+`ydlidar_sdkConfig.cmake` visible to CMake. For an SDK installed under
+`/path/to/ydlidar-sdk-install`:
 
 ```bash
+export YDLIDAR_SDK_PREFIX=/path/to/ydlidar-sdk-install
+export CMAKE_PREFIX_PATH="$YDLIDAR_SDK_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+export LD_LIBRARY_PATH="$YDLIDAR_SDK_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd ~/code/ros-robot
-./scripts/install-ydlidar-sdk.sh
+find "$YDLIDAR_SDK_PREFIX" -name ydlidar_sdkConfig.cmake
+./scripts/colcon.sh build --packages-select ydlidar
 ```
 
-To choose another persistent prefix, set the same environment variable for the
-installer and each later terminal:
-
-```bash
-export YDLIDAR_SDK_PREFIX="$HOME/opt/ydlidar-sdk/1.2.7"
-./scripts/install-ydlidar-sdk.sh
-```
-
-The installer requires `git`, CMake, a C/C++ compiler, and network access. It
-returns a nonzero status with the failed stage; fix network, tool, or write
-permission problems and run it again. Keep the SDK prefix outside the
-repository and away from temporary directories.
-
-In each Zsh terminal used to build or run the driver, load ROS, the workspace,
-and the SDK environment. For the first build, the workspace has not been
-generated yet, so load only ROS and the SDK environment:
-
-```zsh
-source /opt/ros/foxy/setup.zsh
-source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
-./scripts/colcon.sh build --packages-select ydlidar \
-  --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=ON
-```
-
-The environment script sets CMake package, linker, and runtime shared-library
-search paths. Explicitly enable the hardware node to override an `OFF` CMake
-cache value left by the interface-only test build. After the first build,
-follow the next section to load the workspace and start the standalone driver.
+`find` should print the SDK CMake config path. If the SDK uses a different
+layout, set `CMAKE_PREFIX_PATH` or `ydlidar_sdk_DIR` to its actual config
+location, and add its shared-library directory to `LD_LIBRARY_PATH`.
 
 ### RViz2 on the Orange Pi
 
@@ -270,33 +211,17 @@ Install RViz2 if it is not already present:
 sudo apt install ros-foxy-rviz2
 ```
 
-Load ROS, the built workspace, and the SDK environment in each terminal. The
-SDK lives under a persistent prefix and does not depend on `/tmp` or the
-temporary build tree:
+The Orange Pi terminal in this setup uses Zsh, so source the `.zsh` setup files
+(Bash users should replace `.zsh` with `.bash`). The SDK is installed under
+`/tmp/ydlidar-sdk-install`, so add its library directory to the loader path before
+starting the driver. If the SDK is installed elsewhere, replace this path:
 
 ```bash
 source /opt/ros/foxy/setup.zsh
 source ~/code/ros-robot/ros2_ws/install/setup.zsh
-source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
+export LD_LIBRARY_PATH="/tmp/ydlidar-sdk-install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ros2 launch ydlidar ydlidar.launch.py
 ```
-
-The driver runs independently and publishes `/scan`; it does not need the
-tracker. Check that `ldd` reports no `not found` dependency, then use
-`ros2 topic hz /scan` to confirm data. `ros2 topic echo /scan` displays the
-messages. The driver's `start_scan`/`stop_scan` controls lidar acquisition;
-the tracker's LiDAR fusion switch only controls whether the tracker uses scan
-data.
-
-```bash
-ldd "$(ros2 pkg prefix ydlidar)/lib/ydlidar/ydlidar_node"
-ros2 topic hz /scan
-```
-
-Automated installer tests use replacement tools, so they do not download or
-build the real SDK or connect a physical lidar. Record the Orange Pi build,
-`ldd`, `/scan`, and post-reboot environment reload results separately. Do not
-mark board acceptance complete until those checks have been recorded.
 
 In another terminal with the same setup sourced, open the saved RViz2 view:
 

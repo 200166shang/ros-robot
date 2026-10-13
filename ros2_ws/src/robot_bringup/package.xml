@@ -10,10 +10,13 @@
   <exec_depend>img_decode</exec_depend>
   <exec_depend>rknn_yolov6</exec_depend>
   <exec_depend>object_track</exec_depend>
+  <exec_depend>ydlidar</exec_depend>
   <exec_depend>robot_agent</exec_depend>
   <exec_depend>web_video_server</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
@@ -22,6 +25,9 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>robot_interfaces</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend>
   <exec_depend>robot_voice</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>launch</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

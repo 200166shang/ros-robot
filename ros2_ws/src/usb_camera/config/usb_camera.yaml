@@ -1,0 +1,11 @@
+usb_camera:
+  ros__parameters:
+    device_candidates:
+      - /dev/video0
+    topic: /image_raw/compressed
+    frame_id: camera
+    width: 1280
+    height: 720
+    fps: 30
+    frame_divider: 1
+    lazy: false

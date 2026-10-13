@@ -77,15 +77,18 @@ private:
 
 }  // namespace
 
+// 初始化 ROS 节点并把设备初始化失败转换为进程失败状态。
 int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
+    int exit_code = 0;
     try {
         // 运行链路：ROS 参数 -> YdLidarNode -> SDK adapter -> USB 雷达；节点对外发布 scan。
         auto node = std::make_shared<YdLidarNode>(std::make_unique<YdLidarSdkSource>());
         rclcpp::spin(node);
     } catch (const std::exception &error) {
         RCLCPP_FATAL(rclcpp::get_logger("ydlidar"), "YDLIDAR driver failed: %s", error.what());
+        exit_code = 1;
     }
     rclcpp::shutdown();
-    return 0;
+    return exit_code;
 }

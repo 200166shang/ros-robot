@@ -47,7 +47,6 @@ class DemoConfig:
     llama_bin: Path
     llama_model: Path
     llama_model_alias: str
-    vision_model: Path
     voice_wav: Path
     llama_port: int
     web_port: int
@@ -178,13 +177,6 @@ def load_config(
             )
         ),
         llama_model_alias=model_alias,
-        vision_model=Path(
-            _environment_value(
-                env,
-                "DEMO_VISION_MODEL",
-                "/home/orangepi/models/ros-robot/vision/yolov6n_85.rknn",
-            )
-        ),
         voice_wav=Path(
             _environment_value(
                 env,
@@ -244,8 +236,6 @@ def check_local_assets(config: DemoConfig) -> None:
         )
 
     _require_nonempty_file(config.llama_model, "Qwen 模型文件")
-    _require_nonempty_file(config.vision_model, "视觉 RKNN 模型文件")
-
     foxy_setup = Path("/opt/ros/foxy/setup.bash")
     workspace_setup = config.workspace / "install" / "setup.bash"
     if not foxy_setup.is_file():
@@ -688,7 +678,6 @@ def launch_ros(
         "person_tracking_demo.launch.py",
         "audio_source:={}".format(config.audio_source),
         "input_wav_path:={}".format(config.voice_wav),
-        "model_path:={}".format(config.vision_model),
         "run_acceptance_probe:={}".format(
             "true" if config.run_acceptance_probe else "false"
         ),

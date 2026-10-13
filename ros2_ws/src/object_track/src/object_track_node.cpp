@@ -21,7 +21,8 @@
 #include <robot_interfaces/msg/dets.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
-#include <std_msgs/msg/bool.hpp>
+#include <std_srvs/srv/set_bool.hpp>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,6 +35,7 @@ namespace {
 using Image                      = sensor_msgs::msg::Image;
 using Detections                 = robot_interfaces::msg::Dets;
 using LaserScan                  = sensor_msgs::msg::LaserScan;
+using SetBool                    = std_srvs::srv::SetBool;
 using ExactTimePolicy            = message_filters::sync_policies::ExactTime<Image, Detections>;
 using ImageDetectionSynchronizer = message_filters::Synchronizer<ExactTimePolicy>;
 
@@ -127,8 +129,8 @@ const robot_interfaces::msg::Det* select_target(
 // 接收图像与检测，按 header stamp 精确同步后生成跟踪输出。
 class ObjectTrackNode : public rclcpp::Node {
 public:
-    // 初始化链路：读取参数 → start_lidar_transform_wait → 创建输出/同步器 → 接入两个控制订阅。
-    ObjectTrackNode() : Node("object_track"), tf_buffer_(get_clock()), tf_listener_(tf_buffer_) {
+    // 初始化链路：读取参数 → 等待平台 TF → 创建输出/同步器和控制服务。
+    ObjectTrackNode() : Node("object_track"), tf_buffer_(get_clock()) {
         // 1. 读取输入输出话题、目标筛选条件、角速度控制参数和 dry-run 开关。
         image_topic_                       = declare_parameter<std::string>("image_topic", "/camera/image_det");
         detections_topic_                  = declare_parameter<std::string>("input_topic", "/ai_msg_det");
@@ -153,11 +155,18 @@ public:
         camera_frame_                      = declare_parameter<std::string>("camera_frame", "camera");
         laser_frame_                       = declare_parameter<std::string>("laser_frame", "laser_link");
         const double transform_timeout_sec = declare_parameter<double>("transform_timeout_sec", 10.0);
+        lidar_scan_timeout_sec_            = declare_parameter<double>("lidar_scan_timeout_sec", 1.0);
 
-        // 2. 启动固定雷达到相机外参的等待；轮询使用 wall timer，不阻塞后续订阅创建。
+        if (!std::isfinite(lidar_scan_timeout_sec_) || lidar_scan_timeout_sec_ <= 0.0) {
+            RCLCPP_FATAL(get_logger(), "lidar_scan_timeout_sec must be finite and greater than zero");
+            throw std::invalid_argument("lidar_scan_timeout_sec must be greater than zero");
+        }
+
+        // 所有运行都使用距离安全门控；TF 可晚于节点到达，因此由定时器异步等待。
+        tf_listener_ = std::make_unique<tf2_ros::TransformListener>(tf_buffer_);
         start_lidar_transform_wait(transform_timeout_sec);
 
-        // 3. 创建 RosVelocityOutputPort 和标注 publisher；image/detections subscriber 接入 ExactTime 同步器并绑定 sync_callback。
+        // 2. 创建 RosVelocityOutputPort 和标注 publisher；image/detections subscriber 接入 ExactTime 同步器并绑定 sync_callback。
         output_                     = std::make_unique<RosVelocityOutputPort>(*this, output_topic_);
         const auto sensor_qos       = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
         const auto image_output_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
@@ -167,14 +176,19 @@ public:
         synchronizer_ = std::make_unique<ImageDetectionSynchronizer>(ExactTimePolicy(kSynchronizationQueueSize), image_subscription_, detections_subscription_);
         synchronizer_->registerCallback(std::bind(&ObjectTrackNode::sync_callback, this, std::placeholders::_1, std::placeholders::_2));
 
-        // 4. 两个 Bool 订阅分别调用 set_enabled、set_lidar_enabled；后者在 /enable_lidar=true 时才创建扫描订阅。
-        enable_subscription_ =
-            create_subscription<std_msgs::msg::Bool>("/enable_tracking", 10, [this](std_msgs::msg::Bool::SharedPtr message) { set_enabled(message->data); });
-        lidar_enable_subscription_ =
-            create_subscription<std_msgs::msg::Bool>("/enable_lidar", 10, [this](std_msgs::msg::Bool::SharedPtr message) { set_lidar_enabled(message->data); });
-
+        // 3. ROS 服务提供有回执的 Follow 与 LiDAR 融合控制。
+        enable_service_       = create_service<SetBool>("/tracking/set_enabled",
+                                                  [this](const std::shared_ptr<SetBool::Request> request, std::shared_ptr<SetBool::Response> response) {
+                                                      response->success = apply_enabled(request->data, response->message);
+                                                  });
+        lidar_enable_service_ = create_service<SetBool>("/tracking/set_lidar_enabled",
+                                                        [this](const std::shared_ptr<SetBool::Request> request, std::shared_ptr<SetBool::Response> response) {
+                                                            response->success = apply_lidar_enabled(request->data, response->message);
+                                                        });
+        // 相机同步输入可能同时中断，因此扫描超时必须由独立定时检查触发安全停止。
+        lidar_freshness_timer_ = create_wall_timer(std::chrono::milliseconds(100), std::bind(&ObjectTrackNode::check_lidar_scan_freshness, this));
         RCLCPP_INFO(get_logger(),
-                    "dry_run=%s image_topic=%s detections_topic=%s annotated_topic=%s output_topic=%s lidar_topic=%s",
+                    "follow standby; dry_run=%s image_topic=%s detections_topic=%s annotated_topic=%s output_topic=%s lidar_topic=%s",
                     dry_run_ ? "true" : "false",
                     image_topic_.c_str(),
                     detections_topic_.c_str(),
@@ -235,11 +249,24 @@ private:
 
     // 处理链路：select_target → 保存目标横边界 → 计算线/角速度 → emit_command → publish_annotation。
     void sync_callback(const Image::ConstSharedPtr& image, const Detections::ConstSharedPtr& detections) {
+        // ExactTime 同步已证明本节点至少收到一组成对输入；空检测集也表示输入就绪。
+        inputs_ready_ = true;
+
         // 1. select_target 选最大目标框；保存 x1/x2，供下一次 scan_callback 的水平距离筛选使用。
         const auto* selected = select_target(*detections, image->width, image->height, target_class_, minimum_area_);
         if (selected != nullptr) {
             target_left_  = selected->x1;
             target_right_ = selected->x2;
+        }
+
+        const bool scan_is_recent = has_recent_lidar_scan();
+        const bool scan_expired   = is_lidar_scan_expired(scan_is_recent);
+        const bool range_ready    = lidar_enabled_ && lidar_transform_ready_ && scan_is_recent;
+        if (!range_ready) {
+            // 距离融合未就绪时不按图像继续跟随，避免缺少量程时仍输出非零控制。
+            stop_follow_without_fresh_lidar_scan(scan_expired);
+            publish_annotation(*image, selected);
+            return;
         }
 
         // 2. 有目标时由 linear_command 使用最近扫描距离计算线速度；angular_command 使用逻辑坐标中心计算角速度。
@@ -270,6 +297,10 @@ private:
             return;
         }
 
+        last_lidar_scan_at_         = std::chrono::steady_clock::now();
+        lidar_scan_received_        = true;
+        lidar_timeout_stop_emitted_ = false;
+
         // 2. 用当前 scan 元数据解释 ranges；图像大小按 2*cx × 2*cy 推得（默认 1280×720）。
         const object_track::LaserScanGeometry scan_geometry{scan->angle_min, scan->angle_increment, scan->range_min, scan->range_max};
         const object_track::ImageSize image_size{camera_model_.cx * 2.0, camera_model_.cy * 2.0};
@@ -283,25 +314,46 @@ private:
         }
     }
 
-    // 按 /enable_lidar 延迟创建/销毁扫描订阅；禁用时清理旧扫描产生的状态。
-    void set_lidar_enabled(bool enabled) {
+    // 校验融合依赖后切换 tracker 的 LiDAR 使用状态，不控制 LiDAR 驱动进程。
+    bool apply_lidar_enabled(bool enabled, std::string& message) {
         if (enabled == lidar_enabled_) {
-            return;
+            message = enabled ? "LiDAR fusion enabled" : "LiDAR fusion disabled";
+            return true;
         }
+
+        if (enabled && !lidar_transform_ready_) {
+            message = "LiDAR fusion is not ready: waiting for camera <- laser TF";
+            RCLCPP_WARN(get_logger(), "%s", message.c_str());
+            return false;
+        }
+
+        if (enabled && count_publishers(lidar_topic_) == 0) {
+            message = "LiDAR fusion is not ready: no active publisher on " + lidar_topic_;
+            RCLCPP_WARN(get_logger(), "%s", message.c_str());
+            return false;
+        }
+
         lidar_enabled_ = enabled;
         if (lidar_enabled_) {
-            // 启用时才订阅传感器话题，并使用与扫描发布端兼容的 best-effort QoS。
+            // 只有显式开启融合后才订阅扫描，并使用与扫描发布端兼容的 best-effort QoS。
             const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
             scan_subscription_ =
                 create_subscription<LaserScan>(lidar_topic_, sensor_qos, std::bind(&ObjectTrackNode::scan_callback, this, std::placeholders::_1));
         } else {
             // 先销毁订阅，再清空点位和距离，后续图像不再受已停用的扫描影响。
             scan_subscription_.reset();
-            projected_points_.clear();
-            target_range_        = 0.0;
-            last_linear_command_ = 0.0;
+            clear_lidar_control_state();
+            lidar_scan_received_        = false;
+            lidar_timeout_stop_emitted_ = false;
+            if (enabled_) {
+                enabled_ = false;
+                emit_stop("LiDAR fusion disabled");
+                RCLCPP_INFO(get_logger(), "tracking standby because LiDAR fusion was disabled");
+            }
         }
-        RCLCPP_INFO(get_logger(), "lidar %s", lidar_enabled_ ? "enabled" : "disabled");
+        message = lidar_enabled_ ? "LiDAR fusion enabled" : "LiDAR fusion disabled";
+        RCLCPP_INFO(get_logger(), "%s", message.c_str());
+        return true;
     }
 
     // 校验图像布局后，在副本上画投影点、目标框和控制状态，最后保留原始 header 发布。
@@ -344,8 +396,37 @@ private:
         annotated_publisher_->publish(std::move(annotated));
     }
 
-    // 开关处理链路：更新状态 → 清除旧点/距离/命令 → emit_stop → emit_command → emit_velocity。
-    void set_enabled(bool enabled) {
+    // 校验数据就绪后切换 Follow 状态；没有 person 仍允许开启并等待后续检测。
+    bool apply_enabled(bool enabled, std::string& message) {
+        if (enabled && !inputs_ready_) {
+            message = "Follow is not ready: waiting for the first synchronized image and detection inputs";
+            RCLCPP_WARN(get_logger(), "%s", message.c_str());
+            return false;
+        }
+
+        if (enabled && !lidar_enabled_) {
+            message = "Follow is not ready: enable LiDAR fusion first";
+            RCLCPP_WARN(get_logger(), "%s", message.c_str());
+            return false;
+        }
+
+        if (enabled && !lidar_transform_ready_) {
+            message = "Follow is not ready: waiting for camera <- laser TF";
+            RCLCPP_WARN(get_logger(), "%s", message.c_str());
+            return false;
+        }
+
+        if (enabled && !has_recent_lidar_scan()) {
+            message = "Follow is not ready: waiting for a recent LaserScan on " + lidar_topic_;
+            RCLCPP_WARN(get_logger(), "%s", message.c_str());
+            return false;
+        }
+
+        if (enabled == enabled_) {
+            message = enabled ? "Follow enabled" : "Follow standby";
+            return true;
+        }
+
         // 1. 更新状态并清理启停之间不可复用的距离、点位和上次控制量。
         enabled_ = enabled;
         projected_points_.clear();
@@ -356,6 +437,51 @@ private:
         // 2. emit_stop 生成零命令并复用统一出口：dry-run 只预览，关闭 dry-run 才发布 Twist。
         emit_stop(enabled_ ? "enabled" : "disabled");
         RCLCPP_INFO(get_logger(), "tracking %s", enabled_ ? "enabled" : "disabled");
+        message = enabled_ ? "Follow enabled" : "Follow standby";
+        return true;
+    }
+
+    // 只接受超时窗口内的扫描，防止沿用过期距离结果。
+    bool has_recent_lidar_scan() const {
+        if (!lidar_scan_received_) {
+            return false;
+        }
+        const auto scan_age = std::chrono::steady_clock::now() - last_lidar_scan_at_;
+        return scan_age <= std::chrono::duration<double>(lidar_scan_timeout_sec_);
+    }
+
+    // 只有融合与 TF 已就绪且至少收到过扫描时，才将扫描判定为超时。
+    bool is_lidar_scan_expired(bool scan_is_recent) const { return lidar_enabled_ && lidar_transform_ready_ && lidar_scan_received_ && !scan_is_recent; }
+
+    // 扫描过期时清除不可继续用于控制或标注的距离、投影点和速度状态。
+    void clear_lidar_control_state() {
+        projected_points_.clear();
+        target_range_         = 0.0;
+        last_linear_command_  = 0.0;
+        last_angular_command_ = 0.0;
+    }
+
+    // 统一处理量程不可用：清除旧控制状态，并在 Follow 运行时通过统一输出端口请求停止。
+    void stop_follow_without_fresh_lidar_scan(bool scan_expired) {
+        clear_lidar_control_state();
+        if (!enabled_) {
+            return;
+        }
+
+        // 同步输入分支先处理超时后设置此标志，定时器不会重复发送同一次停止。
+        lidar_timeout_stop_emitted_ = scan_expired;
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "tracking paused: waiting for a recent LiDAR scan and camera <- laser TF");
+        emit_stop("tracking waiting for LiDAR range");
+    }
+
+    // 即使没有新的相机帧，也在 Follow 使用 LiDAR 时监视扫描新鲜度并只发送一次超时停止。
+    void check_lidar_scan_freshness() {
+        const bool scan_expired = is_lidar_scan_expired(has_recent_lidar_scan());
+        if (!enabled_ || !scan_expired || lidar_timeout_stop_emitted_) {
+            return;
+        }
+
+        stop_follow_without_fresh_lidar_scan(true);
     }
 
     // 通过统一输出端口处理 dry-run 预览或安全 Twist 发布。
@@ -372,7 +498,12 @@ private:
     bool dry_run_{true};
     bool enabled_{false};
     bool lidar_enabled_{false};
+    bool inputs_ready_{false};
     bool lidar_transform_ready_{false};
+    bool lidar_scan_received_{false};
+    bool lidar_timeout_stop_emitted_{false};
+    double lidar_scan_timeout_sec_{1.0};
+    std::chrono::steady_clock::time_point last_lidar_scan_at_{};
     object_track::LinearControl linear_control_;
     double target_range_{0.0};
     double target_left_{0.0};
@@ -383,16 +514,17 @@ private:
     object_track::LidarToCameraTransform lidar_transform_;
     std::vector<object_track::ProjectedScanPoint> projected_points_;
     tf2_ros::Buffer tf_buffer_;
-    tf2_ros::TransformListener tf_listener_;
+    std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
     std::chrono::steady_clock::time_point transform_deadline_;
     rclcpp::TimerBase::SharedPtr transform_timer_;
+    rclcpp::TimerBase::SharedPtr lidar_freshness_timer_;
     std::unique_ptr<object_track::VelocityOutputPort> output_;
     rclcpp::Publisher<Image>::SharedPtr annotated_publisher_;
     message_filters::Subscriber<Image> image_subscription_;
     message_filters::Subscriber<Detections> detections_subscription_;
     std::unique_ptr<ImageDetectionSynchronizer> synchronizer_;
-    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr enable_subscription_;
-    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr lidar_enable_subscription_;
+    rclcpp::Service<SetBool>::SharedPtr enable_service_;
+    rclcpp::Service<SetBool>::SharedPtr lidar_enable_service_;
     rclcpp::Subscription<LaserScan>::SharedPtr scan_subscription_;
 };
 

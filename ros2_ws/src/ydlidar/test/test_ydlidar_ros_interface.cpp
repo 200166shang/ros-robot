@@ -6,6 +6,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 
 #include "rclcpp/rclcpp.hpp"
@@ -24,11 +25,16 @@ struct SourceStats {
 
 class FakeLidarSource final : public ydlidar::LidarSource {
 public:
-    explicit FakeLidarSource(std::shared_ptr<SourceStats> stats) : stats_(std::move(stats)) {}
+    // 保存可观察统计和初始化结果，供 ROS 接口测试控制假数据源。
+    explicit FakeLidarSource(
+        std::shared_ptr<SourceStats> stats,
+        bool initialize_success = true)
+        : stats_(std::move(stats)), initialize_success_(initialize_success) {}
 
+    // 记录节点交付的配置，并按测试场景返回初始化结果。
     bool initialize(const ydlidar::Configuration &configuration) override {
         configuration_ = configuration;
-        return true;
+        return initialize_success_;
     }
     bool start() override {
         ++stats_->starts;
@@ -57,6 +63,7 @@ public:
 
 private:
     std::shared_ptr<SourceStats> stats_;
+    bool initialize_success_;
     ydlidar::Configuration configuration_;
 };
 
@@ -155,6 +162,16 @@ TEST_F(YdLidarRosInterfaceTest, PublishesScansAndHonorsStartStopServices) {
     EXPECT_EQ(stats->stops.load(), 2);
     EXPECT_EQ(stats->disconnects.load(), 1);
     (void)subscription;
+}
+
+// 初始化失败必须让进程以失败状态退出，供组合 Launch 的监督器重启。
+TEST_F(YdLidarRosInterfaceTest, InitializationFailureThrowsBeforeScanning) {
+    auto stats = std::make_shared<SourceStats>();
+
+    EXPECT_THROW(
+        YdLidarNode(std::make_unique<FakeLidarSource>(stats, false)),
+        std::runtime_error);
+    EXPECT_EQ(stats->starts.load(), 0);
 }
 
 }  // namespace
