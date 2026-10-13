@@ -12,6 +12,10 @@
   模拟 `volume_set(30)` 返回 success=true、simulated=true、volume=30。
 - Follow 未启用，无真实执行器调用。原本地桥接文件未修改。
 
+- 全套 Python 回归测试：46 passed（tests、robot_agent、robot_voice、robot_bringup）。
+- mypy `--check-untyped-defs --ignore-missing-imports` 检查三个新增运行模块；ROS 第三方类型忽略。
+- code-review 双轴审查：Standards 无违规/可行动异味；Spec 仅真实在线验收待凭证。
+
 ## 未完成的验收
 
 真实在线请求 **未完成**。已检查旧 Agent 默认 `src/agent/config.json`、当前项目配置文件、
