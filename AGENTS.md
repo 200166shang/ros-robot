@@ -17,6 +17,23 @@ Keep tracking in dry-run mode unless the user explicitly authorizes hardware act
 - Name validation conditions or intermediate steps when that makes their meaning easier to scan. Apply the repository `.clang-format` and preserve semantic grouping in the formatted code.
 - Split functions by meaningful work. Keep coherent flows together and avoid adding indirection or types solely to shorten functions or make the file look more layered.
 
+### Python 代码规范
+
+本项目 Python 代码遵循 PEP 8、PEP 257 和现代 Python 类型注解规范；类型注解须兼容项目使用的 Python 版本。
+
+1. 使用 Ruff Formatter 统一格式，行宽 160，4 空格缩进，双引号。
+2. 使用 Ruff Linter 检查代码质量与导入排序，遵循项目 `pyproject.toml`。
+3. 新增函数应包含参数和返回值类型注解；公共接口应具有简洁的 Docstring。
+4. 导入顺序为标准库、第三方库、项目内部模块。
+5. 字典、列表和复杂函数调用采用清晰的多行格式，不人为压缩代码。
+6. 优先使用 `pathlib`、上下文管理器、f-string 和 Python 标准惯用写法。
+7. 按职责拆分函数，但避免不必要的抽象类、设计模式和过度封装。
+8. 配置、网络请求、响应解析和业务逻辑尽量分离。
+9. 保持现有功能、异常语义和安全约束，不因格式重构改变行为。
+10. 提交前运行 `ruff check .`、`ruff format --check .`，以及项目配置的类型检查和测试。
+
+原则：代码应简洁、直观、易于阅读和维护，优先遵循项目现有架构，不为形式上的工程化增加复杂度。
+
 ## Agent skills
 
 ### Issue tracker
