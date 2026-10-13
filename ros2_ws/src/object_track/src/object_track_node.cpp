@@ -308,10 +308,6 @@ private:
         // 3. project_laser_scan 返回图像内点；nearest_range_in_horizontal_span 只检查目标框横向开区间。
         projected_points_ = object_track::project_laser_scan(scan->ranges, scan_geometry, lidar_transform_, camera_model_, image_size);
         target_range_     = object_track::nearest_range_in_horizontal_span(projected_points_, target_left_, target_right_);
-        if (!std::isfinite(target_range_)) {
-            // 没有扫描点落入目标横向范围时，保留源逻辑的 range_max 初值。
-            target_range_ = scan->range_max;
-        }
     }
 
     // 校验融合依赖后切换 tracker 的 LiDAR 使用状态，不控制 LiDAR 驱动进程。

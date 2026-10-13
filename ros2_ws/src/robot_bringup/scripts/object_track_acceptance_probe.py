@@ -390,6 +390,24 @@ def main():
                 "tracking image did not draw range and command status"
             )
 
+        # 目标横向范围内没有投影点时，目标距离应保持无效并输出零线速度。
+        no_match_box = [(0, 100, 500, 700)]
+        previews_before_no_match = len(node.previews)
+        node.publish_pair_until(
+            56,
+            21,
+            no_match_box,
+            lambda: any(
+                "range=infm" in preview and "linear.x=0.000" in preview
+                for preview in node.previews[previews_before_no_match:]
+            )
+            and any(
+                (image.header.stamp.sec, image.header.stamp.nanosec) == (56, 21)
+                for image in node.images
+            ),
+            "zero forward command when no scan point matches the target span",
+        )
+
         # 验证靠近左边缘的目标会将角速度限制在 +3.0 rad/s。
         preview_deadline = time.monotonic() + 1.1
         while time.monotonic() < preview_deadline:
