@@ -103,8 +103,8 @@ TEST(RknnYolov6TopicTest, PublishesDetectionsAndAnnotatedRgbImage) {
     image.header.stamp.sec     = 12;
     image.header.stamp.nanosec = 345678;
     image.header.frame_id      = "camera_optical_frame";
-    image.height               = 240;
-    image.width                = 320;
+    image.height               = 720;
+    image.width                = 1280;
     image.encoding             = "rgb8";
     image.is_bigendian         = false;
     image.step                 = image.width * 3;
