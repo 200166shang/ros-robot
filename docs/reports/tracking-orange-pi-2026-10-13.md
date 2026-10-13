@@ -33,7 +33,7 @@ ros2 service call /tracking/set_enabled std_srvs/srv/SetBool "{data: true}"
 - `test_tracking_launch.py`：3 passed；检查固定组合和可选 Bridge 参数。
 - RKNN Topic 集成测试：1280×720 输入通过，保留原图坐标和 header；另一个发布进程逐帧验证 10 个不同时间戳的检测和图像输出。
 - ObjectTrack `ctest`：2/2 passed，包含平台旋转矩阵三射线投影回归。
-- `object_track_acceptance_probe.py`：PASS。覆盖精确时间同步、最大 person、目标切换后的距离重算、无目标零输出、恢复、限幅、扫描过期且图像不更新、无有效目标量程时两个速度归零、TF 晚于启动超时后通过 Fusion 服务恢复。
+- `object_track_acceptance_probe.py`：PASS。覆盖精确时间同步、最大 person、目标切换后的距离重算、无目标零输出、恢复、限幅、扫描过期且图像不更新、无有效目标量程时两个速度归零、TF 晚于启动超时后通过 Fusion 服务恢复，以及图像停止后持续收到新鲜但无效的扫描时立即撤销非零命令。
 - `tracking_control_acceptance_probe.py`：PASS。隔离环境使用平台 TF 和独立 10 Hz 扫描流，覆盖服务、观察订阅断开、Fusion 扫描订阅生命周期。持续扫描模拟真实驱动，不修改节点超时参数。
 - 在真实大图多路网页订阅与隔离探针同时运行时，重复探针曾因同步输入接收超时失败；隔离测试和实际网页运行分开验证，不把此失败算作通过。上表接收计数属于观察端收到的数据，不是发布端性能基准。
 
@@ -42,7 +42,8 @@ ros2 service call /tracking/set_enabled std_srvs/srv/SetBool "{data: true}"
 1. 普通虚拟内存的实际物理页可能超出板上 RGA 的 32 位 DMA 寻址范围。使用 `system-uncached-dma32` 堆，并由局部资源对象持有 fd、映射和 RGA handle；失败明确报告，没有 CPU 降级。
 2. Foxy 的 `getRPY()` 在平台 `pitch=-π/2` 时丢失旋转，扫描投影退化为中心射线。直接传递 TF 旋转矩阵，保留 `R*p+t` 的完整坐标变换。
 3. 每帧按当前目标重新筛选新鲜投影点；没有有效目标量程时，线速度和角速度均为零，不使用旧值或 `range_max`。
-4. 启动 TF 等待结束后，Fusion 服务重新查询实际 TF，允许操作者在独立模块启动就绪后重试。
+4. 新鲜扫描也可能没有有效目标量程；扫描回调立即清零缓存命令并撤销非零输出，不等待下一帧图像或扫描超时。公共 ROS 专项场景由 RED（没有零命令）转为 GREEN；完整探针和 `ctest` 再次通过。
+5. 启动 TF 等待结束后，Fusion 服务重新查询实际 TF，允许操作者在独立模块启动就绪后重试。
 
 ## 验证边界与操作者确认
 
@@ -51,3 +52,7 @@ ros2 service call /tracking/set_enabled std_srvs/srv/SetBool "{data: true}"
 - 已安装 ROSBridge 对同一话题混用网页的 `cbor-raw` 和 JSON 订阅会报转换错误；观察探针与网页统一使用 `cbor-raw` 后通过。此环境问题没有通过修改跟踪逻辑掩盖。
 - RKNN runtime 仍打印本板不支持 `rknn_set_core_mask` 的诊断；推理实际正常。报告中的“resize 错误消失”不表示所有外部库诊断都消失。
 - 模型权重、官方 SDK 头文件、截图、录制和构建产物未提交。板上详细日志保留于 `/tmp/issue50-*`，包括 `board-current.log`、`current-projection.json`、`rosbridge-observation.json` 以及各 RED/GREEN 探针记录；临时文件不会保证跨重启保存，本报告保留可复核的结果与限制。
+
+## 最终审查
+
+以 `aa44a65` 为基准完成 Standards / Spec 两轴审查。Standards 无问题；Spec 发现“图像停更但新鲜无效扫描持续时保留旧命令”一项安全问题，已由上述第 4 项修复，并加入公开接口回归验收。
