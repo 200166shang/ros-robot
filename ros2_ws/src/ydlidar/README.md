@@ -59,10 +59,13 @@ export YDLIDAR_SDK_PREFIX="$HOME/opt/ydlidar-sdk/1.2.7"
 ```zsh
 source /opt/ros/foxy/setup.zsh
 source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
-./scripts/colcon.sh build --packages-select ydlidar
+./scripts/colcon.sh build --packages-select ydlidar \
+  --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=ON
 ```
 
-SDK 环境脚本设置 CMake 包搜索路径、链接器路径和运行时动态库搜索路径。首次构建后，按下一节加载工作区并独立启动驱动。
+SDK 环境脚本设置 CMake 包搜索路径、链接器路径和运行时动态库搜索路径。
+显式启用硬件节点可覆盖接口测试留下的 `OFF` CMake 缓存值。首次构建后，
+按下一节加载工作区并独立启动驱动。
 
 ### 在 Orange Pi 上使用 RViz2
 
@@ -250,12 +253,14 @@ generated yet, so load only ROS and the SDK environment:
 ```zsh
 source /opt/ros/foxy/setup.zsh
 source ~/code/ros-robot/scripts/ydlidar-sdk-env.zsh
-./scripts/colcon.sh build --packages-select ydlidar
+./scripts/colcon.sh build --packages-select ydlidar \
+  --cmake-args -DYDLIDAR_BUILD_HARDWARE_NODE=ON
 ```
 
 The environment script sets CMake package, linker, and runtime shared-library
-search paths. After the first build, follow the next section to load the
-workspace and start the standalone driver.
+search paths. Explicitly enable the hardware node to override an `OFF` CMake
+cache value left by the interface-only test build. After the first build,
+follow the next section to load the workspace and start the standalone driver.
 
 ### RViz2 on the Orange Pi
 

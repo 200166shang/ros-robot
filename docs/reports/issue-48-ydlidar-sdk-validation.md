@@ -25,8 +25,23 @@ download or compile the vendor SDK.
 
 ## Orange Pi hardware acceptance
 
-Pending. The installer has not been run against the persistent user prefix, and
-the real SDK build, dynamic-link check, physical `/scan` publication, and
-post-reboot environment reload have not been performed. Record each result here
-after running the commands in `ros2_ws/src/ydlidar/README.md`; do not report
-board acceptance as complete before then.
+Checked on 2026-10-13 (aarch64, ROS Foxy):
+
+- The persistent prefix contains the V1.2.7 marker for commit
+  `ad8e30f9e9315d4bd7544df85571072fdbcd31ea` and
+  `lib/libydlidar_sdk.so`.
+- The first launch reproduced the missing libexec error. Its CMake cache had
+  `YDLIDAR_BUILD_HARDWARE_NODE=OFF`, left by the interface-only build, so the
+  package was registered and its launch file installed without
+  `lib/ydlidar/ydlidar_node`.
+- `./scripts/colcon.sh build --packages-select ydlidar --cmake-args
+  -DYDLIDAR_BUILD_HARDWARE_NODE=ON`: passed; the hardware node was installed.
+- `ldd "$(ros2 pkg prefix ydlidar)/lib/ydlidar/ydlidar_node"`: all libraries
+  resolved, including `libydlidar_sdk.so` from the persistent prefix.
+- `ros2 launch ydlidar ydlidar.launch.py`: SDK 1.2.7 initialized, the F2 lidar
+  connected with good health, and scan mode started.
+- `timeout -s INT 8s ros2 topic hz /scan`: observed about 6.07 Hz. The launch
+  was then stopped with Ctrl+C; the driver reported that scanning stopped.
+
+Post-reboot environment reload remains pending. Record it after rebooting the
+board; do not mark that acceptance check complete before then.
