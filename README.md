@@ -17,6 +17,9 @@ ROS packages are organized under `ros2_ws/src/`, one package per directory.
 Build output belongs under `ros2_ws/`; the repository root is for source,
 scripts, and project files.
 
+For fixed tracking setup, startup, controls, and troubleshooting, see the
+[tracking operator guide](ros2_ws/src/robot_bringup/README.md).
+
 ## Build and test
 
 Source the ROS 2 Foxy environment, then run the workspace commands from the
