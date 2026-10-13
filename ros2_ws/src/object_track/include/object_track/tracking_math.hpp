@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -15,14 +16,12 @@ struct CameraProjectionModel {
     double cy{360.0};   // 主点纵坐标，单位：像素。
 };
 
-// 描述 LaserScan 坐标系到相机 optical frame 的静态变换；平移单位为米，RPY 角单位为弧度。
+// 描述 LaserScan 到相机 optical frame 的静态变换；平移单位为米，旋转矩阵按行存储。
 struct LidarToCameraTransform {
     double x{0.20};
     double y{0.0};
     double z{0.0};
-    double roll{1.5707963267948966};
-    double pitch{-1.5707963267948966};
-    double yaw{0.0};
+    std::array<double, 9> rotation{{0.0, -1.0, 0.0, 0.0, 0.0, -1.0, 1.0, 0.0, 0.0}};
 };
 
 struct ProjectedScanPoint {
@@ -75,16 +74,11 @@ inline std::vector<ProjectedScanPoint> project_laser_scan(const std::vector<floa
     // 1. 相机内参、图像尺寸和静态外参必须为有限有效值，否则本次扫描无法可靠投影。
     if (camera.fx <= 0.0 || camera.fy <= 0.0 || image_size.width <= 0.0 || image_size.height <= 0.0 || !std::isfinite(camera.fx) || !std::isfinite(camera.fy) ||
         !std::isfinite(camera.cx) || !std::isfinite(camera.cy) || !std::isfinite(transform.x) || !std::isfinite(transform.y) || !std::isfinite(transform.z) ||
-        !std::isfinite(transform.roll) || !std::isfinite(transform.pitch) || !std::isfinite(transform.yaw)) {
+        !std::all_of(transform.rotation.begin(), transform.rotation.end(), [](double value) { return std::isfinite(value); })) {
         return projected;
     }
 
-    const double cr = std::cos(transform.roll);
-    const double sr = std::sin(transform.roll);
-    const double cp = std::cos(transform.pitch);
-    const double sp = std::sin(transform.pitch);
-    const double cy = std::cos(transform.yaw);
-    const double sy = std::sin(transform.yaw);
+    const auto& rotation = transform.rotation;
 
     for (std::size_t index = 0; index < ranges.size(); ++index) {
         const double range = ranges[index];
@@ -102,10 +96,10 @@ inline std::vector<ProjectedScanPoint> project_laser_scan(const std::vector<floa
         const double lidar_y = range * std::sin(angle);
 
         // 3. 极坐标量测先转雷达平面直角坐标：(x_l,y_l,z_l)=(r cosθ,r sinθ,0)。
-        //    坐标变换写作 p_c=Rz(yaw)Ry(pitch)Rx(roll)p_l+t，t 是 camera <- laser 的平移量。
-        const double rotated_x = cy * cp * lidar_x + (cy * sp * sr - sy * cr) * lidar_y;
-        const double rotated_y = sy * cp * lidar_x + (sy * sp * sr + cy * cr) * lidar_y;
-        const double rotated_z = -sp * lidar_x + cp * sr * lidar_y;
+        //    坐标变换为 p_c=R*p_l+t：R 为 camera <- laser 的旋转矩阵，t 为平移量（米）。
+        const double rotated_x = rotation[0] * lidar_x + rotation[1] * lidar_y;
+        const double rotated_y = rotation[3] * lidar_x + rotation[4] * lidar_y;
+        const double rotated_z = rotation[6] * lidar_x + rotation[7] * lidar_y;
         const double camera_x  = rotated_x + transform.x;
         const double camera_y  = rotated_y + transform.y;
         const double camera_z  = rotated_z + transform.z;

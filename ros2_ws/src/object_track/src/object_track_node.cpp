@@ -220,9 +220,14 @@ private:
             const auto& translation = transform.transform.translation;
             const auto& rotation    = transform.transform.rotation;
 
-            // 3. TF 四元数转成投影函数使用的 RPY 欧拉角，并保留平移分量。
+            // 3. 直接保存 TF 旋转矩阵，避免平台 pitch=-π/2 时欧拉角分解丢失旋转。
             const tf2::Quaternion quaternion(rotation.x, rotation.y, rotation.z, rotation.w);
-            tf2::Matrix3x3(quaternion).getRPY(lidar_transform_.roll, lidar_transform_.pitch, lidar_transform_.yaw);
+            const tf2::Matrix3x3 rotation_matrix(quaternion);
+            for (int row = 0; row < 3; ++row) {
+                for (int column = 0; column < 3; ++column) {
+                    lidar_transform_.rotation[row * 3 + column] = rotation_matrix[row][column];
+                }
+            }
             lidar_transform_.x     = translation.x;
             lidar_transform_.y     = translation.y;
             lidar_transform_.z     = translation.z;
@@ -252,11 +257,15 @@ private:
         // ExactTime 同步已证明本节点至少收到一组成对输入；空检测集也表示输入就绪。
         inputs_ready_ = true;
 
-        // 1. select_target 选最大目标框；保存 x1/x2，供下一次 scan_callback 的水平距离筛选使用。
+        // 1. select_target 选最大目标框；保存当前横边界，目标丢失时清空区间和距离。
         const auto* selected = select_target(*detections, image->width, image->height, target_class_, minimum_area_);
         if (selected != nullptr) {
             target_left_  = selected->x1;
             target_right_ = selected->x2;
+        } else {
+            target_left_  = 0.0;
+            target_right_ = 0.0;
+            target_range_ = std::numeric_limits<double>::infinity();
         }
 
         const bool scan_is_recent = has_recent_lidar_scan();
@@ -269,10 +278,13 @@ private:
             return;
         }
 
-        // 2. 有目标时由 linear_command 使用最近扫描距离计算线速度；angular_command 使用逻辑坐标中心计算角速度。
+        // 2. 按当前目标重新筛选新鲜投影点，避免切换目标时沿用前一个框的距离。
+        target_range_         = object_track::nearest_range_in_horizontal_span(projected_points_, target_left_, target_right_);
         last_angular_command_ = 0.0;
-        last_linear_command_  = selected == nullptr ? 0.0 : object_track::linear_command(target_range_, linear_control_);
-        if (selected != nullptr) {
+        last_linear_command_  = 0.0;
+        if (selected != nullptr && std::isfinite(target_range_)) {
+            // 缺少当前目标量程时两个速度分量都保持零，禁止仅按图像转向。
+            last_linear_command_  = object_track::linear_command(target_range_, linear_control_);
             const cv::Rect target = logical_box(*selected, image->width, image->height);
             const double center_x = target.x + target.width * 0.5;
 

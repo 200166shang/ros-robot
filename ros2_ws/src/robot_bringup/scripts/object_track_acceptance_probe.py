@@ -148,10 +148,11 @@ class ObjectTrackAcceptanceProbe(Node):
         scan = LaserScan()
         scan.header.frame_id = "laser_link"
         scan.angle_min = 0.0
-        scan.angle_increment = 1.0
+        scan.angle_increment = 0.26
         scan.range_min = 0.1
         scan.range_max = 10.0
-        scan.ranges = [0.5]
+        # 已知外参下有效射线投影到约 x=1204、483、38，保留 500..600 的空区间。
+        scan.ranges = [0.5, float("inf"), 0.5, 0.5]
         self.scan_publisher.publish(scan)
 
     def publish_tracking_transform(self):
@@ -305,7 +306,9 @@ def main():
                 for image in node.images
             )
             and any(
-                "angular.z=1.700" in preview for preview in node.previews
+                "angular.z=1.700" in preview
+                and "linear.x=0.068" in preview
+                for preview in node.previews
             ),
             "exact-time annotated image and largest-person command",
         )
@@ -390,22 +393,24 @@ def main():
                 "tracking image did not draw range and command status"
             )
 
-        # 目标横向范围内没有投影点时，目标距离应保持无效并输出零线速度。
-        no_match_box = [(0, 100, 500, 700)]
+        # 偏离中心的目标没有投影点时，两个速度分量都必须为零。
+        no_match_box = [(500, 100, 600, 700)]
         previews_before_no_match = len(node.previews)
         node.publish_pair_until(
             56,
             21,
             no_match_box,
             lambda: any(
-                "range=infm" in preview and "linear.x=0.000" in preview
+                "range=infm" in preview
+                and "linear.x=0.000" in preview
+                and "angular.z=0.000" in preview
                 for preview in node.previews[previews_before_no_match:]
             )
             and any(
                 (image.header.stamp.sec, image.header.stamp.nanosec) == (56, 21)
                 for image in node.images
             ),
-            "zero forward command when no scan point matches the target span",
+            "zero follow command when no scan point matches the target span",
         )
 
         # 验证靠近左边缘的目标会将角速度限制在 +3.0 rad/s。

@@ -96,10 +96,11 @@ class TrackingControlAcceptanceProbe(Node):
         """发布一帧雷达样例，供本地隔离验收使用。"""
         scan = LaserScan()
         scan.header.frame_id = "laser_link"
-        scan.angle_increment = 1.0
+        scan.angle_increment = 0.26
         scan.range_min = 0.1
         scan.range_max = 10.0
-        scan.ranges = [0.5]
+        # 覆盖左右目标框，保证观察者断开后仍通过真实投影量程计算转向。
+        scan.ranges = [0.5, float("inf"), 0.5, 0.5]
         self.scan_publisher.publish(scan)
 
     def enable_follow_with_fresh_scan(self, timeout: float = 5.0) -> SetBool.Response:
