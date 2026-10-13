@@ -302,7 +302,7 @@ private:
         publish_annotation(*image, selected);
     }
 
-    // 扫描处理链路：校验 TF → project_laser_scan → nearest_range_in_horizontal_span → 保存点和距离。
+    // 扫描处理链路：校验 TF → 投影并更新目标量程 → 无效量程立即撤销控制命令。
     void scan_callback(LaserScan::ConstSharedPtr scan) {
         // 1. TF 未就绪时不使用默认外参，避免产生看似有效但坐标错误的投影点。
         if (!lidar_transform_ready_) {
@@ -320,6 +320,16 @@ private:
         // 3. project_laser_scan 返回图像内点；nearest_range_in_horizontal_span 只检查目标框横向开区间。
         projected_points_ = object_track::project_laser_scan(scan->ranges, scan_geometry, lidar_transform_, camera_model_, image_size);
         target_range_     = object_track::nearest_range_in_horizontal_span(projected_points_, target_left_, target_right_);
+
+        // 4. 新鲜扫描也可能没有有效目标量程；无需等下一帧图像就撤销已有控制命令。
+        if (!std::isfinite(target_range_)) {
+            const bool command_was_nonzero = last_linear_command_ != 0.0 || last_angular_command_ != 0.0;
+            last_linear_command_           = 0.0;
+            last_angular_command_          = 0.0;
+            if (enabled_ && command_was_nonzero) {
+                emit_stop("target range unavailable");
+            }
+        }
     }
 
     // 校验融合依赖后切换 tracker 的 LiDAR 使用状态，不控制 LiDAR 驱动进程。
