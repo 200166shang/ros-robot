@@ -317,7 +317,8 @@ private:
             return true;
         }
 
-        if (enabled && !lidar_transform_ready_) {
+        // 启动等待超时后，操作员仍可在 TF 就绪时通过服务重新加载并开启融合。
+        if (enabled && !lidar_transform_ready_ && !load_lidar_transform()) {
             message = "LiDAR fusion is not ready: waiting for camera <- laser TF";
             RCLCPP_WARN(get_logger(), "%s", message.c_str());
             return false;
