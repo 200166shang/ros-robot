@@ -10,7 +10,10 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from .online_actions import ActionRegistry
 from .online_interaction import make_result
+from .online_perception import PerceptionActions, perception_actions
+from .online_perception_ros import RosPerception
 from .online_voice_runtime import capture_turn, create_voice
 
 
@@ -29,7 +32,12 @@ class OnlineVoiceRosNode(Node):
         self._config = json.loads(
             Path(filename).expanduser().read_text(encoding="utf-8")
         )
-        self._voice = create_voice(self._config)
+        actions = ActionRegistry()
+        perception = PerceptionActions(
+            RosPerception(self), float(self._config.get("action_timeout", 5))
+        )
+        actions.register_many(perception_actions(perception))
+        self._voice = create_voice(self._config, actions=actions)
         self._stop = threading.Event()
         self._processing = threading.Lock()
         self._publish_lock = threading.Lock()
@@ -52,6 +60,9 @@ class OnlineVoiceRosNode(Node):
         )
         self.create_subscription(
             String, "/online_agent/reconcile", self._on_reconcile, 10
+        )
+        self.create_subscription(
+            String, "/online_agent/clear_memory", self._on_clear_memory, 10
         )
         self.create_timer(1.0, self._voice.tick)
         if self._config.get("microphone_enabled", False):
@@ -80,6 +91,11 @@ class OnlineVoiceRosNode(Node):
     def _on_reconcile(self, message: String) -> None:
         """复用原回合标识核对迟到动作，绝不补执行后续动作。"""
         self._start(lambda: self._voice.reconcile(message.data))
+
+    def _on_clear_memory(self, message: String) -> None:
+        """复用主线记忆清空契约，回合忙碌时不重置上下文。"""
+        if message.data == "clear":
+            self._start(self._voice.clear_memory)
 
     def _on_tts_enable(self, message: String) -> None:
         """用显式 enable 命令恢复文本降级后的在线合成。"""

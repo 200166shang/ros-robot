@@ -4,6 +4,8 @@
 已有 WAV 可直接提交一回合，不需要唤醒词。输入契约仍为非空单声道 PCM16
 16kHz WAV。默认关闭麦克风和播放；ASR、模型、TTS 均真实在线，头部、导航、
 音乐、音量与 WiFi 使用 #64 的完整模拟状态，保持 `dry_run=true`。
+同步主线后，语音 ROS 入口接入 #65 的真实感知 Adapter，所有语音入口复用
+#66 的有限近期上下文与持久摘要；感知回复按真实回执区分确认与未知。
 
 ## 运行
 
@@ -29,6 +31,9 @@ DashScope SDK 不参与运行；语音 Adapter 直接使用服务端双向 WebSo
   "provider_timeout": 60,
   "action_timeout": 5,
   "silence_timeout": 120,
+  "memory_file": "/home/orangepi/local-data/ros-robot/voice/conversation-summary.json",
+  "memory_recent_turns": 6,
+  "memory_summary_trigger": 6,
   "microphone_enabled": false,
   "playback_enabled": false
 }
@@ -68,6 +73,7 @@ CLI 的 `--wav` 缺省时，仅在 `microphone_enabled=true` 才调用麦克风�
 | `/online_agent/text` | 既有直接文本语义，加在线 TTS |
 | `/online_agent/transcript` | 最终识别文本事件，遵循唤醒和连续会话 |
 | `/online_agent/reconcile` | 原 turn_id 核对迟到回执，不重发动作 |
+| `/online_agent/clear_memory` | 内容 `clear` 清空近期上下文和持久摘要，忙时拒绝 |
 | `/online_agent/tts_enable` | 内容 `enable` 显式恢复 TTS，忙时不重置 |
 
 所有回执在 `/online_agent/result` 发布。相同 `turn_id` 关联识别文本、可信
@@ -112,6 +118,16 @@ LLM 保留 SSE 分片，交互收齐结构化输出并整表校验，动作确�
 TTS 每轮有限重试，重试不重复模型或动作；连续失败回合达到阈值后降级为
 文本，显式 enable 可恢复。识别、合成、播放或保存异常均释放语音回合锁；
 已有交互的模型在途/设备未知结果仍保持其安全互斥契约，不自动重试动作。
+
+## 主线感知与记忆接入
+
+ROS 入口在组装处将 `RosPerception` 对应动作加入同一 ActionRegistry，
+交互仍负责整表校验和执行。Follow/融合启用沿用设备实际 dry_run参数检查、
+TF与数据前提，不从入口参数推断真实成功。独立CLI默认使用模拟设备注册表。
+
+ConversationMemory作为既有 OnlineInteraction 的依赖接入：普通回合记录
+识别文本与已确认回复，达到阈值后在线摘要并保存到源码外。重启加载摘要，
+`clear_memory` 复用主线清空契约，合成期间也保持语音回合互斥。
 
 ## 协议参考
 

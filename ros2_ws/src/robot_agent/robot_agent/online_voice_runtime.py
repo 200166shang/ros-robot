@@ -12,12 +12,15 @@ from robot_voice.audio_sources import create_audio_source
 
 from .online_actions import ActionRegistry
 from .online_interaction import OnlineInteraction, make_result
+from .online_memory import ConversationMemory
 from .online_provider import DashScopeProvider
 from .online_speech import DashScopeASR, DashScopeTTS
 from .online_voice import OnlineVoice
 
 
-def create_voice(config: Dict) -> OnlineVoice:
+def create_voice(
+    config: Dict, actions: Optional[ActionRegistry] = None
+) -> OnlineVoice:
     """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
     if config.get("dry_run", True) is not True:
         raise ValueError("在线语音要求 dry_run=true")
@@ -25,7 +28,8 @@ def create_voice(config: Dict) -> OnlineVoice:
     checkout = Path(__file__).resolve().parents[4]
     if directory == checkout or checkout in directory.parents:
         raise ValueError("output_dir 必须在源码目录外")
-    actions = ActionRegistry()
+    if actions is None:
+        actions = ActionRegistry()
     playback: Optional[Callable[[Path], None]] = None
     if config.get("playback_enabled", False):
 
@@ -46,6 +50,16 @@ def create_voice(config: Dict) -> OnlineVoice:
             actions,
             provider_timeout=float(config.get("provider_timeout", 60)),
             action_timeout=float(config.get("action_timeout", 5)),
+            memory=ConversationMemory(
+                Path(
+                    config.get(
+                        "memory_file",
+                        "~/.local/state/ros-robot/conversation-summary.json",
+                    )
+                ),
+                recent_turns=config.get("memory_recent_turns", 6),
+                summary_trigger=config.get("memory_summary_trigger", 6),
+            ),
         ),
         DashScopeASR(config),
         DashScopeTTS(config),

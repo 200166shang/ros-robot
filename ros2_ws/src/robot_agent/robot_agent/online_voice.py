@@ -175,6 +175,18 @@ class OnlineVoice:
             return make_result(uuid.uuid4().hex, "rejected", "回合标识无效。")
         return self._submit(reconcile_turn_id=turn_id)
 
+    def clear_memory(self) -> Dict:
+        """清空主线会话记忆；与语音回合互斥并保留模型在途约束。"""
+        turn_id = uuid.uuid4().hex
+        if self._closed.is_set():
+            return make_result(turn_id, "rejected", "语音入口已关闭。")
+        if not self._turn.acquire(blocking=False):
+            return make_result(turn_id, "busy", "正在处理上一回合。")
+        try:
+            return self._interaction.clear_memory()
+        finally:
+            self._turn.release()
+
     def enable_tts(self) -> None:
         """显式恢复连续失败后的合成，下一回合重新尝试在线 provider。"""
         if not self._turn.acquire(blocking=False):
