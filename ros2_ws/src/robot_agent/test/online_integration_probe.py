@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -223,28 +224,45 @@ def main() -> None:
         assert probe.count_publishers("/tracking/cmd_vel_safe") == 0
         passed = True
     finally:
-        evidence = {
-            "passed": passed,
-            "phase": (
-                "recall"
-                if args.recall
-                else "recording"
-                if args.recording_only
-                else "integration"
-            ),
-            "scan_messages": probe.scans,
-            "detection_images": probe.images,
-            "motion_messages": len(probe.motion),
-            "results": probe.results,
-        }
-        directory = Path(args.evidence_dir).expanduser()
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / (evidence["phase"] + ".json")).write_text(
-            json.dumps(evidence, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        probe.destroy_node()
-        rclpy.shutdown()
+        acceptance_error = sys.exc_info()[1]
+        try:
+            evidence = {
+                "passed": passed,
+                "phase": (
+                    "recall"
+                    if args.recall
+                    else "recording"
+                    if args.recording_only
+                    else "integration"
+                ),
+                "scan_messages": probe.scans,
+                "detection_images": probe.images,
+                "motion_messages": len(probe.motion),
+                "results": probe.results,
+            }
+            directory = Path(args.evidence_dir).expanduser()
+            # 保存失败仍输出完整执行事实；已有验收异常优先显露。
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / (evidence["phase"] + ".json")).write_text(
+                    json.dumps(evidence, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError:
+                print(
+                    json.dumps(
+                        {"evidence_status": "failed", "evidence": evidence},
+                        ensure_ascii=False,
+                    ),
+                    file=sys.stderr,
+                )
+                if acceptance_error is None:
+                    raise
+        finally:
+            try:
+                probe.destroy_node()
+            finally:
+                rclpy.shutdown()
 
 
 if __name__ == "__main__":

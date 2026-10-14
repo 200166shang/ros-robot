@@ -72,10 +72,10 @@ pyright ros2_ws/src/robot_agent/robot_agent/online_voice_ros_node.py \
 ```
 
 完整Python回归初轮 **95 passed，12.57秒**；修正固定探针后最终回归
-**95 passed，8.77秒**。新增Launch测试先因入口文件不存在
+**95 passed，8.77秒**；审查修复后的最终回归为 **96 passed，9.68秒**。新增Launch测试先因入口文件不存在
 失败，实现后通过；确认必填配置、单一在线入口、固定跟踪组合和默认关闭
 可视化。语音/感知/记忆组装单文件与新Launch合计2项通过。
-Ruff按根配置最终检查38文件，格式及E/W/F/I通过；新Launch与修改的固定探针显式加入检查范围，
+Ruff按根配置最终检查39文件，格式及E/W/F/I通过；新Launch与修改的固定探针显式加入检查范围，
 新online探针/测试自动命中既有模式。类型检查0 errors、0 warnings。
 
 | 综合行为 | 确定性公开Interface证据 |
@@ -179,7 +179,7 @@ angular.z=-1.800、观察者断开后angular.z=2.700、待机停止、融合关�
 源码外colcon test：robot_agent、robot_voice、robot_bringup、object_track、
 ydlidar、usb_camera、img_decode、rknn_yolov6共8包任务完成，
 `colcon test-result --verbose` 为 **30 tests，0 errors，0 failures，0 skipped**。
-robot_agent的setuptools任务仍发现0项；它的实际行为由独立pytest95项执行。
+robot_agent的setuptools任务仍发现0项；它的实际行为由最终独立pytest96项执行。
 
 第一次将整个旧工具venv加入colcon的PYTHONPATH，setuptools与系统
 importlib_metadata版本冲突，虽测试结果成功，扩展加载报错，不计为干净
@@ -191,3 +191,18 @@ importlib_metadata版本冲突，虽测试结果成功，扩展加载报错，�
 本轮没有凭证、网络或provider阻塞的必验项。重启前的完整摘要含当前模拟与
 接口确认限制，未将它们写成物理成功。所有构建与运行产物均在源码外。
 
+
+
+## 审查修复
+
+固定点为主线 `0bfb547`，使用 `git diff 0bfb547...HEAD`。
+Standards初审发现证据mkdir/write_text失败会跳过ROS清理、掩盖原验收失败；
+Spec初审0项。新增公开CLI回归：使用真实ROS无服务、外部时钟越过期限及
+被普通文件占用的证据目录，首先因FileExistsError覆盖原AssertionError失败。
+修复后仍显露原验收AssertionError，ROS上下文已关闭，单文件1 passed。
+
+证据I/O只捕获OSError，失败时向stderr输出完整回执/计数及保存失败标记；
+若已有验收异常，保留该异常；没有已有异常则保存错误继续抛出，不能计为
+成功。外层finally始终销毁probe并shutdown；没有吞掉编程异常。
+最终完整回归96 passed，Ruff39文件格式/静态检查与4个修改模块类型检查
+通过。该处理依据本轮实际复现的文件写入失败，不增加推测性兜底。
