@@ -240,3 +240,37 @@ def test_partial_perception_facts_survive_later_failure():
     ).submit("暂停采集")
     assert "Follow 已确认待机" in result["reply"]
     assert "相机无订阅端" in result["reply"]
+
+
+def test_simulation_and_perception_share_one_turn_after_main_merge():
+    """主线模拟状态与感知回执可在同一回合按序组合，保留各自结果来源。"""
+    interface = PerceptionInterface()
+    registry = ActionRegistry()
+    PerceptionActions(interface).register(registry)
+    provider = FixedProvider(
+        [
+            "volume_set(35)",
+            "enable_lidar",
+            "enable_tracking",
+            "volume_status",
+            "stop_following",
+        ]
+    )
+    result = OnlineInteraction(provider, registry).submit(
+        "设置音量并开启跟随，查询后停止"
+    )
+    assert result["status"] == "completed"
+    assert [action["status"] for action in result["actions"]] == [
+        "simulated_success",
+        "real_success",
+        "real_success",
+        "simulated_success",
+        "real_success",
+    ]
+    assert result["actions"][3]["data"]["level"] == 35
+    assert interface.events == [
+        ("fusion", True),
+        ("follow", True),
+        ("follow", False),
+        ("fusion", False),
+    ]

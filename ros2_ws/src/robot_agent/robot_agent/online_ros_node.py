@@ -14,6 +14,7 @@ from .online_interaction import OnlineInteraction, make_result
 from .online_perception import PerceptionActions
 from .online_perception_ros import RosPerception
 from .online_provider import DashScopeProvider
+from .online_simulation import simulate_cue
 
 
 class OnlineRosNode(Node):
@@ -58,6 +59,8 @@ class OnlineRosNode(Node):
         self.create_subscription(
             String, "/online_agent/reconcile", self._on_reconcile, 10
         )
+        cue = simulate_cue("startup")
+        self.get_logger().info(cue["detail"])
         self.get_logger().info("Online Agent ready; dry_run=true")
 
     def _on_text(self, message: String) -> None:
@@ -99,6 +102,9 @@ class OnlineRosNode(Node):
         with self._publish_lock:
             if not self._accepting:
                 return
+            if result["status"] == "failed":
+                cue = simulate_cue("error")
+                self.get_logger().info(cue["detail"])
             message = String()
             message.data = json.dumps(result, ensure_ascii=False)
             self._publisher.publish(message)

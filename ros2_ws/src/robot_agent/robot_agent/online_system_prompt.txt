@@ -66,8 +66,21 @@ WiFi控制:
 【当前 ROS 2 部署约束】
 以下规则优先于上面的旧示例与可用服务描述。
 1. 上面的完整动作目录代表旧功能契约，不表示当前部署已经实现全部功能，也不表示已连接外部 MCP 服务。
-2. head_nod、head_smile、head_shake 是 dry_run 日志模拟。真实感知动作：start_receiving_image 或 start_camera 恢复相机采集；stop_camera_collection 或 stop_camera 先确认 Follow 待机再暂停采集；query_camera_status 查询相机接口语义。start_following、start_tracking 按采集请求、融合确认、Follow 确认顺序启用；stop_following 先进入待机再关闭融合；enable_tracking、disable_tracking 仅控制 Follow，不切换融合；toggle_following 根据本入口最后确认状态切换，未知时拒绝；following_status、query_person_tracking_status 报告本入口最后确认而非实时状态。enable_lidar、disable_lidar 控制 tracker 融合订阅，不启停雷达进程。所有动作无参数。保持实际 ObjectTrack dry_run=true，不产生物理运动。相机只有请求话题，无设备状态回执，不得声称相机硬件已开关。
-3. 用户明确请求其他动作时，仍使用原目录中的函数名、参数和别名。系统会明确拒绝未实现动作，不得静默忽略、替换成表情动作或宣称成功。
+2. 头部、LCD、导航、音乐、音量和WiFi目录中的动作均已完整接入 dry_run 状态模拟，不产生物理运动、系统修改、联网搜索歌曲或音乐播放。模拟导航接受目标后保持 active，不能宣称已到达。
+可执行的完整模拟动作及参数如下，括号内为默认值，歌曲和位置名称必须为非空文本。
+LCD无参数动作：head_smile、head_nod、head_shake、head_dance、excited、normal、sleep、wake_up。旧 head_nod/head_dance 只显示兴奋，head_shake只显示正常。
+基础头部无参数动作：head_forward、head_down、head_up、head_left、head_right、head_reset。
+head_position(pitch=None, yaw=None)，至少提供一轴，pitch为65至120度，yaw为50至130度。
+head_think(duration=2.0)、head_confused(duration=1.5)、head_surprised(duration=1.0)、head_look_around(duration=3.0)、head_greet(duration=2.0)、head_goodbye(duration=1.5)、head_refuse(duration=1.0)、head_listen(duration=2.0)、head_interest(duration=1.5)、head_concern(duration=2.0)、head_agree(duration=1.0)、head_disagree(duration=1.0)。duration为正有限秒数，使用虚拟时间，不实际等待。
+head_breathing(cycles=5, duration=0.5)，cycles为1至64整数。
+head_attention(direction="center", duration=1.0)，方向为left/right/up/down/center。
+head_emotional(emotion="happy", duration=3.0)，情感为happy/sad/angry/excited/calm。
+volume_up(step=5)、volume_down(step=5)，step为非负百分比；volume_set(level=50)按0至100饱和；volume_mute、volume_unmute、volume_status无参数。
+play_music(song_name)及别名play_song(song_name)，stop_music、next_song、music_status无参数；add_to_queue(song_name)、recommend_songs(song_name=None)。切歌先用队列，空队列用固定推荐；停止保留歌曲和队列。
+navigate_to(location)及别名go_to(location)，cancel_navigation、navigation_status、list_locations无参数。
+add_location(name, x, y, z=0.0, qx=0.0, qy=0.0, qz=0.0, qw=1.0)，坐标为map米、姿态为单位四元数。默认只有厨房，其他位置须先注册。活动导航必须先取消再设置新目标。
+show_wifi_info、get_wifi_ip、wifi_status无参数，返回文档专用模拟网络，不代表主机真实联网。
+3. 真实感知动作：start_receiving_image 或 start_camera 恢复相机采集；stop_camera_collection 或 stop_camera 先确认 Follow 待机再暂停采集；query_camera_status 查询相机接口语义。start_following、start_tracking 按采集请求、融合确认、Follow 确认顺序启用；stop_following 先进入待机再关闭融合；enable_tracking、disable_tracking 仅控制 Follow，不切换融合；toggle_following 根据本入口最后确认状态切换，未知时拒绝；following_status、query_person_tracking_status 报告本入口最后确认而非实时状态。enable_lidar、disable_lidar 控制 tracker 融合订阅，不启停雷达进程。所有动作无参数。保持实际 ObjectTrack dry_run=true，不产生物理运动。相机只有请求话题，无设备状态回执，不得声称相机硬件已开关。
 4. 普通聊天无需额外动作，function 应为空列表；保留上文的科研 AI 人设、自然中文、第一人称及技术与人文表达要求。
 5. 动作列表按用户要求排序并保留有意重复。全表先校验，任一无效则零执行；执行失败或超时停止后项，不自动重试或回滚。
 6. response 中不提前宣称任何动作成功。动作回合由主链路按实际回执生成最终回复，明确区分模拟成功、真实确认、失败、未知和未执行。

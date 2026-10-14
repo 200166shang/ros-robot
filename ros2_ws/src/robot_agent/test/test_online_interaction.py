@@ -5,7 +5,7 @@ import threading
 import time
 
 import robot_agent.online_interaction as interaction
-from robot_agent.online_actions import ActionRegistry
+from robot_agent.online_actions import ActionHandler, ActionRegistry
 from robot_agent.online_interaction import OnlineInteraction
 
 
@@ -505,3 +505,30 @@ def test_late_model_output_is_discarded_without_executing_actions():
         assert submitted == []
     finally:
         release.set()
+
+
+def test_bulk_capability_loading_preserves_validation_and_replacement():
+    """批量能力表复用整表校验，并允许配置阶段替换已有动作。"""
+    calls = []
+
+    def execute(level=5):
+        """记录由能力表绑定的业务参数。"""
+        calls.append(level)
+        return {"status": "simulated_success", "detail": str(level)}
+
+    def validate(level=5):
+        """拒绝无效业务输入，不能修改执行记录。"""
+        if level < 0:
+            raise ValueError("level 必须非负")
+
+    handler = ActionHandler(execute, validate)
+    registry = ActionRegistry()
+    registry.register_many({"custom": handler, "alias": handler})
+    registry.register_many({"head_smile": handler})
+    provider = FixedProvider(["custom(2)", "alias(level=-1)"])
+    agent = OnlineInteraction(provider, registry)
+    assert agent.submit("执行")["status"] == "rejected"
+    assert calls == []
+    provider.functions = ["custom(2)", "alias(level=3)", "head_smile"]
+    assert agent.submit("执行")["status"] == "completed"
+    assert calls == [2, 3, 5]

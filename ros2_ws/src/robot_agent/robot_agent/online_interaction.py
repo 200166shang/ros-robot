@@ -267,6 +267,8 @@ class OnlineInteraction:
             action.update(
                 status=receipt["status"], detail=receipt.get("detail", "")
             )
+            if "data" in receipt:
+                action["data"] = receipt["data"]
             self._pending_action = None
             return self._report_actions(turn_id, pending.actions)
         finally:
@@ -310,6 +312,8 @@ class OnlineInteraction:
             outcome.update(
                 status=receipt["status"], detail=receipt.get("detail", "")
             )
+            if "data" in receipt:
+                outcome["data"] = receipt["data"]
             if outcome["status"] == "unknown":
                 break
             self._pending_action = None

@@ -51,6 +51,17 @@ def main(args: Optional[List[str]] = None) -> None:
             "请恢复相机采集，只调用 start_receiving_image。",
             ["start_receiving_image"],
         ),
+        (
+            "按顺序把音量设为35，启动跟随，查询音量，然后停止跟随。"
+            "只依次调用 volume_set(35)、start_following、"
+            "volume_status、stop_following。",
+            [
+                "volume_set",
+                "start_following",
+                "volume_status",
+                "stop_following",
+            ],
+        ),
     ]
     try:
         # 2. 逐轮输入真实自然语言，等待模型选择及设备最终回执。
@@ -80,8 +91,16 @@ def main(args: Optional[List[str]] = None) -> None:
             assert [a["name"] for a in result["actions"]] == expected, result
             assert result["status"] == "completed", result
             assert all(
-                a["status"] == "real_success" for a in result["actions"]
+                a["status"]
+                == (
+                    "simulated_success"
+                    if a["name"].startswith("volume_")
+                    else "real_success"
+                )
+                for a in result["actions"]
             ), result
+            if expected[0] == "volume_set":
+                assert result["actions"][2]["data"]["level"] == 35, result
         # 3. dry-run 即使生成预览也不能向安全运动话题发布 Twist。
         assert motion == [], "dry-run 出现运动输出"
         print(
