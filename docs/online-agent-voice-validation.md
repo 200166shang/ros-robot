@@ -64,7 +64,20 @@ ASR 实际识别“机器人，请让底盘向前移动20厘米。”，模型�
 - robot_voice 与 robot_agent 外部 `colcon build` 通过；安装版真实 ROS
   probe 通过。Ruff format/check 和新增模块 Pyright 检查通过。
 
-最终全量回归和双轴审查复验结果在提交 PR 前补充。
+最终全量 Python 回归 **70 passed**（7.42秒），包含所有旧测试与15项新增测试。
+初次用 pytest8.3.5遇到 Foxy launch_testing 插件收集兼容错误；外部工具环境
+改用 pytest6.2.5 后全量通过，不修改仓库测试或跳过 ROS 插件。
+
+```bash
+source /opt/ros/foxy/setup.zsh
+PYTHONPATH="$PWD/ros2_ws/src/robot_agent:$PWD/ros2_ws/src/robot_voice:<外部依赖>:$PYTHONPATH" \
+  python3 -m pytest -q tests ros2_ws/src/robot_agent/test \
+  ros2_ws/src/robot_voice/test ros2_ws/src/robot_bringup/test
+```
+
+Ruff0.17.0：`format --check .` 检查24个文件，`check .` 通过；
+Pyright1.1.414 对新增/修改的六个业务模块检查为0 errors、0 warnings。
+Foxy / Python3.8.10 外部构建复验两个包通过。
 
 首次双轴审查各发现一项问题，已按纵向行为测试修复：保存失败保留原回合
 事实，以 record_status=failed 标记；正常退出通过取消信号终止/回收在途
@@ -77,3 +90,24 @@ ASR 实际识别“机器人，请让底盘向前移动20厘米。”，模型�
 未启用麦克风采集或真实播放，二者为可选入口，不是必验项。
 ASR双向音频流、LLM SSE、TTS音频流均保留；业务收齐模型结构化输出后
 执行动作并合成最终回复，普通聊天同样使用这一安全输出时序。
+
+## 修复后的真实安装版复验
+
+最终安装版从 /tmp 运行同一公开 ROS probe，turn `f3715ec115874f959d0441399b0cbe46`。
+旧录音实际识别仍为“你好机器人。请报告当前状态。”；6项动作全部模拟成功，
+TTS completed，record_status=completed，音频42.07秒；cmd_vel消息0条。
+动作：wake_up, head_forward, navigation_status, show_wifi_info, volume_status, music_status。
+音频 SHA256：`1f79dd2e8490340bd5f318c998616a8e5afd7b9e8a86865433b71c86e05a79ce`。
+
+## Standards
+
+复验固定点 `13ef19b`，命令 `git diff 13ef19b...HEAD`，覆盖实现提交
+`4037fd9` 和修复提交 `6724176`。0个未解决问题。保存失败保留事实、
+输入错误分类、音频取消与资源所有权经独立审查通过，无需报告的设计异味。
+
+## Spec
+
+0个未解决问题。独立审查确认真实在线证据、会话/音乐过滤/恢复、音频退出
+与本票范围符合规格。麦克风采集与可闻播放未启用，仍属非必验可选项。
+
+双轴总计：Standards 0项，Spec 0项；各轴均无待修复问题。
