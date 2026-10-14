@@ -84,3 +84,5 @@ DashScope qwen-plus、北京兼容 HTTPS 端点、provider_timeout=60 秒、acti
 - Ruff与在线/独立控制模块类型检查通过。双轴审查的两项规范问题（标注与流程注释）已修复；Spec 未发现偏差。
 
 部署需要重建或清理旧安装目录，源码删除不会自动删除旧 colcon 安装残留。本地模型权重、语音模型、凭证和正在运行的外部进程不属于源码清理对象，均未删除或停止。
+
+退役后全新安装版本真实在线复验：聊天 `d5bca2f25f504557b48529031d50b860` completed；点头→微笑→点头 `a35bc41bc7864191a8ca3705153f95ea` completed，三项 simulated_success，核对正确 rejected。通过真实云端与完整包内提示词，没有本地模型回退。
