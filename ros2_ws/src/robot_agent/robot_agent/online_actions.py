@@ -3,9 +3,24 @@
 import ast
 import inspect
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
-SIMULATED_EXPRESSIONS = frozenset({"head_nod", "head_smile", "head_shake"})
+from .online_head_simulation import HeadSimulation
+from .online_simulation import (
+    MusicSimulation,
+    NavigationSimulation,
+    VolumeSimulation,
+    show_wifi_info,
+    validate_level,
+    validate_location,
+    validate_pose,
+    validate_recommendation,
+    validate_song,
+    validate_step,
+    wifi_status,
+)
+
 CONFIRMED_SUCCESS = frozenset({"simulated_success", "real_success"})
 DEVICE_OUTCOMES = CONFIRMED_SUCCESS | {"failed", "unknown"}
 MAX_ACTIONS = 64
@@ -58,23 +73,55 @@ def parse_action(source: str) -> ActionCall:
     return ActionCall(expression.func.id, args, kwargs)
 
 
-def simulate_expression() -> Dict:
-    """模拟表情完成，无舵机或显示设备输出。"""
-    return {
-        "status": "simulated_success",
-        "detail": "表情动作仅模拟，无硬件输出",
-    }
-
-
 class ActionRegistry:
     """集中管理动作契约；校验完整列表之后才允许交互模块执行。"""
 
     def __init__(self) -> None:
-        """当前三个无参数表情共用日志模拟，不创建每动作子类。"""
-        self._handlers = {
-            name: ActionHandler(execute=simulate_expression)
-            for name in SIMULATED_EXPRESSIONS
-        }
+        """集中组装完整模拟能力，不创建真实驱动。"""
+        # 1. 状态按职责持有；LCD 由头部共享给音乐与WiFi显示。
+        self.navigation = NavigationSimulation()
+        self.head = HeadSimulation()
+        self.music = MusicSimulation(self.head.expression)
+        self.volume = VolumeSimulation()
+        self._handlers: Dict[str, ActionHandler] = {}
+        self.head.register(self)
+
+        # 2. 导航校验只检查参数，状态转换在按序执行阶段确认。
+        for name in ("navigate_to", "go_to"):
+            self.register(name, self.navigation.navigate_to, validate_location)
+        self.register(
+            "add_location", self.navigation.add_location, validate_pose
+        )
+        for name in (
+            "cancel_navigation",
+            "navigation_status",
+            "list_locations",
+        ):
+            self.register(name, getattr(self.navigation, name))
+
+        # 3. 音乐别名绑定同一契约，播放状态供后续会话读取。
+        for name in ("play_music", "play_song"):
+            self.register(name, self.music.play_music, validate_song)
+        self.register("add_to_queue", self.music.add_to_queue, validate_song)
+        self.register(
+            "recommend_songs",
+            self.music.recommend_songs,
+            validate_recommendation,
+        )
+        for name in ("stop_music", "next_song", "music_status"):
+            self.register(name, getattr(self.music, name))
+
+        # 4. 系统能力只模拟，不调用主机命令或网络。
+        self.register("volume_up", self.volume.volume_up, validate_step)
+        self.register("volume_down", self.volume.volume_down, validate_step)
+        self.register("volume_set", self.volume.volume_set, validate_level)
+        for name in ("volume_mute", "volume_unmute", "volume_status"):
+            self.register(name, getattr(self.volume, name))
+        for name in ("get_wifi_ip", "wifi_status"):
+            self.register(name, wifi_status)
+        self.register(
+            "show_wifi_info", partial(show_wifi_info, self.head.expression)
+        )
 
     def register(
         self, name: str, execute: Callable, validate: Optional[Callable] = None

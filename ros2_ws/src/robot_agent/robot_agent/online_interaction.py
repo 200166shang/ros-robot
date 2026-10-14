@@ -103,7 +103,10 @@ def confirmed_action_reply(actions: List[Dict]) -> str:
     }
     return (
         "；".join(
-            action["name"] + "：" + labels[action["status"]]
+            action["name"]
+            + "："
+            + labels[action["status"]]
+            + ("，" + action["detail"] if action.get("detail") else "")
             for action in actions
         )
         + "。"
@@ -263,6 +266,8 @@ class OnlineInteraction:
             action.update(
                 status=receipt["status"], detail=receipt.get("detail", "")
             )
+            if "data" in receipt:
+                action["data"] = receipt["data"]
             self._pending_action = None
             return self._report_actions(turn_id, pending.actions)
         finally:
@@ -303,6 +308,8 @@ class OnlineInteraction:
             outcome.update(
                 status=receipt["status"], detail=receipt.get("detail", "")
             )
+            if "data" in receipt:
+                outcome["data"] = receipt["data"]
             if outcome["status"] == "unknown":
                 break
             self._pending_action = None

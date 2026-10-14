@@ -4,7 +4,7 @@ ROS 2 Foxy / Python 3.8，使用 Python 标准库，不需要 OpenAI 或 DashSco
 用户已确认弃用本地桥接。robot_agent 仅保留 Online Agent；本地模型节点、客户端、校验器和专用探针均已移除。模型输出解析仍接受 `fc/res`，这仅是响应契约兼容，不再提供本地桥接进程。
 
 网页相机/Follow 控制由 web_video_server 的 tracking_control 入口独立提供，使用 /web/control 和 /web/control_result；它不调用模型，也不是 Online Agent 的真实设备 Adapter（#65）。
-本入口保持 `dry_run=true`，只模拟 head_nod/head_smile/head_shake，无硬件输出。
+本入口保持 `dry_run=true`，完整模拟头部/LCD、导航、音乐、音量和WiFi的52项动作及别名，无硬件输出。详见 [模拟演示与契约](online-agent-simulation.md)。
 完整迁移范围、参数和后续票见 [动作与业务清单](online-agent-inventory.md)。
 
 ## 外部配置与启动
@@ -73,6 +73,7 @@ ros2 topic pub --once /online_agent/reconcile std_msgs/msg/String '{data: "原�
 ## Interface 与回复契约
 
 `OnlineInteraction.submit(text)` 返回 `turn_id`、`status`、`reply`、`actions`；ROS 将同一对象 JSON 发布到 `/online_agent/result`。
+模拟动作回执的 `data` 携带独立状态快照，`detail` 包含查询结果并进入确认后的回复。
 状态为 completed/failed/rejected/busy；每项动作保留原顺序、名称、绑定参数及 simulated_success/real_success/failed/unknown/not_executed。
 日志使用同一 turn_id 关联。未实现动作整表拒绝，不静默忽略。
 
@@ -83,8 +84,8 @@ provider 支持旧 `function/response` 与现有本地 `fc/res`，函数字符�
 `ActionHandler.execute/validate` 明确表达设备契约，`ActionCommand.name/parameters` 明确表达已绑定动作。ActionCommand 保留原返回元组的解包和相等比较兼容性。
 `submit` 集中展示收齐模型回复、全表校验、顺序执行和确认回复，I/O 隔离只用标准 Future 交还结果；回合互斥、模型在途与动作待核对分别管理，保留不可取消语义。
 
-设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册，配置阶段可显式替换同名契约，处理回合时不修改注册表。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。未来 #64/#65 复用此 Interface，设备异常保守报告 unknown 并保持待核对；明确失败回执报告 failed。Adapter 必须按设备实际完成状态返回，排队接受不能作为成功。配置的 action_timeout 仅限制主链路等待，不取消已提交操作。
-本票没有新增持久记忆、语音或真实设备控制。
+设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册，配置阶段可显式替换同名契约，处理回合时不修改注册表。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。当前 #64 模拟与后续 #65 感知复用此 Interface，设备异常保守报告 unknown 并保持待核对；明确失败回执报告 failed。Adapter 必须按设备实际完成状态返回，排队接受不能作为成功。配置的 action_timeout 仅限制主链路等待，不取消已提交操作。
+持久记忆、语音和真实感知接入由 #66、#67、#65 交付。
 
 ## 检查与真实在线验收
 
