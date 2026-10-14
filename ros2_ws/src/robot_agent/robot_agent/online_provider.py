@@ -3,19 +3,14 @@
 import json
 import os
 import urllib.request
+from importlib import resources
+from pathlib import Path
 from typing import Iterable, Protocol, Union
 
 DEFAULT_ENDPOINT = (
     "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 )
 MAX_SSE_LINE_BYTES = 64 * 1024
-SYSTEM_PROMPT = (
-    "你是小沫。只输出 JSON，字段 function 为按序函数字符串列表，"
-    "response 为中文回复。普通聊天 function 必须为空。"
-    "当前仅实现 head_nod、head_smile、head_shake 无参数模拟动作。"
-    "用户要求其他动作时保留真实函数名，系统会明确拒绝，不得替换成成功模拟。"
-    "支持的其他旧动作见用户要求，不得编造执行结果。"
-)
 
 
 class TextProvider(Protocol):
@@ -39,6 +34,19 @@ class DashScopeProvider:
             raise ValueError("在线端点必须使用 HTTPS")
         self._model = config.get("model", "qwen-plus")
 
+        # 启动时读取一次；默认资源随包安装，也支持源码外提示词覆盖。
+        prompt_file = config.get("system_prompt_file")
+        if prompt_file is None:
+            self._system_prompt = resources.read_text(
+                "robot_agent", "online_system_prompt.txt", encoding="utf-8"
+            )
+        else:
+            self._system_prompt = (
+                Path(prompt_file).expanduser().read_text(encoding="utf-8")
+            )
+        if not self._system_prompt.strip():
+            raise ValueError("system prompt 文件不能为空")
+
     def complete(self, text: str, timeout: float) -> Iterable[str]:
         """请求 SSE 增量输出；无重试，异常由交互模块脱敏处理。"""
         # 1. 把文本与动作契约编码为结构化模型请求。
@@ -46,7 +54,7 @@ class DashScopeProvider:
             {
                 "model": self._model,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": self._system_prompt},
                     {"role": "user", "content": text},
                 ],
                 "stream": True,
