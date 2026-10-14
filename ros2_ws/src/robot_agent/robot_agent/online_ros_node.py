@@ -72,7 +72,7 @@ class OnlineRosNode(Node):
         self.get_logger().info("Online text test ready")
 
     def _on_text(self, message: String) -> None:
-        """后台处理回合；忙时立即返回带关联标识的拒绝结果。"""
+        """后台处理独立验收回合；调用者收到回执后再提交下一项。"""
         if not self._accepting:
             return
         self._worker = threading.Thread(

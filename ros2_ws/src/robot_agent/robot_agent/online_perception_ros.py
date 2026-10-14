@@ -1,4 +1,4 @@
-"""ROS 感知 Adapter：只复用相机话题、确认服务与只读安全参数。"""
+"""ROS 感知 Adapter：相机请求话题及带设备确认的感知服务。"""
 
 import threading
 import time

@@ -11,8 +11,9 @@ Agent不配置dry_run；ObjectTrack自身仍dry_run=true，服务保留数据/TF
 硬件准备按[跟踪操作指南](../ros2_ws/src/robot_bringup/README.md)，包括
 MPP/RGA、RKNN runtime、源码外官方 SDK 头、RKNN 模型和 YDLIDAR SDK。
 不沿用旧 ROS 1 的硬编码启动路径，不修改 PWM 权限，不访问舵机驱动。
-运行依赖为 ROS 2 的 rclpy、std_msgs、std_srvs、rcl_interfaces，
-以及 Python `websocket-client>=1.6,<2`。无需 DashScope/OpenAI SDK。
+运行依赖为 ROS 2 的 rclpy、std_msgs、std_srvs，
+以及 Python `websocket-client>=1.6,<2`。独立探针还需要
+rcl_interfaces。无需 DashScope/OpenAI SDK。
 
 以下命令均为 Bash，从本 checkout 根目录执行。首次安装 Python 依赖到
 源码外目录，让 Foxy 继续使用系统 Python 3.8；不要切换到不同版本的
@@ -123,7 +124,7 @@ ros2 run robot_agent online_voice_wav \
   --wav /absolute/path/to/existing.wav
 ```
 
-### 可选麦克风与播放
+### 麦克风与可选播放
 
 需安装arecord/aplay（alsa-utils）；麦克风始终是正常入口唯一输入。
 arecord -l核对record_device，配置record_executable、record_device与
@@ -161,8 +162,9 @@ Follow、模拟/真实混合顺序、有意重复、WAV全链路，以及零运�
 重新启动同一探针进程/配置，加--recall验证跨进程摘要召回与清空。
 该阶段会清空专用记忆。失败记录仍保存，断言失败不能计为通过。
 
-覆盖核对见[源业务清单](online-agent-inventory.md)，实际命令、结果、版本
-与限度见[#68验收报告](online-agent-integration-validation.md)。
+覆盖核对见[源业务清单](online-agent-inventory.md)，最新结果与限度见
+[单麦克风重构报告](online-agent-microphone-validation.md)，最初交付
+见[#68验收报告](online-agent-integration-validation.md)。
 固定响应回归用于验证确定性失败/恢复语义，不能替代真实在线验收。
 
 
