@@ -43,10 +43,22 @@ colcon --log-base /tmp/ros-robot-66-log build \
 
 ### Spec
 
-**1 项未满足验收**：真实在线文本生成摘要、后续使用与重启恢复尚未运行。其他实现和固定行为未发现缺失、额外范围或错误。
+首次审查发现 **1 项未满足验收**：当时未提供凭证，真实云端记忆链路尚未运行。其后用户提供源码外 CSV 凭证，真实云端与独立进程重启复验全部通过，补足该项；其他实现和固定行为未发现缺失、额外范围或错误。最终重新执行两个独立审查，Standards **0 项**、Spec **0 项**。
 
-## 尚未满足
+## 真实云端已通过
 
-当前进程没有 `DASHSCOPE_API_KEY`，默认外部在线配置也不存在。未进行真实 DashScope 记忆验收，固定响应不能证明真实模型的摘要质量或召回。本 PR 保持 draft，issue #66 保持打开。
+起初当前进程没有 `DASHSCOPE_API_KEY`，默认外部配置也不存在，未将固定响应计作在线通过。用户随后明确提供源码外 CSV 凭证文件；仅在验收进程内解析唯一 API Key 并注入环境，未输出原始文件、凭证或 HTTP 错误，未提交该文件。
 
-已提供 [脱敏复验步骤](online-agent-memory.md) 与 `test/online_memory_probe.py`。仅打印阶段结论，验收专用记忆与配置在源码外，不报告用户记忆内容，不保存凭证或录音。补充真实在线证据前不能认定 #66 全部验收通过。
+真实 DashScope qwen-plus、北京兼容 HTTPS 端点、provider_timeout=60 秒；仅该验收进程对 dashscope.aliyuncs.com 使用 NO_PROXY，不修改全局代理。配置和专用合成记忆在源码外临时目录，运行结束自动清理。脚本不执行动作，也无真实设备 Adapter，入口继续要求 dry_run=true。
+
+- 第一次真实云端运行：连续文本召回、真实在线摘要生成、重新加载摘要召回及清空后重新加载均通过。
+- 随后将验收脚本的重启升级为 spawn 独立进程：新进程自行构造真实 provider/交互，从磁盘摘要恢复，不继承旧交互实例；另一新进程验证清空后的持久效果。
+- 最终真实云端运行退出码 **0**，仅输出以下脱敏阶段结论：
+
+```text
+recent_context_and_summary: passed
+process_restart_recall: passed
+clear_and_process_restart: passed; dry_run=true; no actions
+```
+
+上述证据来自真实在线调用，不是固定 provider。验收使用随机合成事实，报告不记录输入、回复或摘要内容，不保存录音或凭证。可按 [脱敏复验步骤](online-agent-memory.md) 运行 `test/online_memory_probe.py` 重现。没有剩余已知未满足验收项。

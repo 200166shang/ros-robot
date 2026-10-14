@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import multiprocessing
 import uuid
 from pathlib import Path
 
@@ -9,6 +10,27 @@ from robot_agent.online_actions import ActionRegistry
 from robot_agent.online_interaction import OnlineInteraction
 from robot_agent.online_memory import ConversationMemory
 from robot_agent.online_provider import DashScopeProvider
+
+
+def verify_restart(
+    config: dict, path: Path, marker: str, cleared: bool
+) -> None:
+    """在新进程重新构造 provider 和交互，仅从磁盘恢复记忆。"""
+    agent = OnlineInteraction(
+        DashScopeProvider(config),
+        ActionRegistry(),
+        provider_timeout=float(config.get("provider_timeout", 60)),
+        memory=ConversationMemory(path, 2, 2),
+    )
+    result = agent.submit("只聊天，我最喜欢的色号是什么？不知道则说明。")
+    assert result["status"] == "completed", "重启在线回合未完成"
+    assert not result["actions"], "验收不允许动作"
+    assert not result["memory_warnings"], "重启记忆存在故障"
+    if cleared:
+        assert marker not in result["reply"], "清空后仍召回旧记忆"
+    else:
+        assert marker in result["reply"], "重启摘要未召回"
+        assert agent.clear_memory()["status"] == "completed", "清空失败"
 
 
 def main() -> None:
@@ -49,17 +71,26 @@ def main() -> None:
     assert args.memory_file.exists(), "持久摘要未生成"
     print("recent_context_and_summary: passed")
 
-    # 2. 新交互实例只从摘要恢复事实，不共享旧实例的近期上下文。
-    restarted = start()
-    result = submit(restarted, "只聊天，我最喜欢的色号是什么？原样回答。")
-    assert marker in result["reply"], "重启摘要未召回"
-    print("restart_recall: passed")
+    # 2. spawn 独立进程，避免继承旧交互实例或内存上下文。
+    context = multiprocessing.get_context("spawn")
+    restarted = context.Process(
+        target=verify_restart,
+        args=(config, args.memory_file, marker, False),
+    )
+    restarted.start()
+    restarted.join()
+    assert restarted.exitcode == 0, "独立进程重启召回或清空失败"
+    print("process_restart_recall: passed")
 
-    # 3. 清空覆盖两种记忆，并再次重启确认旧事实不再可见。
-    assert restarted.clear_memory()["status"] == "completed", "清空失败"
-    result = submit(start(), "只聊天，我最喜欢的色号是什么？不知道则说明。")
-    assert marker not in result["reply"], "清空后仍召回旧记忆"
-    print("clear_and_restart: passed; dry_run=true; no actions")
+    # 3. 再次独立启动，验证清空的持久效果，不输出原始回复。
+    cleared = context.Process(
+        target=verify_restart,
+        args=(config, args.memory_file, marker, True),
+    )
+    cleared.start()
+    cleared.join()
+    assert cleared.exitcode == 0, "清空后的独立进程验收失败"
+    print("clear_and_process_restart: passed; dry_run=true; no actions")
 
 
 if __name__ == "__main__":

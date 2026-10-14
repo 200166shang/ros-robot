@@ -45,7 +45,7 @@ PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" \
   --memory-file "$HOME/.local/state/ros-robot/memory-66-validation.json"
 ```
 
-脚本通过真实 DashScope、公开交互 Interface 连续提交文本，验证近期召回、摘要生成、重启召回、清空后再重启；不执行任何动作，只打印阶段通过信息，不打印输入、摘要或回复。模型事实保留失败会如实使断言失败，不以固定 provider 替代真实通过。验收文件含专用合成事实，仍保留在源码外。
+脚本通过真实 DashScope、公开交互 Interface 连续提交文本，验证近期召回、摘要生成、独立进程重启召回、清空后再次独立进程重启；不执行任何动作，只打印阶段通过信息，不打印输入、摘要或回复。模型事实保留失败会如实使断言失败，不以固定 provider 替代真实通过。验收文件含专用合成事实，仍保留在源码外。
 
 固定行为检查：
 
@@ -54,4 +54,4 @@ PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" \
   python3 -m pytest -q ros2_ws/src/robot_agent/test/test_online_memory.py
 ```
 
-本次固定测试、构建与真实云端未满足项见 [验收记录](online-agent-memory-validation.md)。
+本次固定测试、构建与真实云端证据见 [验收记录](online-agent-memory-validation.md)。
