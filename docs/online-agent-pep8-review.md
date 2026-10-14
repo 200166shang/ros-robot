@@ -29,7 +29,11 @@
 
 - Python 完整回归55项通过，命令与原验收报告相同。
 - Ruff 0.9.10 check/format 检查覆盖四个在线生产模块、行为测试和 ROS 探针；格式配置为79列，注释/docstring最大72列。
-- Pyright 1.1.390 检查在线模块，ROS 2 Foxy/Python 3.8 构建及真实在线话题复验结果在完成后记录。
+- Pyright 1.1.390 在线模块检查0错误；ROS 2 Foxy/Python 3.8 robot_agent 构建通过。真实在线聊天 turn `762b26d3cb6945a58cc68da71f3ce56e` 与动作 turn `6797b6b9bd1048eea8c23655f0bc612b` 均 completed，点头→微笑→点头均 simulated_success，已完成回合的核对请求正确 rejected。
 - 凭证、配置、构建和安装目录均位于源码外。保留 dry_run=true。
 
 审查范围是在线主链路及其测试，没有批量修改已有本地桥接或其他 ROS 包。
+
+## 最终双轴复审
+
+Standards：0项遗留规范问题、0项可操作设计问题。Spec：0项缺失、错误实现或范围扩张。以 `bd87b04` 为固定点审查本次重构，55项回归与真实在线证据支持行为兼容结论。
