@@ -18,7 +18,7 @@ def main():
     velocities = []
     previews = []
     response_sub = node.create_subscription(
-        String, '/agent/response', lambda message: responses.append(message.data), 10)
+        String, '/web/control_result', lambda message: responses.append(message.data), 10)
     velocity_sub = node.create_subscription(
         Twist, '/tracking/cmd_vel_safe',
         lambda message: velocities.append((message.linear.x, message.angular.z)), 10)
@@ -28,7 +28,7 @@ def main():
             previews.append(message.msg)
 
     preview_sub = node.create_subscription(Log, '/rosout', collect_preview, 10)
-    command_pub = node.create_publisher(String, '/agent/command', 10)
+    command_pub = node.create_publisher(String, '/web/control', 10)
     sensor_qos = QoSProfile(depth=1)
     sensor_qos.reliability = ReliabilityPolicy.BEST_EFFORT
     sensor_qos.durability = DurabilityPolicy.VOLATILE

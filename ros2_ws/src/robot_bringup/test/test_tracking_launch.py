@@ -129,3 +129,13 @@ class TrackingLaunchTest(unittest.TestCase):
             and dict(action.launch_arguments) == {"with_foxglove": "false"}
         ]
         self.assertEqual(len(tracking_includes), 1)
+        executables = [
+            "".join(part.describe() for part in action.cmd[0])
+            for action in description.entities
+            if isinstance(action, Node)
+        ]
+        self.assertEqual(len(executables), 3)
+        for expected, command in zip(
+            ["tracking_control", "web_video_node", "online_agent"], executables
+        ):
+            self.assertIn(expected, command)

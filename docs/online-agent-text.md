@@ -1,7 +1,9 @@
 # 在线文本交互（#63）
 
 ROS 2 Foxy / Python 3.8，使用 Python 标准库，不需要 OpenAI 或 DashScope SDK。
-现有 `llm_ros_node`、`command_agent` 和本地 `res/fc` 桥接继续可用。
+用户已确认弃用本地桥接。robot_agent 仅保留 Online Agent；本地模型节点、客户端、校验器和专用探针均已移除。模型输出解析仍接受 `fc/res`，这仅是响应契约兼容，不再提供本地桥接进程。
+
+网页相机/Follow 控制由 web_video_server 的 tracking_control 入口独立提供，使用 /web/control 和 /web/control_result；它不调用模型，也不是 Online Agent 的真实设备 Adapter（#65）。
 本入口保持 `dry_run=true`，只模拟 head_nod/head_smile/head_shake，无硬件输出。
 完整迁移范围、参数和后续票见 [动作与业务清单](online-agent-inventory.md)。
 
@@ -100,3 +102,20 @@ Ruff 固定验证版本 0.9.10、目标 py38，启用 E/W/F/I，代码79列、�
 在线 SSE 与 JSON 输出依据阿里云官方文档：
 [流式输出](https://www.alibabacloud.com/help/en/model-studio/stream)、
 [结构化输出](https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output)。
+
+
+## Tracking/web demo after local bridge retirement
+
+`./scripts/run-demo.sh` now delegates directly to the standard ROS launch;
+it no longer starts llama-server or local model weights. The default starts
+tracking and web controls. To include Online Agent, pass:
+
+```bash
+./scripts/run-demo.sh with_online_agent:=true \
+  online_config_file:="$HOME/.config/ros-robot/online.json"
+```
+
+Credentials must already be in the environment. Local ASR/TTS can be launched
+separately using robot_voice; the retired local-LLM voice acceptance probe is
+removed. Fresh builds are required: an incremental install can leave obsolete
+executables behind after their source entry points are removed.

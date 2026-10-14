@@ -15,13 +15,11 @@ setup(
     zip_safe=True,
     maintainer='robot',
     maintainer_email='robot@example.com',
-    description='Hardware-safe ROS 2 command agent',
+    description='Hardware-safe ROS 2 online text agent',
     license='MIT',
     entry_points={
         'console_scripts': [
             'online_agent = robot_agent.online_ros_node:main',
-            'command_agent = robot_agent.command_agent:main',
-            'llm_ros_node = robot_agent.llm_ros_node:main',
         ]
     },
 )

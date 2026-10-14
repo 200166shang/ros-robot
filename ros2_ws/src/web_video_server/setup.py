@@ -17,5 +17,6 @@ setup(
     maintainer_email='robot@example.com',
     description='Browser MJPEG viewer for the Orange Pi ROS 2 perception pipeline',
     license='MIT',
-    entry_points={'console_scripts': ['web_video_node = web_video_server.web_video_node:main']},
+    entry_points={'console_scripts': ['web_video_node = web_video_server.web_video_node:main',
+        'tracking_control = web_video_server.tracking_control_node:main']},
 )

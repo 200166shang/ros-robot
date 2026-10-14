@@ -1,5 +1,6 @@
-"""One-shot half-duplex voice route into the existing safe text bridge."""
+"""将单回合本地语音输入接到 Online Agent 文本 Interface。"""
 
+import json
 import tempfile
 import threading
 from pathlib import Path
@@ -75,10 +76,10 @@ class VoiceFrontendNode(Node):
         tts_dir = self.declare_parameter("tts_model_dir", TTS_MODEL_DIR).value
 
         input_topic = self.declare_parameter(
-            "input_topic", "/llm/user_input"
+            "input_topic", "/online_agent/text"
         ).value
         response_topic = self.declare_parameter(
-            "response_topic", "/llm/response"
+            "response_topic", "/online_agent/result"
         ).value
         capture_service = self.declare_parameter(
             "capture_service", "/voice/capture"
@@ -144,10 +145,17 @@ class VoiceFrontendNode(Node):
         return response
 
     def _on_llm_response(self, message):
+        """只把结构化回执的 reply 交给 TTS，拒绝无效回执。"""
+        try:
+            result = json.loads(message.data)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
+            return
         with self._state_lock:
             if not self._waiting_for_response:
                 return
-            self._response_text = message.data.strip()
+            self._response_text = result["reply"].strip()
             self._waiting_for_response = False
             self._response_event.set()
 
@@ -177,12 +185,12 @@ class VoiceFrontendNode(Node):
                 if not self._response_event.wait(self._llm_timeout):
                     with self._state_lock:
                         self._waiting_for_response = False
-                    raise RuntimeError("timed out waiting for /llm/response")
+                    raise RuntimeError("timed out waiting for /online_agent/result")
 
                 with self._state_lock:
                     response_text = self._response_text or ""
                 if not response_text:
-                    raise RuntimeError("/llm/response was empty")
+                    raise RuntimeError("/online_agent/result was empty")
 
                 tts_path = str(Path(temp_dir) / "response.wav")
                 self._tts.synthesize(response_text, tts_path)

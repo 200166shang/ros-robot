@@ -72,7 +72,7 @@ class WebVideoNode(Node):
             CompressedImage, '/image_raw/compressed', self.on_raw, qos)
         self.detection_subscription = self.create_subscription(
             Image, '/camera/image_det', self.on_detection, qos)
-        self.command_publisher = self.create_publisher(String, '/agent/command', 10)
+        self.command_publisher = self.create_publisher(String, '/web/control', 10)
         self.app = self.create_app()
         self.server_thread = threading.Thread(target=self.run_server, daemon=True)
         self.server_thread.start()

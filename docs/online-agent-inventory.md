@@ -76,7 +76,7 @@
 - WiFi：LCD 显示、主机 IP/连接状态，#64 模拟，不修改网络。
 - 导航：`navigation_controller.py`，已注册位置、导航目标/活动/取消与 ROS action 状态；#64 模拟，保留位置参数（map 米、单位四元数）。
 - 跟随：`robot_following_controller.py`，tracking_enabled/lidar_enabled/following_active；#65 接入现有 ROS 2 固定组合、融合与 Follow 服务，保持 dry_run。
-- 相机：旧在线主入口未直接注册相机函数，Follow 依赖链启动相机/目标检测。现有本地桥接另有 start_receiving_image、stop_camera_collection、query_camera_status、query_person_tracking_status、start_tracking；桥接保持原用法，#65 统一真实接入。
+- 相机：旧在线主入口未直接注册相机函数，Follow 依赖链启动相机/目标检测。现有本地桥接另有 start_receiving_image、stop_camera_collection、query_camera_status、query_person_tracking_status、start_tracking；本地桥接现已按用户决定弃用，#65 统一 Online Agent 的真实接入。
 
 ## 主入口业务迁移
 
