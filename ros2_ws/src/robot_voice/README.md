@@ -1,6 +1,6 @@
 # robot_voice
 
-This package is a one-shot, half-duplex audio front end for the Online Agent text Interface. It does not import the ASR/TTS runtime into the ROS Python process: replaceable adapters call the installed sherpa-onnx CLI, while `audio_io.py` owns ALSA capture and playback.
+This package is a one-shot, half-duplex audio front end for the Online Agent text Interface. It does not import the ASR/TTS runtime into the ROS Python process: replaceable adapters call the installed sherpa-onnx CLI, while the shared `robot_audio` package owns ALSA capture and playback.
 
 ```text
 Trigger /voice/capture

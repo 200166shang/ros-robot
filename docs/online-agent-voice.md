@@ -14,7 +14,7 @@ OnlineInteraction的公共Interface要求同一调用者顺序调用；处理阶
 
 ## 外部配置与启动
 
-依赖 Python3.8、ROS2 Foxy、`websocket-client>=1.6,<2` 与robot_voice。
+依赖 Python3.8、ROS2 Foxy、`websocket-client>=1.6,<2` 与robot_audio。
 正常录音还需要 `arecord`（alsa-utils），播放可选，开启时使用 `aplay`。
 完整依赖和统一启动见[操作指南](online-agent.md)。
 

@@ -6,6 +6,10 @@ ROS 2 Foxy / Python 3.8，统一入口组合真实在线 ASR、LLM、TTS、
 LCD、舵机、底盘、导航、音乐、系统音量、WiFi 与提示音均保持日志模拟。
 Agent不配置dry_run；ObjectTrack自身仍dry_run=true，服务保留数据/TF前提。
 
+设备音频工具归属[robot_audio](../ros2_ws/src/robot_audio/README.md)：
+在线Agent和现有离线前端各自导入录音、WAV输入、播放工具。
+robot_audio没有ROS节点或模型，在线Agent不再依赖robot_voice。
+
 ## 准备依赖与外部资源
 
 硬件准备按[跟踪操作指南](../ros2_ws/src/robot_bringup/README.md)，包括
@@ -29,7 +33,7 @@ export ONLINE_BUILD_ROOT="$HOME/local-data/ros-robot/online-build"
 colcon --log-base "$ONLINE_BUILD_ROOT/log" build --base-paths ros2_ws/src \
   --build-base "$ONLINE_BUILD_ROOT/build" \
   --install-base "$ONLINE_BUILD_ROOT/install" \
-  --packages-up-to robot_bringup robot_voice --executor sequential \
+  --packages-up-to robot_bringup --executor sequential \
   --cmake-args -DRKNN_API_INCLUDE_DIR="$HOME/sdk/rknn/include"
 source "$ONLINE_BUILD_ROOT/install/setup.bash"
 ```

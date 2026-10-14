@@ -7,8 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from robot_voice.audio_io import play_wav
-from robot_voice.audio_sources import create_audio_source
+from robot_audio.audio_io import play_wav
+from robot_audio.audio_sources import create_audio_source
 
 from .online_actions import ActionRegistry
 from .online_interaction import OnlineInteraction, make_result

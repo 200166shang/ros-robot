@@ -125,3 +125,42 @@ Pyright1.1.414。先验证旧实现失败，再验证新行为通过：正常节
 
 双轴代码审查：Standards 首轮1项发现涉及2处过期契约注释，
 已修正并复审；最终 Standards 0项剩余发现、Spec 0项发现。
+
+## 设备音频工具抽离（2026-10-15）
+
+用户进一步授权抽离共享设备音频工具。以本报告上一轮提交
+`c50391e` 为基线，把 audio_io、audio_sources 和对应行为测试
+迁入 robot_audio；在线 robot_agent 与现有 robot_voice 均直接
+依赖它。robot_audio不启动ROS节点，不包含ASR/TTS或模型。
+未增加common框架，也没有实现新离线方案。旧导入路径已删除，
+安装部署需重新构建新包及两个调用包。
+
+```text
+robot_agent（在线ASR/TTS） → robot_audio ← robot_voice（本地ASR/TTS）
+                            录音 / WAV / 播放
+```
+
+保留采集/播放的取消、超时、子进程回收及WAV格式契约。
+现有离线前端仅更新导入并按根Ruff配置整理格式与说明。
+在线感知、模型和语音流程未改变，没有新增topic或进程。
+
+- 迁移后完整Python回归98 passed（13.55秒），其中设备音频
+  工具5项测试迁入新包；在线麦克风相关单项先检查16项通过。
+- Ruff45文件格式和lint、`git diff --check`通过。
+- 新音频包与在线组装模块Pyright零错误/警告。
+- 离线前端存在27项旧ROS参数类型诊断；对迁移前后独立检查，
+  诊断内容完全相同，没有新增。未借本次迁移重构其参数逻辑。
+- 全新源码外构建目录
+  `/home/orangepi/local-data/ros-robot/issue-68-audio-build/`：
+  robot_audio、robot_agent、robot_voice三包构建成功（23.2秒）。
+
+- 从/tmp加载全新安装环境，确认在线/离线引用同一份
+  robot_audio.create_audio_source；安装版音频测试5 passed。
+- 三包colcon test任务成功：robot_audio执行3项文件源测试，
+  robot_voice执行3项识别解析测试；robot_agent的setuptools任务
+  发现0项，其实际行为包含在完整98项pytest中。新构建目录的
+  setuptools任务未生成JUnit XML，不使用test-result的0项作为
+  行为覆盖证据。日志为audio-clean-test.log。
+
+上述检查日志位于同一源码外证据目录，文件名前缀audio-。
+双轴审查结果在提交前补充。

@@ -1,13 +1,16 @@
+"""通过文件输入Interface验证格式校验与原始音频保护。"""
+
 import tempfile
 import unittest
 import wave
 from pathlib import Path
 
-from robot_voice.audio_sources import create_audio_source
+from robot_audio.audio_sources import create_audio_source
 
 
 class TestWavFileAudioSource(unittest.TestCase):
     def test_file_mode_replays_fixture_without_modifying_it(self):
+        """文件采集保留原文件并返回相同音频副本。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             fixture = root / "fixture.wav"
@@ -38,6 +41,7 @@ class TestWavFileAudioSource(unittest.TestCase):
             )
 
     def test_file_mode_rejects_audio_outside_asr_format(self):
+        """拒绝不符合识别输入格式的音频。"""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             fixture = root / "wrong-rate.wav"
@@ -56,6 +60,7 @@ class TestWavFileAudioSource(unittest.TestCase):
             self.assertFalse(destination.exists())
 
     def test_unknown_audio_source_is_rejected(self):
+        """未知音频源模式不能创建采集对象。"""
         with self.assertRaises(ValueError):
             create_audio_source("network_stream")
 

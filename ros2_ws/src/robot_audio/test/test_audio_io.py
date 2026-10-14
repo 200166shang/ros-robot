@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from robot_voice.audio_io import play_wav, record_wav
+from robot_audio.audio_io import play_wav, record_wav
 
 
 @pytest.mark.parametrize("operation", ["record", "play"])
