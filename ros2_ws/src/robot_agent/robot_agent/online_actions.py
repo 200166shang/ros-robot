@@ -5,7 +5,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
-from .online_action_contracts import ActionHandler
+from .online_action_contracts import ACTION_DEADLINE, ActionHandler
 from .online_head_simulation import HeadSimulation, head_actions
 from .online_simulation import (
     MusicSimulation,
@@ -116,10 +116,17 @@ class ActionRegistry:
             handler.validate(**parameters.arguments)
         return ActionCommand(call.name, dict(parameters.arguments))
 
-    def execute(self, name: str, parameters: Dict) -> Dict:
+    def execute(
+        self, name: str, parameters: Dict, deadline: Optional[float] = None
+    ) -> Dict:
         """设备回执在 Adapter 出口确认，内部只消费统一的结果状态。"""
         handler = self._handlers[name]
-        receipt = handler.execute(**parameters)
+        # 标准上下文按线程隔离，设备流程共享交互层期限，不改变动作参数。
+        token = ACTION_DEADLINE.set(deadline)
+        try:
+            receipt = handler.execute(**parameters)
+        finally:
+            ACTION_DEADLINE.reset(token)
         if (
             not isinstance(receipt, dict)
             or receipt.get("status") not in DEVICE_OUTCOMES

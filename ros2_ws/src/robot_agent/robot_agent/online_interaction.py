@@ -3,6 +3,7 @@
 import json
 import math
 import threading
+import time
 import uuid
 from concurrent.futures import Future, wait
 from dataclasses import dataclass
@@ -283,10 +284,11 @@ class OnlineInteraction:
         for command, outcome in zip(commands, outcomes):
             # 提交前先保守记为未知，任何后续异常都不会伪报未执行。
             outcome.update(status="unknown", detail="已提交调用，等待设备回执")
+            deadline = time.monotonic() + self._action_timeout
             try:
                 call = start_call(
                     lambda: self._actions.execute(
-                        command.name, command.parameters
+                        command.name, command.parameters, deadline
                     )
                 )
             except Exception:
@@ -295,7 +297,9 @@ class OnlineInteraction:
                 )
                 break
             self._pending_action = PendingAction(call, turn_id, outcomes)
-            if not wait([call], timeout=self._action_timeout).done:
+            if not wait(
+                [call], timeout=max(0.0, deadline - time.monotonic())
+            ).done:
                 outcome["detail"] = "已发出调用超时，执行结果未知"
                 break
 

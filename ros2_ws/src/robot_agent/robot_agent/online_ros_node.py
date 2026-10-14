@@ -11,6 +11,8 @@ from std_msgs.msg import String
 
 from .online_actions import ActionRegistry
 from .online_interaction import OnlineInteraction, make_result
+from .online_perception import PerceptionActions, perception_actions
+from .online_perception_ros import RosPerception
 from .online_provider import DashScopeProvider
 from .online_simulation import simulate_cue
 
@@ -32,11 +34,15 @@ class OnlineRosNode(Node):
             config = json.load(source)
 
         # 2. 组装交互 Implementation 与边缘 Adapters。
+        action_timeout = float(config.get("action_timeout", 5.0))
+        registry = ActionRegistry()
+        perception = PerceptionActions(RosPerception(self), action_timeout)
+        registry.register_many(perception_actions(perception))
         self._agent = OnlineInteraction(
             DashScopeProvider(config),
-            ActionRegistry(),
+            registry,
             provider_timeout=float(config.get("provider_timeout", 60.0)),
-            action_timeout=float(config.get("action_timeout", 5.0)),
+            action_timeout=action_timeout,
         )
         # 3. 接入文本和结果话题，由交互模块管理回合执行。
         self._publisher = self.create_publisher(

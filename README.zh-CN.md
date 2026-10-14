@@ -37,4 +37,4 @@ source /opt/ros/foxy/setup.bash
 相关文件不纳入 Git。人物跟踪默认使用 `dry_run: true`，不会驱动实体底盘。
 
 
-本地 LLM 桥接已弃用，robot_agent 仅提供 Online Agent。启动及外部配置见 [在线文本说明](docs/online-agent-text.md)。run-demo.sh 使用标准 ROS launch 启动跟踪与网页；网页设备控制独立于模型推理。
+本地 LLM 桥接已弃用，robot_agent 仅提供 Online Agent。启动及外部配置见 [在线文本说明](docs/online-agent-text.md)，相机、融合及 Follow 见 [感知控制](docs/online-agent-perception.md)。run-demo.sh 使用标准 ROS launch 启动跟踪与网页；网页设备控制独立于模型推理。
