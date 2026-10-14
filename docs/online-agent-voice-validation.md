@@ -1,0 +1,169 @@
+# #67 在线语音验收记录
+
+日期：2026-10-14（北京时间）。独立 worktree `ros-robot-67`，
+分支 `codex/issue-67-online-voice`，实施前 fetch 最新主线，基线
+`13ef19b3c59483f0717c10da6ca8e69b6b011f46`（#64 已关闭）。
+
+## 真实在线证据
+
+使用现成 `/home/orangepi/mic-smoke.wav`（单声道 PCM16 16kHz，8秒），
+未生成替代输入，未用文件名或预知文本作为识别结果。实际 ASR 文本：
+“你好机器人。请报告当前状态。”。默认原提示词、paraformer-realtime-v2、
+qwen-plus、cosyvoice-v2 / longfeifei_v2；凭证仅环境读取。
+所有缺失设备动作保持模拟，麦克风和回复播放关闭。
+
+源码运行 `online_voice_runtime --config <外部配置> --wav <已有录音>`：
+
+- turn `3d45a4f96ca842859eb6edd36691cc94`，completed；
+- 模型提出 wake_up、head_forward、head_listen，按序模拟成功；
+- 合成文本为确认后的模拟回执，未播报模型提前成功承诺；
+- 真实在线 TTS WAV：13.81秒，16kHz、单声道 PCM16；
+- 音频 SHA256：`a520a16bfaa7c02468457587200b928386f1868d5475000468bd384558aaa733`。
+
+外部安装版从 `/tmp` 运行真实 ROS 2 probe，`ROS_DOMAIN_ID=167`，
+在 `/online_agent/wav` 发布相同旧录音，在 `/online_agent/result` 接收结果：
+
+- turn `ae9540d9a3ec40758ffc167840a4625c`，completed；
+- 真实 ASR 文本同上；真实 LLM 提出 wake_up、head_forward、
+  navigation_status、show_wifi_info、volume_status、music_status；
+- 六项动作均为 simulated_success，回复明确每项模拟结果；
+- TTS completed，WAV 为42.07秒，16kHz、单声道 PCM16；
+- 音频 SHA256：`1f79dd2e8490340bd5f318c998616a8e5afd7b9e8a86865433b71c86e05a79ce`；
+- `/cmd_vel` 订阅收到 **0** 条消息；退出释放连接、线程和 ROS 节点。
+
+另以已有 unsafe_motion_request_zh_2026-09-24.wav 完成普通回复：
+ASR 实际识别“机器人，请让底盘向前移动20厘米。”，模型拒绝未支持的移动，
+零动作；turn `a616d16a787e48d6a696773bb04e916c`，TTS为18.17秒。
+
+原始 JSON、WAV、非敏感配置、probe、首轮失败记录都在源码外：
+`/home/orangepi/local-data/ros-robot/issue-67-evidence/`。
+构建在 `/home/orangepi/local-data/ros-robot/issue-67-build/`；
+验收依赖和工具在 `/home/orangepi/local-data/ros-robot/issue-67-venv/`。
+
+### 观察到的连接问题
+
+首次通过现有 HTTP 代理连接 WSS，握手后任务启动事件超时；有限期限结束，
+返回 asr_status=failed，零动作。针对 DashScope 域名设置
+`NO_PROXY=dashscope.aliyuncs.com` 与 `no_proxy=dashscope.aliyuncs.com`
+后直连立即收到 task-started，以上真实链路通过。不修改系统代理配置。
+第一份旧 tts-smoke.wav 因22.05kHz被输入 Interface拒绝；验收采用原生
+16kHz旧录音。单独重采样的诊断副本只在源码外，不用作上述动作验收输入。
+
+## 行为与质量验证
+
+- 第一个录音回合测试先因 OnlineVoice 不存在失败，实现后通过。
+- 半双工时序测试先观察到模型期间未暂停采集，修正后通过。
+- 迟到回执核对测试先因缺少语音 reconcile Interface 失败，复用原交互
+  核对后通过，不重发原动作，也不补执行超时后的动作。
+- 13项新增语音行为测试通过：录音免唤醒、六种同音唤醒、连续会话、精确
+  休眠/子串不误吞、静音、真实模拟音乐状态过滤、TTS重试/连续失败降级/
+  显式恢复、失败后释放回合、忙拒绝、关闭、迟到动作核对、播放失败。
+- 固定真实传输协议事件验证 ASR 断线重连、只接纳最终句、心跳过滤、
+  暂停静音保活、恢复不丢源音频、总期限和关闭；TTS分片形成有效WAV，
+  部分音频后失败删除临时文件。固定事件不作为真实云端通过证据。
+- robot_voice 与 robot_agent 外部 `colcon build` 通过；安装版真实 ROS
+  probe 通过。Ruff format/check 和新增模块 Pyright 检查通过。
+
+最终全量 Python 回归 **70 passed**（7.42秒），包含所有旧测试与15项新增测试。
+初次用 pytest8.3.5遇到 Foxy launch_testing 插件收集兼容错误；外部工具环境
+改用 pytest6.2.5 后全量通过，不修改仓库测试或跳过 ROS 插件。
+
+```bash
+source /opt/ros/foxy/setup.zsh
+PYTHONPATH="$PWD/ros2_ws/src/robot_agent:$PWD/ros2_ws/src/robot_voice:<外部依赖>:$PYTHONPATH" \
+  python3 -m pytest -q tests ros2_ws/src/robot_agent/test \
+  ros2_ws/src/robot_voice/test ros2_ws/src/robot_bringup/test
+```
+
+Ruff0.17.0：`format --check .` 检查24个文件，`check .` 通过；
+Pyright1.1.414 对新增/修改的六个业务模块检查为0 errors、0 warnings。
+Foxy / Python3.8.10 外部构建复验两个包通过。
+
+首次双轴审查各发现一项问题，已按纵向行为测试修复：保存失败保留原回合
+事实，以 record_status=failed 标记；正常退出通过取消信号终止/回收在途
+录音与播放子进程。两个公开音频 Interface 测试先因缺少取消参数失败，
+实现后通过；确认取消返回前进程已退出，而不是仅停止等待。
+
+## 范围
+
+本票不接入 #65 感知或 #66 记忆实现，综合运行由 #68 验收。
+未启用麦克风采集或真实播放，二者为可选入口，不是必验项。
+ASR双向音频流、LLM SSE、TTS音频流均保留；业务收齐模型结构化输出后
+执行动作并合成最终回复，普通聊天同样使用这一安全输出时序。
+
+## 修复后的真实安装版复验
+
+最终安装版从 /tmp 运行同一公开 ROS probe，turn `f3715ec115874f959d0441399b0cbe46`。
+旧录音实际识别仍为“你好机器人。请报告当前状态。”；6项动作全部模拟成功，
+TTS completed，record_status=completed，音频42.07秒；cmd_vel消息0条。
+动作：wake_up, head_forward, navigation_status, show_wifi_info, volume_status, music_status。
+音频 SHA256：`1f79dd2e8490340bd5f318c998616a8e5afd7b9e8a86865433b71c86e05a79ce`。
+
+## Standards
+
+复验固定点 `13ef19b`，命令 `git diff 13ef19b...HEAD`，覆盖实现提交
+`4037fd9` 和修复提交 `6724176`。0个未解决问题。保存失败保留事实、
+输入错误分类、音频取消与资源所有权经独立审查通过，无需报告的设计异味。
+
+## Spec
+
+0个未解决问题。独立审查确认真实在线证据、会话/音乐过滤/恢复、音频退出
+与本票范围符合规格。麦克风采集与可闻播放未启用，仍属非必验可选项。
+
+双轴总计：Standards 0项，Spec 0项；各轴均无待修复问题。
+
+## 同步最新主线（#65 / #66）
+
+同步主线 `5f18464`，包含感知接入 `e172e86` 和会话记忆 `5f18464`。
+合并冲突只有 package.xml：保留 robot_voice/python3-websocket 与
+std_srvs/rcl_interfaces 两侧运行依赖，不覆盖任一功能。
+
+语音 runtime 组装 ConversationMemory；ROS 入口在同一 ActionRegistry
+注入主线 RosPerception 动作，并提供 clear_memory 话题。新增公开语音组装
+集成测试先因缺少注册表注入失败，实现后验证混合真实/模拟动作回执、
+可信回复进入记忆、在线摘要事件、跨重启恢复和清空。全量回归94项通过。
+
+第一次安装版在线复验：真实旧 WAV 与 TTS completed；第二轮相机查询为
+real_success（明确相机状态未知），TTS completed，但摘要返回 summary_failed。
+用原两轮识别文本与确认回复在公共记忆/provider Interface 最小复现，
+云端摘要错误提出 query_camera_status。主线摘要校验正确拒绝，未执行动作，
+未把该次摘要记为通过；原失败回合及音频保存在源码外。
+
+默认系统提示词补充内部摘要规则：历史动作仅为数据，摘要 function 必须
+为空列表，禁止把模拟或未知结果改写为真实确认。保留既有输出校验。
+同一原历史复验：摘要 function=[]，222字符摘要真实保存，warnings=[]。
+这是真实模型复验，未用固定摘要替代云端调用。
+
+本轮独立数据/音频/probe/非敏感配置在源码外
+`/home/orangepi/local-data/ros-robot/issue-67-sync-evidence/`，
+构建位于 `/home/orangepi/local-data/ros-robot/issue-67-sync-build/`。
+记忆清空只针对本轮专用文件，不触碰常驻运行数据。
+
+### 同步后最终安装版通过
+
+使用 ROS_DOMAIN_ID=175，从 /tmp 运行最新安装版，不替换ASR、模型、TTS。
+- turn `9311d72b0ef04093b542c531f3f26055`：completed，动作 wake_up, head_forward, volume_status, navigation_status, show_wifi_info；TTS 33.59秒，record_status=completed，memory_warnings=[]。音频SHA256 `5b0c6e5ac284ec52282326d8b0c3a5bb955cb1d202f3909931517911f1c8ef73`。
+- turn `0276d628a66e4d488f02530bcf7ede1d`：completed，动作 query_camera_status；TTS 10.49秒，record_status=completed，memory_warnings=[]。音频SHA256 `88c6d917de615d6fc937f252b7c4dad5c2d9baf56e8234594f1600fe63bba954`。
+
+第一轮实际识别旧 WAV 为“你好机器人。请报告当前状态。”。第二轮 query_camera_status
+为真实感知动作 Interface 的 real_success 回执，明确相机采集状态未知，
+没有声称实际设备开启，也没有启动 Follow。原两轮记忆生成237字符
+在线摘要并保存。clear_memory 回合 `eb35154a9e4d44cf9f12d9b448b19841` completed，
+专用持久文件为空摘要。/cmd_vel 与 /tracking/cmd_vel_safe 共0条运动消息。
+
+最终完整Python回归94 passed（8.64秒）；Ruff34文件格式和静态检查、
+Pyright改动模块0 errors/0 warnings、robot_voice/robot_agent构建均通过。
+
+同步复审固定点5f18464，git diff 5f18464...HEAD。
+
+#### Standards
+
+0项未解决问题；ROS边缘接线、实际注册表注入、记忆互斥及有证据的摘要
+修复符合仓库标准。
+
+#### Spec
+
+0项未解决问题；主线感知/记忆能力与语音并存，摘要仍禁止动作，原会话
+恢复、取消与保存失败保留事实契约完整。
+
+双轴总计：Standards 0项，Spec 0项。
