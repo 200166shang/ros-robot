@@ -53,3 +53,5 @@ PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" \
 PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" \
   python3 -m pytest -q ros2_ws/src/robot_agent/test/test_online_memory.py
 ```
+
+本次固定测试、构建与真实云端未满足项见 [验收记录](online-agent-memory-validation.md)。
