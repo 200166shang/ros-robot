@@ -44,7 +44,8 @@ def main() -> None:
     config = json.loads(args.config.read_text(encoding="utf-8"))
     provider = DashScopeProvider(config)
     timeout = float(config.get("provider_timeout", 60))
-    marker = "验收色号" + uuid.uuid4().hex[:12]
+    # 色号只含随机标识，避免模型把中文字段标签当成可省略的说明。
+    marker = uuid.uuid4().hex[:12]
 
     def start() -> OnlineInteraction:
         """通过公开交互 Interface 重新加载同一专用文件。"""

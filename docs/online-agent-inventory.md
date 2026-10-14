@@ -2,70 +2,70 @@
 
 源代码取自本机旧 ROS 1 checkout `robot/src/agent`，不是现有本地 Qwen 桥接。源版本 `22cd28d2d63ba1165f3fbceba205e02ed94f204d`。
 动作来源 `function_executor.py::_register_default_functions`，包括条件注册能力，不因 SDK 或硬件缺失而删行。
-下表参数保留原默认值和别名。所有未实现项在 #63 整表校验时拒绝，零动作执行。
+下表参数保留原默认值和别名。当前 #64 完整模拟52项动作及别名；8项源感知动作及相机兼容入口由 #65 接入真实 ROS Interface。
 
-| 动作 | 原参数与默认值 | 别名目标 | 源行为 | 源函数/行 | 本票状态及后续归属 |
+| 动作 | 原参数与默认值 | 别名目标 | 源行为 | 源函数/行 | 当前状态及归属 |
 |---|---|---|---|---|---|
-| `head_smile` | `无` | — | 微笑动作 | `_head_smile` L492 | 本票模拟成功 |
-| `head_nod` | `无` | — | 点头动作 | `_head_nod` L500 | 本票模拟成功 |
-| `head_shake` | `无` | — | 摇头动作 | `_head_shake` L506 | 本票模拟成功 |
-| `head_dance` | `无` | — | 跳舞动作 | `_head_dance` L512 | 本票整表拒绝；#64 |
-| `excited` | `无` | — | 兴奋表情 | `_excited` L520 | 本票整表拒绝；#64 |
-| `normal` | `无` | — | 正常表情 | `_normal` L526 | 本票整表拒绝；#64 |
-| `sleep` | `无` | — | 睡觉表情 | `_sleep` L532 | 本票整表拒绝；#64 |
-| `wake_up` | `无` | — | 苏醒表情 | `_wake_up` L538 | 本票整表拒绝；#64 |
-| `volume_up` | `step=5` | — | 增加音量 | `_volume_up` L705 | 本票整表拒绝；#64 |
-| `volume_down` | `step=5` | — | 减少音量 | `_volume_down` L720 | 本票整表拒绝；#64 |
-| `volume_set` | `level=50` | — | 设置音量到指定级别 | `_volume_set` L735 | 本票整表拒绝；#64 |
-| `volume_mute` | `无` | — | 静音 | `_volume_mute` L752 | 本票整表拒绝；#64 |
-| `volume_unmute` | `无` | — | 取消静音 | `_volume_unmute` L767 | 本票整表拒绝；#64 |
-| `volume_status` | `无` | — | 获取当前音量状态 | `_volume_status` L782 | 本票整表拒绝；#64 |
-| `head_forward` | `无` | — | 看向正前方 | `_head_forward` L545 | 本票整表拒绝；#64 |
-| `head_down` | `无` | — | 低头 | `_head_down` L550 | 本票整表拒绝；#64 |
-| `head_up` | `无` | — | 仰头 | `_head_up` L555 | 本票整表拒绝；#64 |
-| `head_left` | `无` | — | 向左看 | `_head_left` L560 | 本票整表拒绝；#64 |
-| `head_right` | `无` | — | 向右看 | `_head_right` L565 | 本票整表拒绝；#64 |
-| `head_reset` | `无` | — | 重置头部到中心位置 | `_head_reset` L570 | 本票整表拒绝；#64 |
-| `head_position` | `pitch=None, yaw=None` | — | 设置头部位置 | `_head_position` L575 | 本票整表拒绝；#64 |
-| `show_wifi_info` | `无` | — | 显示WiFi信息 | `_show_wifi_info` L587 | 本票整表拒绝；#64 |
-| `get_wifi_ip` | `无` | — | 获取WiFi IP地址 | `_get_wifi_ip` L599 | 本票整表拒绝；#64 |
-| `wifi_status` | `无` | — | 检查WiFi连接状态 | `_wifi_status` L613 | 本票整表拒绝；#64 |
-| `play_music` | `song_name` | — | 播放音乐 | `_play_music` L811 | 本票整表拒绝；#64 |
-| `play_song` | `song_name` | play_music | 播放歌曲（play_music的别名） | `_play_song` L831 | 本票整表拒绝；#64 |
-| `stop_music` | `无` | — | 停止音乐播放 | `_stop_music` L835 | 本票整表拒绝；#64 |
-| `next_song` | `无` | — | 切到下一首歌 | `_next_song` L856 | 本票整表拒绝；#64 |
-| `add_to_queue` | `song_name` | — | 添加歌曲到播放队列 | `_add_to_queue` L874 | 本票整表拒绝；#64 |
-| `music_status` | `无` | — | 获取音乐播放状态 | `_music_status` L886 | 本票整表拒绝；#64 |
-| `recommend_songs` | `song_name=None` | — | 获取推荐歌曲 | `_recommend_songs` L903 | 本票整表拒绝；#64 |
-| `start_following` | `无` | — | 启动机器人跟随功能 | `_start_following` L919 | 本票整表拒绝；#65 |
-| `stop_following` | `无` | — | 停止机器人跟随功能 | `_stop_following` L933 | 本票整表拒绝；#65 |
-| `toggle_following` | `无` | — | 切换机器人跟随功能状态 | `_toggle_following` L947 | 本票整表拒绝；#65 |
-| `following_status` | `无` | — | 获取机器人跟随状态 | `_following_status` L961 | 本票整表拒绝；#65 |
-| `enable_tracking` | `无` | — | 启用跟踪功能 | `_enable_tracking` L975 | 本票整表拒绝；#65 |
-| `disable_tracking` | `无` | — | 禁用跟踪功能 | `_disable_tracking` L989 | 本票整表拒绝；#65 |
-| `enable_lidar` | `无` | — | 启用激光雷达功能 | `_enable_lidar` L1003 | 本票整表拒绝；#65 |
-| `disable_lidar` | `无` | — | 禁用激光雷达功能 | `_disable_lidar` L1017 | 本票整表拒绝；#65 |
-| `navigate_to` | `location` | — | 导航到指定位置 | `_navigate_to` L1032 | 本票整表拒绝；#64 |
-| `go_to` | `location` | navigate_to | 导航到指定位置 | `_navigate_to` L1032 | 本票整表拒绝；#64 |
-| `cancel_navigation` | `无` | — | 取消当前导航任务 | `_cancel_navigation` L1051 | 本票整表拒绝；#64 |
-| `navigation_status` | `无` | — | 获取导航状态 | `_navigation_status` L1065 | 本票整表拒绝；#64 |
-| `list_locations` | `无` | — | 列出所有可用位置 | `_list_locations` L1084 | 本票整表拒绝；#64 |
-| `add_location` | `name, x, y, z=0.0, qx=0.0, qy=0.0, qz=0.0, qw=1.0` | — | 添加新位置 | `_add_location` L1099 | 本票整表拒绝；#64 |
-| `head_think` | `duration=2.0` | — | 思考动作 | `_head_think` L628 | 本票整表拒绝；#64 |
-| `head_confused` | `duration=1.5` | — | 困惑动作 | `_head_confused` L633 | 本票整表拒绝；#64 |
-| `head_surprised` | `duration=1.0` | — | 惊讶动作 | `_head_surprised` L638 | 本票整表拒绝；#64 |
-| `head_look_around` | `duration=3.0` | — | 环视动作 | `_head_look_around` L643 | 本票整表拒绝；#64 |
-| `head_greet` | `duration=2.0` | — | 打招呼动作 | `_head_greet` L648 | 本票整表拒绝；#64 |
-| `head_goodbye` | `duration=1.5` | — | 告别动作 | `_head_goodbye` L653 | 本票整表拒绝；#64 |
-| `head_refuse` | `duration=1.0` | — | 拒绝动作 | `_head_refuse` L658 | 本票整表拒绝；#64 |
-| `head_breathing` | `cycles=5, duration=0.5` | — | 呼吸动作 | `_head_breathing` L663 | 本票整表拒绝；#64 |
-| `head_attention` | `direction="center", duration=1.0` | — | 注意力动作 | `_head_attention` L668 | 本票整表拒绝；#64 |
-| `head_emotional` | `emotion="happy", duration=3.0` | — | 情感表达动作 | `_head_emotional` L673 | 本票整表拒绝；#64 |
-| `head_listen` | `duration=2.0` | — | 专注倾听动作 | `_head_listen` L679 | 本票整表拒绝；#64 |
-| `head_interest` | `duration=1.5` | — | 表示兴趣动作 | `_head_interest` L684 | 本票整表拒绝；#64 |
-| `head_concern` | `duration=2.0` | — | 表示关心动作 | `_head_concern` L689 | 本票整表拒绝；#64 |
-| `head_agree` | `duration=1.0` | — | 表示同意动作 | `_head_agree` L694 | 本票整表拒绝；#64 |
-| `head_disagree` | `duration=1.0` | — | 表示不同意动作 | `_head_disagree` L699 | 本票整表拒绝；#64 |
+| `head_smile` | `无` | — | 微笑动作 | `_head_smile` L492 | #63 代表模拟；#64 完整状态模拟 |
+| `head_nod` | `无` | — | 点头动作 | `_head_nod` L500 | #63 代表模拟；#64 完整状态模拟 |
+| `head_shake` | `无` | — | 摇头动作 | `_head_shake` L506 | #63 代表模拟；#64 完整状态模拟 |
+| `head_dance` | `无` | — | 跳舞动作 | `_head_dance` L512 | #64 完整状态模拟 |
+| `excited` | `无` | — | 兴奋表情 | `_excited` L520 | #64 完整状态模拟 |
+| `normal` | `无` | — | 正常表情 | `_normal` L526 | #64 完整状态模拟 |
+| `sleep` | `无` | — | 睡觉表情 | `_sleep` L532 | #64 完整状态模拟 |
+| `wake_up` | `无` | — | 苏醒表情 | `_wake_up` L538 | #64 完整状态模拟 |
+| `volume_up` | `step=5` | — | 增加音量 | `_volume_up` L705 | #64 完整状态模拟 |
+| `volume_down` | `step=5` | — | 减少音量 | `_volume_down` L720 | #64 完整状态模拟 |
+| `volume_set` | `level=50` | — | 设置音量到指定级别 | `_volume_set` L735 | #64 完整状态模拟 |
+| `volume_mute` | `无` | — | 静音 | `_volume_mute` L752 | #64 完整状态模拟 |
+| `volume_unmute` | `无` | — | 取消静音 | `_volume_unmute` L767 | #64 完整状态模拟 |
+| `volume_status` | `无` | — | 获取当前音量状态 | `_volume_status` L782 | #64 完整状态模拟 |
+| `head_forward` | `无` | — | 看向正前方 | `_head_forward` L545 | #64 完整状态模拟 |
+| `head_down` | `无` | — | 低头 | `_head_down` L550 | #64 完整状态模拟 |
+| `head_up` | `无` | — | 仰头 | `_head_up` L555 | #64 完整状态模拟 |
+| `head_left` | `无` | — | 向左看 | `_head_left` L560 | #64 完整状态模拟 |
+| `head_right` | `无` | — | 向右看 | `_head_right` L565 | #64 完整状态模拟 |
+| `head_reset` | `无` | — | 重置头部到中心位置 | `_head_reset` L570 | #64 完整状态模拟 |
+| `head_position` | `pitch=None, yaw=None` | — | 设置头部位置 | `_head_position` L575 | #64 完整状态模拟 |
+| `show_wifi_info` | `无` | — | 显示WiFi信息 | `_show_wifi_info` L587 | #64 完整状态模拟 |
+| `get_wifi_ip` | `无` | — | 获取WiFi IP地址 | `_get_wifi_ip` L599 | #64 完整状态模拟 |
+| `wifi_status` | `无` | — | 检查WiFi连接状态 | `_wifi_status` L613 | #64 完整状态模拟 |
+| `play_music` | `song_name` | — | 播放音乐 | `_play_music` L811 | #64 完整状态模拟 |
+| `play_song` | `song_name` | play_music | 播放歌曲（play_music的别名） | `_play_song` L831 | #64 完整状态模拟 |
+| `stop_music` | `无` | — | 停止音乐播放 | `_stop_music` L835 | #64 完整状态模拟 |
+| `next_song` | `无` | — | 切到下一首歌 | `_next_song` L856 | #64 完整状态模拟 |
+| `add_to_queue` | `song_name` | — | 添加歌曲到播放队列 | `_add_to_queue` L874 | #64 完整状态模拟 |
+| `music_status` | `无` | — | 获取音乐播放状态 | `_music_status` L886 | #64 完整状态模拟 |
+| `recommend_songs` | `song_name=None` | — | 获取推荐歌曲 | `_recommend_songs` L903 | #64 完整状态模拟 |
+| `start_following` | `无` | — | 启动机器人跟随功能 | `_start_following` L919 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `stop_following` | `无` | — | 停止机器人跟随功能 | `_stop_following` L933 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `toggle_following` | `无` | — | 切换机器人跟随功能状态 | `_toggle_following` L947 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `following_status` | `无` | — | 获取机器人跟随状态 | `_following_status` L961 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `enable_tracking` | `无` | — | 启用跟踪功能 | `_enable_tracking` L975 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `disable_tracking` | `无` | — | 禁用跟踪功能 | `_disable_tracking` L989 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `enable_lidar` | `无` | — | 启用激光雷达功能 | `_enable_lidar` L1003 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `disable_lidar` | `无` | — | 禁用激光雷达功能 | `_disable_lidar` L1017 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `navigate_to` | `location` | — | 导航到指定位置 | `_navigate_to` L1032 | #64 完整状态模拟 |
+| `go_to` | `location` | navigate_to | 导航到指定位置 | `_navigate_to` L1032 | #64 完整状态模拟 |
+| `cancel_navigation` | `无` | — | 取消当前导航任务 | `_cancel_navigation` L1051 | #64 完整状态模拟 |
+| `navigation_status` | `无` | — | 获取导航状态 | `_navigation_status` L1065 | #64 完整状态模拟 |
+| `list_locations` | `无` | — | 列出所有可用位置 | `_list_locations` L1084 | #64 完整状态模拟 |
+| `add_location` | `name, x, y, z=0.0, qx=0.0, qy=0.0, qz=0.0, qw=1.0` | — | 添加新位置 | `_add_location` L1099 | #64 完整状态模拟 |
+| `head_think` | `duration=2.0` | — | 思考动作 | `_head_think` L628 | #64 完整状态模拟 |
+| `head_confused` | `duration=1.5` | — | 困惑动作 | `_head_confused` L633 | #64 完整状态模拟 |
+| `head_surprised` | `duration=1.0` | — | 惊讶动作 | `_head_surprised` L638 | #64 完整状态模拟 |
+| `head_look_around` | `duration=3.0` | — | 环视动作 | `_head_look_around` L643 | #64 完整状态模拟 |
+| `head_greet` | `duration=2.0` | — | 打招呼动作 | `_head_greet` L648 | #64 完整状态模拟 |
+| `head_goodbye` | `duration=1.5` | — | 告别动作 | `_head_goodbye` L653 | #64 完整状态模拟 |
+| `head_refuse` | `duration=1.0` | — | 拒绝动作 | `_head_refuse` L658 | #64 完整状态模拟 |
+| `head_breathing` | `cycles=5, duration=0.5` | — | 呼吸动作 | `_head_breathing` L663 | #64 完整状态模拟 |
+| `head_attention` | `direction="center", duration=1.0` | — | 注意力动作 | `_head_attention` L668 | #64 完整状态模拟 |
+| `head_emotional` | `emotion="happy", duration=3.0` | — | 情感表达动作 | `_head_emotional` L673 | #64 完整状态模拟 |
+| `head_listen` | `duration=2.0` | — | 专注倾听动作 | `_head_listen` L679 | #64 完整状态模拟 |
+| `head_interest` | `duration=1.5` | — | 表示兴趣动作 | `_head_interest` L684 | #64 完整状态模拟 |
+| `head_concern` | `duration=2.0` | — | 表示关心动作 | `_head_concern` L689 | #64 完整状态模拟 |
+| `head_agree` | `duration=1.0` | — | 表示同意动作 | `_head_agree` L694 | #64 完整状态模拟 |
+| `head_disagree` | `duration=1.0` | — | 表示不同意动作 | `_head_disagree` L699 | #64 完整状态模拟 |
 
 ## 状态与依赖
 
@@ -93,4 +93,10 @@
 | 搜索依赖 | search_engine.py 未被在线主入口/动作表引用 | 不新增不存在的搜索动作 | 清单记录，无新增票 |
 | 真实录音与在线综合验收 | ASR→LLM→动作→TTS | 必须真实在线，阻塞明确报告 | #67/#68 |
 
-#63 仅交付三项无参数表情模拟；其他动作入口仍由明确拒绝保持可见。后续 #64/#65 注册可替换设备 Adapter，复用本票的校验和顺序规则。
+#63 交付三项代表表情及顺序执行主链路；#64 补齐52项模拟动作与别名。#65 感知动作仍待真实接入。当前状态语义、源实现差异及独立演示见 [完整模拟说明](online-agent-simulation.md)。
+
+## 底盘与提示音核对（#64）
+
+- 旧 `robot_following_controller.py` 经跟随控制栈使用底盘；没有额外直行/转弯/速度动作注册。8项跟随/tracking/LiDAR属于 #65，不能在本票以模拟成功替代真实感知接口。导航模拟不创建 action client 或发布 `/cmd_vel`。
+- 旧 `main.py::play_startup_sound/play_error_sound` 调用 ffplay 播放启动/错误提示音，不是模型注册动作。新 ROS 入口启动和失败回执仅记录 `simulate_cue(startup/error)`，不启动播放器、不生成音频。唤醒/语音生命周期的提示音由 #67 复用，未发明新的模型动作。
+- LCD 显示状态包括兴奋、正常、good_night、苏醒、wifi_info；音乐播放/切歌设兴奋，停止设正常，保留源跨能力状态。

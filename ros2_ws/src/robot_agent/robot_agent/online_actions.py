@@ -3,9 +3,20 @@
 import ast
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
-SIMULATED_EXPRESSIONS = frozenset({"head_nod", "head_smile", "head_shake"})
+from .online_action_contracts import ACTION_DEADLINE, ActionHandler
+from .online_head_simulation import HeadSimulation, head_actions
+from .online_simulation import (
+    MusicSimulation,
+    NavigationSimulation,
+    VolumeSimulation,
+    music_actions,
+    navigation_actions,
+    volume_actions,
+    wifi_actions,
+)
+
 CONFIRMED_SUCCESS = frozenset({"simulated_success", "real_success"})
 DEVICE_OUTCOMES = CONFIRMED_SUCCESS | {"failed", "unknown"}
 MAX_ACTIONS = 64
@@ -26,14 +37,6 @@ class ActionCommand(NamedTuple):
 
     name: str
     parameters: Dict[str, Any]
-
-
-@dataclass(frozen=True)
-class ActionHandler:
-    """设备执行与无副作用参数校验组成同一个动作契约。"""
-
-    execute: Callable[..., Dict]
-    validate: Optional[Callable[..., None]] = None
 
 
 def parse_action(source: str) -> ActionCall:
@@ -58,23 +61,23 @@ def parse_action(source: str) -> ActionCall:
     return ActionCall(expression.func.id, args, kwargs)
 
 
-def simulate_expression() -> Dict:
-    """模拟表情完成，无舵机或显示设备输出。"""
-    return {
-        "status": "simulated_success",
-        "detail": "表情动作仅模拟，无硬件输出",
-    }
-
-
 class ActionRegistry:
     """集中管理动作契约；校验完整列表之后才允许交互模块执行。"""
 
     def __init__(self) -> None:
-        """当前三个无参数表情共用日志模拟，不创建每动作子类。"""
-        self._handlers = {
-            name: ActionHandler(execute=simulate_expression)
-            for name in SIMULATED_EXPRESSIONS
-        }
+        """集中组装完整模拟能力，不创建真实驱动。"""
+        # 1. 状态按职责持有；LCD 由头部共享给音乐与WiFi显示。
+        self.navigation = NavigationSimulation()
+        self.head = HeadSimulation()
+        self.music = MusicSimulation(self.head.expression)
+        self.volume = VolumeSimulation()
+        self._handlers: Dict[str, ActionHandler] = {}
+        # 2. 各能力定义自己的动作契约，注册表统一批量加载。
+        self.register_many(head_actions(self.head))
+        self.register_many(navigation_actions(self.navigation))
+        self.register_many(music_actions(self.music))
+        self.register_many(volume_actions(self.volume))
+        self.register_many(wifi_actions(self.head.expression))
 
     def register(
         self, name: str, execute: Callable, validate: Optional[Callable] = None
@@ -83,6 +86,10 @@ class ActionRegistry:
         self._handlers[name] = ActionHandler(
             execute=execute, validate=validate
         )
+
+    def register_many(self, handlers: Mapping[str, ActionHandler]) -> None:
+        """批量加载能力表；同名覆盖沿用单项注册的配置阶段语义。"""
+        self._handlers.update(handlers)
 
     def validate(self, functions: List[str]) -> List[ActionCommand]:
         """全表校验无副作用，任一动作无效则不返回可执行列表。"""
@@ -109,10 +116,17 @@ class ActionRegistry:
             handler.validate(**parameters.arguments)
         return ActionCommand(call.name, dict(parameters.arguments))
 
-    def execute(self, name: str, parameters: Dict) -> Dict:
+    def execute(
+        self, name: str, parameters: Dict, deadline: Optional[float] = None
+    ) -> Dict:
         """设备回执在 Adapter 出口确认，内部只消费统一的结果状态。"""
         handler = self._handlers[name]
-        receipt = handler.execute(**parameters)
+        # 标准上下文按线程隔离，设备流程共享交互层期限，不改变动作参数。
+        token = ACTION_DEADLINE.set(deadline)
+        try:
+            receipt = handler.execute(**parameters)
+        finally:
+            ACTION_DEADLINE.reset(token)
         if (
             not isinstance(receipt, dict)
             or receipt.get("status") not in DEVICE_OUTCOMES

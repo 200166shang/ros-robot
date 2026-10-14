@@ -13,7 +13,10 @@ from std_msgs.msg import String
 from .online_actions import ActionRegistry
 from .online_interaction import OnlineInteraction, make_result
 from .online_memory import ConversationMemory
+from .online_perception import PerceptionActions, perception_actions
+from .online_perception_ros import RosPerception
 from .online_provider import DashScopeProvider
+from .online_simulation import simulate_cue
 
 
 class OnlineRosNode(Node):
@@ -33,11 +36,15 @@ class OnlineRosNode(Node):
             config = json.load(source)
 
         # 2. 组装交互 Implementation 与边缘 Adapters。
+        action_timeout = float(config.get("action_timeout", 5.0))
+        registry = ActionRegistry()
+        perception = PerceptionActions(RosPerception(self), action_timeout)
+        registry.register_many(perception_actions(perception))
         self._agent = OnlineInteraction(
             DashScopeProvider(config),
-            ActionRegistry(),
+            registry,
             provider_timeout=float(config.get("provider_timeout", 60.0)),
-            action_timeout=float(config.get("action_timeout", 5.0)),
+            action_timeout=action_timeout,
             memory=ConversationMemory(
                 Path(
                     config.get(
@@ -66,6 +73,8 @@ class OnlineRosNode(Node):
         self.create_subscription(
             String, "/online_agent/clear_memory", self._on_clear_memory, 10
         )
+        cue = simulate_cue("startup")
+        self.get_logger().info(cue["detail"])
         self.get_logger().info("Online Agent ready; dry_run=true")
 
     def _on_text(self, message: String) -> None:
@@ -112,6 +121,9 @@ class OnlineRosNode(Node):
         with self._publish_lock:
             if not self._accepting:
                 return
+            if result["status"] == "failed":
+                cue = simulate_cue("error")
+                self.get_logger().info(cue["detail"])
             message = String()
             message.data = json.dumps(result, ensure_ascii=False)
             self._publisher.publish(message)

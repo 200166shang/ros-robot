@@ -46,6 +46,9 @@ def test_default_prompt_preserves_legacy_contract(captured_requests):
         "go_to",
         "show_wifi_info",
         "【当前 ROS 2 部署约束】",
+        "volume_set(level=50)",
+        "真实感知动作：",
+        "stop_camera_collection",
     ):
         assert required in prompt
 
