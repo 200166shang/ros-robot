@@ -92,3 +92,29 @@ Follow 回合 `854ac6bf2c1f4c84a75828b9f0175669`，关闭融合回合
   共7包测试任务完成；`colcon test-result --verbose` 汇总 **28 tests，
   0 errors，0 failures，0 skipped**。robot_agent 的现有 setuptools 测试任务
   本身发现0项；其行为测试由上面的独立 pytest 50项回归实际执行，未遗漏。
+
+## 同步主线 #64 后复验
+
+2026-10-14（北京时间）将主线 `13ef19b`（#72，完整模拟能力 #64）合入本分支，
+合并提交 `2bef1be`。提示词和清单冲突保留52项完整模拟契约，同时加入本票
+真实感知映射；注册表保留主线能力状态与本票绝对动作期限，不覆盖彼此。
+
+- 新增公共交互回归：同回合 volume_set→fusion→Follow→volume_status→完整
+  停止，结果来源分别为模拟或真实确认，模拟状态字段仍正常返回。
+- 完整 Python 回归 **70 passed**，Ruff check/format 与 Pyright **0 errors**；
+  robot_agent 重新构建成功。7包 colcon 测试再次汇总 **28 tests，0 errors，
+  0 failures，0 skipped**；robot_agent 行为测试仍由独立 pytest 实际执行。
+- 首轮真实在线7项原感知指令通过；追加混合回合
+  `228170de84574c089546c385ae8a847c` 在 fusion 刚开启、近期扫描尚未到达时
+  被服务拒绝。已完成音量模拟事实保留，查询/停止均 not_executed，未重试。
+  该轮失败保留在源码外 sync-online-first.log，没有计为混合验收通过。
+- 探针随后补齐真实数据前提：fusion 开启成功后观察 `/scan` 的两帧真实
+  扫描到达，再提交混合回合。运行时动作不增加等待重试或削弱跟随前提。
+- 重新启动真实固定组合与在线模型，**9轮全部 completed**，探针退出码0。
+  第9轮 `f4f0000de5e5422ca8ecaa3a22ff0777` 为
+  volume_set(35)→start_following→volume_status→stop_following，依次返回
+  simulated_success、real_success、simulated_success、real_success；
+  音量查询 level=35，完整停止确认 Follow standby 与 fusion disabled。
+  全轮保持 dry_run=true，未观察到 `/tracking/cmd_vel_safe` Twist 输出。
+
+原固定 ROS 探针的时效未满足项保持原记录，本次没有重跑或声称解决该探针问题。
