@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from .online_actions import CONFIRMED_SUCCESS, ActionCommand, ActionRegistry
+from .online_memory import ConversationMemory
 from .online_provider import TextProvider
 
 MAX_INPUT_LENGTH = 8192
@@ -123,11 +124,13 @@ class OnlineInteraction:
         actions: ActionRegistry,
         provider_timeout: float = 60.0,
         action_timeout: float = 5.0,
+        memory: Optional[ConversationMemory] = None,
     ) -> None:
         """保存 provider/设备 Adapters 以及有限的执行期限。"""
         for timeout in (provider_timeout, action_timeout):
             if not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError("超时必须为正有限秒数")
+        self._memory = memory
         self._provider = provider
         self._actions = actions
         self._provider_timeout = provider_timeout
@@ -168,7 +171,9 @@ class OnlineInteraction:
             # 1. 模型调用与解析失败均发生在提交任何动作之前。
             try:
                 self._provider_call = start_call(
-                    lambda: self._collect_model_output(text)
+                    lambda: self._collect_model_output(
+                        self._memory.context(text) if self._memory else text
+                    )
                 )
                 if not wait(
                     [self._provider_call], timeout=self._provider_timeout
@@ -198,7 +203,10 @@ class OnlineInteraction:
                     turn_id, "failed", "动作校验异常，全部动作未执行。"
                 )
             if not commands:
-                return make_result(turn_id, "completed", model_reply.response)
+                return self._remember(
+                    text,
+                    make_result(turn_id, "completed", model_reply.response),
+                )
 
             # 3. 先建立全表记录，执行后的异常不能丢弃已提交动作。
             outcomes = [
@@ -220,9 +228,60 @@ class OnlineInteraction:
                 )
 
             # 4. 回复异常保留执行记录，不能归类为模型失败。
-            return self._report_actions(turn_id, outcomes)
+            return self._remember(
+                text, self._report_actions(turn_id, outcomes)
+            )
         finally:
             self._turn_lock.release()
+
+    def clear_memory(self) -> Dict:
+        """与回合共用互斥锁；模型仍在途时拒绝清空，避免旧摘要回写。"""
+        turn_id = uuid.uuid4().hex
+        if not self._turn_lock.acquire(blocking=False):
+            return make_result(turn_id, "busy", "正在处理回合，请稍后清空。")
+        try:
+            if (
+                self._provider_call is not None
+                and not self._provider_call.done()
+            ):
+                return make_result(
+                    turn_id, "busy", "模型仍在调用，请稍后清空。"
+                )
+            notices = self._memory.clear() if self._memory else []
+            result = make_result(
+                turn_id,
+                "failed" if notices else "completed",
+                "内存已清空，但持久清空失败，重启可能恢复旧摘要。"
+                if notices
+                else "近期上下文与持久摘要已清空。",
+            )
+            result["memory_warnings"] = notices
+            return result
+        finally:
+            self._turn_lock.release()
+
+    def _remember(self, text: str, result: Dict) -> Dict:
+        """在回复已确定后更新记忆；摘要超时不改变当前动作与回复事实。"""
+        memory = self._memory
+        if memory is None:
+            return result
+        self._provider_call = start_call(
+            lambda: memory.record(text, result["reply"], self._summarize)
+        )
+        if not wait(
+            [self._provider_call], timeout=self._provider_timeout
+        ).done:
+            result["memory_warnings"] = ["summary_timeout"]
+        else:
+            result["memory_warnings"] = self._provider_call.result()
+        return result
+
+    def _summarize(self, prompt: str) -> str:
+        """复用在线输出契约，摘要只取文字且禁止动作。"""
+        reply = parse_model_reply(self._collect_model_output(prompt))
+        if reply.functions != []:
+            raise ValueError("摘要不能包含动作")
+        return reply.response
 
     def reconcile(self, turn_id: str) -> Dict:
         """只核对原调用的迟到回执，不重新执行；未知或异常回执不能解除阻塞。"""

@@ -3,6 +3,7 @@
 import json
 import threading
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 import rclpy
@@ -11,6 +12,7 @@ from std_msgs.msg import String
 
 from .online_actions import ActionRegistry
 from .online_interaction import OnlineInteraction, make_result
+from .online_memory import ConversationMemory
 from .online_perception import PerceptionActions, perception_actions
 from .online_perception_ros import RosPerception
 from .online_provider import DashScopeProvider
@@ -43,6 +45,16 @@ class OnlineRosNode(Node):
             registry,
             provider_timeout=float(config.get("provider_timeout", 60.0)),
             action_timeout=action_timeout,
+            memory=ConversationMemory(
+                Path(
+                    config.get(
+                        "memory_file",
+                        "~/.local/state/ros-robot/conversation-summary.json",
+                    )
+                ),
+                recent_turns=config.get("memory_recent_turns", 6),
+                summary_trigger=config.get("memory_summary_trigger", 6),
+            ),
         )
         # 3. 接入文本和结果话题，由交互模块管理回合执行。
         self._publisher = self.create_publisher(
@@ -57,6 +69,9 @@ class OnlineRosNode(Node):
         )
         self.create_subscription(
             String, "/online_agent/reconcile", self._on_reconcile, 10
+        )
+        self.create_subscription(
+            String, "/online_agent/clear_memory", self._on_clear_memory, 10
         )
         cue = simulate_cue("startup")
         self.get_logger().info(cue["detail"])
@@ -80,6 +95,11 @@ class OnlineRosNode(Node):
             target=self._handle, args=(message.data,), daemon=True
         )
         self._worker.start()
+
+    def _on_clear_memory(self, message: String) -> None:
+        """只接受明确 clear 指令，发布清空两种记忆的结果。"""
+        if self._accepting and message.data == "clear":
+            self._publish(self._agent.clear_memory())
 
     def _on_reconcile(self, message: String) -> None:
         """按原 turn_id 核对迟到回执；非阻塞查询，不重发设备动作。"""
