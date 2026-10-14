@@ -1,8 +1,14 @@
 [tool.ruff]
 # ROS 2 Foxy 板端 Python 3.8；仅检查此次迁移模块，旧本地桥接继续可用。
 target-version = "py38"
-line-length = 100
+line-length = 79
 include = ["pyproject.toml", "**/online_*.py", "**/test_online_*.py"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E", "W", "F", "I"]
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 72
+
+[tool.ruff.lint.isort]
+known-first-party = ["robot_agent"]

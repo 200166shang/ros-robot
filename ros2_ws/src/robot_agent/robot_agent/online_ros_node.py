@@ -2,6 +2,7 @@
 
 import json
 import threading
+import uuid
 from typing import List, Optional
 
 import rclpy
@@ -9,7 +10,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from .online_actions import ActionRegistry
-from .online_interaction import OnlineInteraction
+from .online_interaction import OnlineInteraction, make_result
 from .online_provider import DashScopeProvider
 
 
@@ -37,13 +38,19 @@ class OnlineRosNode(Node):
             action_timeout=float(config.get("action_timeout", 5.0)),
         )
         # 3. 接入文本和结果话题，由交互模块管理回合执行。
-        self._publisher = self.create_publisher(String, "/online_agent/result", 10)
+        self._publisher = self.create_publisher(
+            String, "/online_agent/result", 10
+        )
         self._worker: Optional[threading.Thread] = None
         self._processing = threading.Lock()
         self._accepting = True
         self._publish_lock = threading.Lock()
-        self.create_subscription(String, "/online_agent/text", self._on_text, 10)
-        self.create_subscription(String, "/online_agent/reconcile", self._on_reconcile, 10)
+        self.create_subscription(
+            String, "/online_agent/text", self._on_text, 10
+        )
+        self.create_subscription(
+            String, "/online_agent/reconcile", self._on_reconcile, 10
+        )
         self.get_logger().info("Online Agent ready; dry_run=true")
 
     def _on_text(self, message: String) -> None:
@@ -52,18 +59,17 @@ class OnlineRosNode(Node):
             return
         if not self._processing.acquire(blocking=False):
             # submit 自身保证忙时拒绝；不能在 ROS 回调里等待在线调用。
-            import uuid
-
             self._publish(
-                {
-                    "turn_id": uuid.uuid4().hex,
-                    "status": "busy",
-                    "reply": "正在处理上一回合，请稍后再试。",
-                    "actions": [],
-                }
+                make_result(
+                    uuid.uuid4().hex,
+                    "busy",
+                    "正在处理上一回合，请稍后再试。",
+                )
             )
             return
-        self._worker = threading.Thread(target=self._handle, args=(message.data,), daemon=True)
+        self._worker = threading.Thread(
+            target=self._handle, args=(message.data,), daemon=True
+        )
         self._worker.start()
 
     def _on_reconcile(self, message: String) -> None:
@@ -89,7 +95,9 @@ class OnlineRosNode(Node):
             message = String()
             message.data = json.dumps(result, ensure_ascii=False)
             self._publisher.publish(message)
-            self.get_logger().info("turn=" + result["turn_id"] + " status=" + result["status"])
+            self.get_logger().info(
+                f"turn={result['turn_id']} status={result['status']}"
+            )
 
     def stop(self) -> None:
         """停止接入与发布，避免退出时线程访问已销毁节点。"""

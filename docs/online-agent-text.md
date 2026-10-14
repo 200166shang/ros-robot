@@ -81,7 +81,7 @@ PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" python3 ros2_ws/src/robot_agent
   --ros-args -p config_file:="$HOME/.config/ros-robot/online.json"
 ```
 
-Ruff 固定验证版本 0.9.10、目标 py38，仅覆盖在线迁移模块/探针和行为测试，不一次性重排旧 Python 代码。报告见 [验收记录](online-agent-text-validation.md)。
+Ruff 固定验证版本 0.9.10、目标 py38，启用 E/W/F/I，代码79列、注释/docstring72列，仅覆盖在线迁移模块/探针和行为测试，不一次性重排旧 Python 代码。报告见 [验收记录](online-agent-text-validation.md) 和 [PEP 8 审查](online-agent-pep8-review.md)。
 
 在线 SSE 与 JSON 输出依据阿里云官方文档：
 [流式输出](https://www.alibabacloud.com/help/en/model-studio/stream)、

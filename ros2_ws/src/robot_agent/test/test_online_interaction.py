@@ -1,7 +1,10 @@
 """从文本交互 Interface 验证在线回合行为。"""
 
 import json
+import threading
+import time
 
+import robot_agent.online_interaction as interaction
 from robot_agent.online_actions import ActionRegistry
 from robot_agent.online_interaction import OnlineInteraction
 
@@ -16,7 +19,20 @@ class FixedProvider:
 
     def complete(self, text, timeout):
         """返回旧在线契约的 JSON。"""
-        return json.dumps({"function": list(self.functions), "response": self.response})
+        return json.dumps(
+            {"function": list(self.functions), "response": self.response}
+        )
+
+
+def await_reconciliation(agent, turn_id, confirmed):
+    """只轮询公共核对入口；限定等待，失败时直接报告未确认。"""
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        result = agent.reconcile(turn_id)
+        if confirmed(result):
+            return result
+        time.sleep(0.005)
+    raise AssertionError("迟到设备回执未在测试期限内确认")
 
 
 def test_chat_and_repeated_actions_across_turns():
@@ -27,8 +43,14 @@ def test_chat_and_repeated_actions_across_turns():
     provider.functions = ["head_nod", "head_smile", "head_nod"]
     first = agent.submit("点头微笑点头")
     second = agent.submit("再做一次")
-    assert [a["name"] for a in first["actions"]] == ["head_nod", "head_smile", "head_nod"]
-    assert [a["status"] for a in second["actions"]] == ["simulated_success"] * 3
+    assert [a["name"] for a in first["actions"]] == [
+        "head_nod",
+        "head_smile",
+        "head_nod",
+    ]
+    assert [a["status"] for a in second["actions"]] == [
+        "simulated_success"
+    ] * 3
     assert first["turn_id"] != second["turn_id"]
     assert "模拟" in first["reply"]
 
@@ -44,7 +66,12 @@ def test_invalid_list_executes_nothing():
 
     registry = ActionRegistry()
     registry.register("device", execute)
-    for invalid in ("unknown", "head_nod(1)", "head_nod(x=1)", "head_nod(__import__('os'))"):
+    for invalid in (
+        "unknown",
+        "head_nod(1)",
+        "head_nod(x=1)",
+        "head_nod(__import__('os'))",
+    ):
         agent = OnlineInteraction(FixedProvider(["device", invalid]), registry)
         assert agent.submit("执行")["status"] == "rejected"
     assert events == []
@@ -60,7 +87,8 @@ def test_failure_stops_and_reports_remaining():
 
     registry.register("failure", fail)
     agent = OnlineInteraction(
-        FixedProvider(["head_nod", "failure", "head_smile"], "已经全成功"), registry
+        FixedProvider(["head_nod", "failure", "head_smile"], "已经全成功"),
+        registry,
     )
     result = agent.submit("执行")
     assert [a["status"] for a in result["actions"]] == [
@@ -81,14 +109,15 @@ def test_stream_fragments_execute_list_once():
             """按字符提供 JSON 片段。"""
             return iter('{"fc":["head_nod","head_nod"],"res":"已完成"}')
 
-    result = OnlineInteraction(StreamProvider(), ActionRegistry()).submit("执行")
+    result = OnlineInteraction(StreamProvider(), ActionRegistry()).submit(
+        "执行"
+    )
     assert len(result["actions"]) == 2
     assert result["status"] == "completed"
 
 
 def test_action_timeout_is_unknown_and_busy_until_return():
     """在途超时保持未知且阻止新回合，不重试动作。"""
-    import threading
 
     released = threading.Event()
     sent = threading.Event()
@@ -101,11 +130,16 @@ def test_action_timeout_is_unknown_and_busy_until_return():
 
     registry = ActionRegistry()
     registry.register("slow", slow)
-    agent = OnlineInteraction(FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02)
+    agent = OnlineInteraction(
+        FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
+    )
     try:
         result = agent.submit("执行")
         assert sent.is_set()
-        assert [a["status"] for a in result["actions"]] == ["unknown", "not_executed"]
+        assert [a["status"] for a in result["actions"]] == [
+            "unknown",
+            "not_executed",
+        ]
         assert agent.submit("再次执行")["status"] == "busy"
     finally:
         released.set()
@@ -113,7 +147,6 @@ def test_action_timeout_is_unknown_and_busy_until_return():
 
 def test_provider_timeout_and_busy_rejection():
     """模型超时不执行动作，处理中的第二回合立即拒绝。"""
-    import threading
 
     entered = threading.Event()
     released = threading.Event()
@@ -127,9 +160,13 @@ def test_provider_timeout_and_busy_rejection():
             released.wait(2)
             return '{"function":["head_nod"],"response":"好了"}'
 
-    agent = OnlineInteraction(SlowProvider(), ActionRegistry(), provider_timeout=0.1)
+    agent = OnlineInteraction(
+        SlowProvider(), ActionRegistry(), provider_timeout=0.1
+    )
     results = []
-    worker = threading.Thread(target=lambda: results.append(agent.submit("你好")))
+    worker = threading.Thread(
+        target=lambda: results.append(agent.submit("你好"))
+    )
     worker.start()
     try:
         assert entered.wait(1)
@@ -151,7 +188,9 @@ def test_exception_and_invalid_receipt_cannot_be_success():
         raise RuntimeError("internal secret")
 
     registry.register("error", error)
-    result = OnlineInteraction(FixedProvider(["error", "head_nod"]), registry).submit("执行")
+    result = OnlineInteraction(
+        FixedProvider(["error", "head_nod"]), registry
+    ).submit("执行")
     assert result["actions"][0]["status"] == "unknown"
     assert "internal secret" not in str(result)
 
@@ -179,8 +218,14 @@ def test_parameter_validation_precedes_all_execution():
     provider.functions = ["head_position(70)", "head_position(pitch=80)"]
     result = agent.submit("执行")
     assert events == [70, 80]
-    assert [a["parameters"] for a in result["actions"]] == [{"pitch": 70}, {"pitch": 80}]
-    assert [a["status"] for a in result["actions"]] == ["real_success", "real_success"]
+    assert [a["parameters"] for a in result["actions"]] == [
+        {"pitch": 70},
+        {"pitch": 80},
+    ]
+    assert [a["status"] for a in result["actions"]] == [
+        "real_success",
+        "real_success",
+    ]
 
 
 def test_duplicate_json_and_unconfirmed_receipt_rejected():
@@ -194,7 +239,9 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
             return '{"function":[],"function":["head_nod"],"response":"好了"}'
 
     assert (
-        OnlineInteraction(DuplicateProvider(), ActionRegistry()).submit("执行")["status"]
+        OnlineInteraction(DuplicateProvider(), ActionRegistry()).submit(
+            "执行"
+        )["status"]
         == "rejected"
     )
     registry = ActionRegistry()
@@ -204,8 +251,13 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
         return "设备调用失败"
 
     registry.register("invalid", invalid)
-    result = OnlineInteraction(FixedProvider(["invalid", "head_nod"]), registry).submit("执行")
-    assert [a["status"] for a in result["actions"]] == ["unknown", "not_executed"]
+    result = OnlineInteraction(
+        FixedProvider(["invalid", "head_nod"]), registry
+    ).submit("执行")
+    assert [a["status"] for a in result["actions"]] == [
+        "unknown",
+        "not_executed",
+    ]
 
 
 def test_call_syntax_defaults_and_literal_arguments_remain_compatible():
@@ -257,8 +309,6 @@ def test_unsupported_call_forms_reject_the_whole_list():
 
 def test_late_action_requires_explicit_reconciliation():
     """动作线程结束后仍保持忙，只有核对迟到回执才恢复。"""
-    import threading
-    import time
 
     release = threading.Event()
     returned = threading.Event()
@@ -278,12 +328,11 @@ def test_late_action_requires_explicit_reconciliation():
         release.set()
         assert returned.wait(1)
         assert agent.submit("下一轮")["status"] == "busy"
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            reconciled = agent.reconcile(result["turn_id"])
-            if reconciled["actions"][1]["status"] == "real_success":
-                break
-            time.sleep(0.005)
+        reconciled = await_reconciliation(
+            agent,
+            result["turn_id"],
+            lambda reply: reply["actions"][1]["status"] == "real_success",
+        )
         assert [a["status"] for a in reconciled["actions"]] == [
             "simulated_success",
             "real_success",
@@ -298,14 +347,15 @@ def test_late_action_requires_explicit_reconciliation():
 
 def test_reporting_failure_preserves_completed_action(monkeypatch):
     """回复格式异常不能把已执行动作报告为模型失败或未发出。"""
-    import robot_agent.online_interaction as interaction
 
     def broken_reply(actions):
         """在输出边界注入格式化异常。"""
         raise ValueError("private error")
 
     monkeypatch.setattr(interaction, "confirmed_action_reply", broken_reply)
-    result = OnlineInteraction(FixedProvider(["head_nod"]), ActionRegistry()).submit("执行")
+    result = OnlineInteraction(
+        FixedProvider(["head_nod"]), ActionRegistry()
+    ).submit("执行")
     assert result["status"] == "failed"
     assert result["actions"][0]["status"] == "simulated_success"
     assert "未发出动作" not in result["reply"]
@@ -315,8 +365,6 @@ def test_reporting_failure_preserves_completed_action(monkeypatch):
 
 def test_uncertain_late_receipt_does_not_restore_service():
     """迟到的未知或异常回执不能恢复接入，核对不重试动作。"""
-    import threading
-    import time
 
     for raises in (False, True):
         release = threading.Event()
@@ -339,14 +387,16 @@ def test_uncertain_late_receipt_does_not_restore_service():
             result = agent.submit("执行")
             assert agent.reconcile("wrong-id")["status"] == "rejected"
             release.set()
-            deadline = time.monotonic() + 1
-            while time.monotonic() < deadline:
-                reconciled = agent.reconcile(result["turn_id"])
-                if "最终状态仍未知" in reconciled["reply"]:
-                    break
-                time.sleep(0.005)
+            reconciled = await_reconciliation(
+                agent,
+                result["turn_id"],
+                lambda reply: "最终状态仍未知" in reply["reply"],
+            )
             assert "最终状态仍未知" in reconciled["reply"]
-            assert [a["status"] for a in reconciled["actions"]] == ["unknown", "not_executed"]
+            assert [a["status"] for a in reconciled["actions"]] == [
+                "unknown",
+                "not_executed",
+            ]
             assert agent.submit("下一轮")["status"] == "busy"
             assert calls == ["sent"]
         finally:
@@ -355,8 +405,6 @@ def test_uncertain_late_receipt_does_not_restore_service():
 
 def test_late_failure_reconciles_without_executing_remaining_actions():
     """设备明确失败也能解除不确定状态，后续动作不补执行。"""
-    import threading
-    import time
 
     release = threading.Event()
 
@@ -372,13 +420,15 @@ def test_late_failure_reconciles_without_executing_remaining_actions():
     try:
         result = agent.submit("执行")
         release.set()
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            reconciled = agent.reconcile(result["turn_id"])
-            if reconciled["actions"][0]["status"] == "failed":
-                break
-            time.sleep(0.005)
-        assert [a["status"] for a in reconciled["actions"]] == ["failed", "not_executed"]
+        reconciled = await_reconciliation(
+            agent,
+            result["turn_id"],
+            lambda reply: reply["actions"][0]["status"] == "failed",
+        )
+        assert [a["status"] for a in reconciled["actions"]] == [
+            "failed",
+            "not_executed",
+        ]
         provider.functions = []
         assert agent.submit("聊天")["status"] == "completed"
     finally:
@@ -400,7 +450,9 @@ def test_validation_exception_reports_its_stage_and_executes_nothing():
 
     registry = ActionRegistry()
     registry.register("device", execute, validate)
-    result = OnlineInteraction(FixedProvider(["head_nod", "device"]), registry).submit("执行")
+    result = OnlineInteraction(
+        FixedProvider(["head_nod", "device"]), registry
+    ).submit("执行")
     assert result["status"] == "failed"
     assert result["actions"] == []
     assert "校验异常" in result["reply"]
@@ -409,8 +461,6 @@ def test_validation_exception_reports_its_stage_and_executes_nothing():
 
 def test_late_model_output_is_discarded_without_executing_actions():
     """模型超时后迟到的动作建议被丢弃，调用结束后可接入新聊天。"""
-    import threading
-    import time
 
     release = threading.Event()
     submitted = []
@@ -437,7 +487,9 @@ def test_late_model_output_is_discarded_without_executing_actions():
 
     registry = ActionRegistry()
     registry.register("device", execute)
-    agent = OnlineInteraction(SlowFirstProvider(), registry, provider_timeout=0.02)
+    agent = OnlineInteraction(
+        SlowFirstProvider(), registry, provider_timeout=0.02
+    )
     try:
         first = agent.submit("请求动作")
         assert first["status"] == "failed" and not first["actions"]

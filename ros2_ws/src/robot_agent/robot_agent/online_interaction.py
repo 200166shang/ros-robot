@@ -11,6 +11,9 @@ from typing import Any, Callable, Dict, List, Optional
 from .online_actions import CONFIRMED_SUCCESS, ActionCommand, ActionRegistry
 from .online_provider import TextProvider
 
+MAX_INPUT_LENGTH = 8192
+MAX_MODEL_OUTPUT_BYTES = 64 * 1024
+
 
 @dataclass(frozen=True)
 class ModelReply:
@@ -40,20 +43,24 @@ def make_result(
         "turn_id": turn_id,
         "status": status,
         "reply": reply,
-        "actions": [dict(action) for action in actions] if actions is not None else [],
+        "actions": [dict(action) for action in actions]
+        if actions is not None
+        else [],
     }
 
 
 def start_call(operation: Callable[[], Any]) -> Future:
-    """隔离不能保证按时返回的 I/O；Future 只传回回执，不表示调用可取消。"""
+    """隔离阻塞 I/O；Future 传回结果，不取消已提交的调用。"""
     call = Future()
 
     def run() -> None:
         """把 I/O 的结果或异常交给标准 Future，不操作回合业务状态。"""
         try:
-            call.set_result(operation())
+            result = operation()
         except Exception as error:
             call.set_exception(error)
+        else:
+            call.set_result(result)
 
     threading.Thread(target=run, daemon=True, name="online-agent-io").start()
     return call
@@ -94,11 +101,17 @@ def confirmed_action_reply(actions: List[Dict]) -> str:
         "unknown": "结果未知",
         "not_executed": "未执行",
     }
-    return "；".join(action["name"] + "：" + labels[action["status"]] for action in actions) + "。"
+    return (
+        "；".join(
+            action["name"] + "：" + labels[action["status"]]
+            for action in actions
+        )
+        + "。"
+    )
 
 
 class OnlineInteraction:
-    """submit 组织回合；reconcile 核对超时动作，线程结束不自动恢复接入。"""
+    """组织交互与动作核对；线程结束不自动解除待核对状态。"""
 
     def __init__(
         self,
@@ -123,7 +136,9 @@ class OnlineInteraction:
         """提交文本；回合互斥、模型在途与动作待核对各自保留明确状态。"""
         turn_id = uuid.uuid4().hex
         if not self._turn_lock.acquire(blocking=False):
-            return make_result(turn_id, "busy", "正在处理上一回合，请稍后再试。")
+            return make_result(
+                turn_id, "busy", "正在处理上一回合，请稍后再试。"
+            )
         try:
             if self._pending_action is not None:
                 return make_result(
@@ -131,46 +146,76 @@ class OnlineInteraction:
                     "busy",
                     "动作结果待核对，请使用原回合标识请求核对回执。",
                 )
-            if self._provider_call is not None and not self._provider_call.done():
-                return make_result(turn_id, "busy", "上一回合的模型调用仍在进行，请稍后再试。")
+            if (
+                self._provider_call is not None
+                and not self._provider_call.done()
+            ):
+                return make_result(
+                    turn_id, "busy", "上一回合的模型调用仍在进行，请稍后再试。"
+                )
             self._provider_call = None
-            if not isinstance(text, str) or not text.strip() or len(text) > 8192:
+            if (
+                not isinstance(text, str)
+                or not text.strip()
+                or len(text) > MAX_INPUT_LENGTH
+            ):
                 return make_result(turn_id, "rejected", "文本为空或过长。")
 
             # 1. 模型调用与解析失败均发生在提交任何动作之前。
             try:
-                self._provider_call = start_call(lambda: self._collect_model_output(text))
-                if not wait([self._provider_call], timeout=self._provider_timeout).done:
-                    return make_result(turn_id, "failed", "在线模型超时，本轮未发出动作。")
+                self._provider_call = start_call(
+                    lambda: self._collect_model_output(text)
+                )
+                if not wait(
+                    [self._provider_call], timeout=self._provider_timeout
+                ).done:
+                    return make_result(
+                        turn_id, "failed", "在线模型超时，本轮未发出动作。"
+                    )
                 model_reply = parse_model_reply(self._provider_call.result())
             except (ValueError, TypeError, SyntaxError):
-                return make_result(turn_id, "rejected", "模型输出无效，全部动作未执行。")
+                return make_result(
+                    turn_id, "rejected", "模型输出无效，全部动作未执行。"
+                )
             except Exception:
-                return make_result(turn_id, "failed", "在线模型不可用，本轮未发出动作。")
+                return make_result(
+                    turn_id, "failed", "在线模型不可用，本轮未发出动作。"
+                )
 
             # 2. 整表校验无副作用，任一失败都保证零执行。
             try:
                 commands = self._actions.validate(model_reply.functions)
             except (ValueError, TypeError, SyntaxError):
-                return make_result(turn_id, "rejected", "动作参数无效，全部动作未执行。")
+                return make_result(
+                    turn_id, "rejected", "动作参数无效，全部动作未执行。"
+                )
             except Exception:
-                return make_result(turn_id, "failed", "动作校验异常，全部动作未执行。")
+                return make_result(
+                    turn_id, "failed", "动作校验异常，全部动作未执行。"
+                )
             if not commands:
                 return make_result(turn_id, "completed", model_reply.response)
 
-            # 3. 在执行前建立完整记录，后续异常不能丢弃已提交动作的事实。
+            # 3. 先建立全表记录，执行后的异常不能丢弃已提交动作。
             outcomes = [
-                {"name": command.name, "parameters": command.parameters, "status": "not_executed"}
+                {
+                    "name": command.name,
+                    "parameters": command.parameters,
+                    "status": "not_executed",
+                }
                 for command in commands
             ]
             try:
                 self._execute_actions(commands, outcomes, turn_id)
             except Exception:
                 return make_result(
-                    turn_id, "failed", "动作执行流程异常，请核对执行记录。", outcomes
+                    turn_id,
+                    "failed",
+                    "动作执行流程异常，请核对执行记录。",
+                    outcomes,
                 )
 
-            # 4. 回复异常仅影响本轮报告，不能把已执行动作归类为模型失败。
+            # 4. 回复异常保留执行记录，不能归类为模型失败。
             return self._report_actions(turn_id, outcomes)
         finally:
             self._turn_lock.release()
@@ -182,15 +227,25 @@ class OnlineInteraction:
         try:
             pending = self._pending_action
             if pending is None or pending.turn_id != turn_id:
-                return make_result(turn_id, "rejected", "没有匹配的待核对动作回合。")
+                return make_result(
+                    turn_id, "rejected", "没有匹配的待核对动作回合。"
+                )
             if not pending.call.done():
-                return make_result(turn_id, "failed", "调用仍在执行，结果未知。", pending.actions)
+                return make_result(
+                    turn_id,
+                    "failed",
+                    "调用仍在执行，结果未知。",
+                    pending.actions,
+                )
 
             try:
                 receipt = pending.call.result()
             except Exception:
                 receipt = {"status": "unknown"}
-            confirmed = receipt["status"] in CONFIRMED_SUCCESS or receipt["status"] == "failed"
+            confirmed = (
+                receipt["status"] in CONFIRMED_SUCCESS
+                or receipt["status"] == "failed"
+            )
             if not confirmed:
                 return make_result(
                     turn_id,
@@ -200,8 +255,14 @@ class OnlineInteraction:
                 )
 
             # 仅替换超时项，未执行的后续动作保持原状，绝不补执行。
-            action = next(action for action in pending.actions if action["status"] == "unknown")
-            action.update(status=receipt["status"], detail=receipt.get("detail", ""))
+            action = next(
+                action
+                for action in pending.actions
+                if action["status"] == "unknown"
+            )
+            action.update(
+                status=receipt["status"], detail=receipt.get("detail", "")
+            )
             self._pending_action = None
             return self._report_actions(turn_id, pending.actions)
         finally:
@@ -213,14 +274,20 @@ class OnlineInteraction:
         outcomes: List[Dict],
         turn_id: str,
     ) -> None:
-        """按序提交不可取消的调用；超时或不确定回执保留原 Future 供核对。"""
+        """按序提交调用；超时或未知回执保留 Future 供核对。"""
         for command, outcome in zip(commands, outcomes):
             # 提交前先保守记为未知，任何后续异常都不会伪报未执行。
             outcome.update(status="unknown", detail="已提交调用，等待设备回执")
             try:
-                call = start_call(lambda: self._actions.execute(command.name, command.parameters))
+                call = start_call(
+                    lambda: self._actions.execute(
+                        command.name, command.parameters
+                    )
+                )
             except Exception:
-                outcome.update(status="failed", detail="调用提交失败，未发出设备动作")
+                outcome.update(
+                    status="failed", detail="调用提交失败，未发出设备动作"
+                )
                 break
             self._pending_action = PendingAction(call, turn_id, outcomes)
             if not wait([call], timeout=self._action_timeout).done:
@@ -229,10 +296,13 @@ class OnlineInteraction:
 
             try:
                 receipt = call.result()
-                outcome.update(status=receipt["status"], detail=receipt.get("detail", ""))
             except Exception:
                 outcome["detail"] = "执行异常，无法确认设备结果"
                 break
+
+            outcome.update(
+                status=receipt["status"], detail=receipt.get("detail", "")
+            )
             if outcome["status"] == "unknown":
                 break
             self._pending_action = None
@@ -242,7 +312,9 @@ class OnlineInteraction:
     def _report_actions(self, turn_id: str, outcomes: List[Dict]) -> Dict:
         """只在报告阶段捕获格式异常，始终保留完整执行记录。"""
         try:
-            completed = all(action["status"] in CONFIRMED_SUCCESS for action in outcomes)
+            completed = all(
+                action["status"] in CONFIRMED_SUCCESS for action in outcomes
+            )
             return make_result(
                 turn_id,
                 "completed" if completed else "failed",
@@ -251,7 +323,10 @@ class OnlineInteraction:
             )
         except Exception:
             return make_result(
-                turn_id, "failed", "执行结果回复生成失败，请查看动作记录。", outcomes
+                turn_id,
+                "failed",
+                "执行结果回复生成失败，请查看动作记录。",
+                outcomes,
             )
 
     def _collect_model_output(self, text: str) -> str:
@@ -263,6 +338,6 @@ class OnlineInteraction:
             if not isinstance(chunk, str):
                 raise ValueError("流式片段不是字符串")
             raw += chunk
-            if len(raw.encode("utf-8")) > 65536:
+            if len(raw.encode("utf-8")) > MAX_MODEL_OUTPUT_BYTES:
                 raise ValueError("模型输出过长")
         return raw

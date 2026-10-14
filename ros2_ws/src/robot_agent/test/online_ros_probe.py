@@ -1,4 +1,4 @@
-"""通过 ROS 话题验收真实在线聊天与代表模拟动作，配置和凭证由外部提供。"""
+"""通过 ROS 话题验收在线聊天与模拟动作，配置和凭证外置。"""
 
 import json
 import time
@@ -6,8 +6,9 @@ import time
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
-from robot_agent.online_ros_node import OnlineRosNode
 from std_msgs.msg import String
+
+from robot_agent.online_ros_node import OnlineRosNode
 
 
 def main() -> None:
@@ -28,29 +29,50 @@ def main() -> None:
     publisher = probe.create_publisher(String, "/online_agent/text", 10)
     try:
         deadline = time.monotonic() + 10
-        while publisher.get_subscription_count() == 0 and time.monotonic() < deadline:
+        while (
+            publisher.get_subscription_count() == 0
+            and time.monotonic() < deadline
+        ):
             executor.spin_once(timeout_sec=0.1)
         assert publisher.get_subscription_count() > 0, "文本订阅未就绪"
 
-        for text in ("你好，请简短介绍你自己，不做动作。", "请依次点头、微笑、再点头。"):
+        for text in (
+            "你好，请简短介绍你自己，不做动作。",
+            "请依次点头、微笑、再点头。",
+        ):
             expected_count = len(results) + 1
             message = String()
             message.data = text
             publisher.publish(message)
             deadline = time.monotonic() + 75
-            while len(results) < expected_count and time.monotonic() < deadline:
+            while (
+                len(results) < expected_count and time.monotonic() < deadline
+            ):
                 executor.spin_once(timeout_sec=0.1)
             assert len(results) == expected_count, "ROS 回合无回执"
 
-        assert results[0]["status"] == "completed" and not results[0]["actions"]
+        assert (
+            results[0]["status"] == "completed" and not results[0]["actions"]
+        )
         assert results[1]["status"] == "completed"
-        assert [a["name"] for a in results[1]["actions"]] == ["head_nod", "head_smile", "head_nod"]
-        assert all(a["status"] == "simulated_success" for a in results[1]["actions"])
+        assert [a["name"] for a in results[1]["actions"]] == [
+            "head_nod",
+            "head_smile",
+            "head_nod",
+        ]
+        assert all(
+            a["status"] == "simulated_success" for a in results[1]["actions"]
+        )
         assert results[0]["turn_id"] != results[1]["turn_id"]
-        # 已完成回合没有待核对动作；公开核对话题必须明确拒绝，不能重发动作。
-        reconcile = probe.create_publisher(String, "/online_agent/reconcile", 10)
+        # 已完成回合的核对请求应明确拒绝，不能重发动作。
+        reconcile = probe.create_publisher(
+            String, "/online_agent/reconcile", 10
+        )
         deadline = time.monotonic() + 10
-        while reconcile.get_subscription_count() == 0 and time.monotonic() < deadline:
+        while (
+            reconcile.get_subscription_count() == 0
+            and time.monotonic() < deadline
+        ):
             executor.spin_once(timeout_sec=0.1)
         assert reconcile.get_subscription_count() > 0, "核对订阅未就绪"
         message = String()
