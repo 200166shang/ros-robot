@@ -106,12 +106,7 @@ class OnlineVoiceRosNode(Node):
     def _handle(self, operation: Callable[[], Dict]) -> None:
         """发布已关联回执；外部文件/设备失败不遗留接入忙碌状态。"""
         try:
-            try:
-                result = operation()
-            except (OSError, ValueError, RuntimeError):
-                result = make_result(
-                    uuid.uuid4().hex, "failed", "录音或外部语音资源不可用。"
-                )
+            result = operation()
         finally:
             self._processing.release()
         self._publish(result)

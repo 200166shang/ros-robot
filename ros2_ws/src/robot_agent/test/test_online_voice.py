@@ -5,8 +5,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import pytest
-
 from robot_agent.online_actions import ActionHandler, ActionRegistry
 from robot_agent.online_interaction import OnlineInteraction
 from robot_agent.online_voice import OnlineVoice
@@ -194,12 +192,15 @@ def test_asr_and_storage_failure_release_turn(tmp_path, monkeypatch):
     original_write = type(tmp_path).write_text
 
     def fail_write(path, *args, **kwargs):
-        """模拟外部磁盘失败，必须让编程调用方观察异常。"""
+        """模拟外部磁盘失败，回执仍保留已确认的执行事实。"""
         raise OSError("disk unavailable")
 
     monkeypatch.setattr(type(tmp_path), "write_text", fail_write)
-    with pytest.raises(OSError):
-        voice.submit_recording(tmp_path / "input.wav")
+    result = voice.submit_recording(tmp_path / "input.wav")
+    assert result["record_status"] == "failed"
+    assert result["actions"][0]["status"] == "simulated_success"
+    assert result["tts_status"] == "completed"
+    assert result["audio_path"].endswith(result["turn_id"] + ".wav")
     assert voice.state == "standby"
     assert speech.events[-1] == "resume"
     monkeypatch.setattr(type(tmp_path), "write_text", original_write)

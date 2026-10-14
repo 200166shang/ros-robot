@@ -3,6 +3,7 @@
 import argparse
 import json
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -10,7 +11,7 @@ from robot_voice.audio_io import play_wav
 from robot_voice.audio_sources import create_audio_source
 
 from .online_actions import ActionRegistry
-from .online_interaction import OnlineInteraction
+from .online_interaction import OnlineInteraction, make_result
 from .online_provider import DashScopeProvider
 from .online_speech import DashScopeASR, DashScopeTTS
 from .online_voice import OnlineVoice
@@ -34,11 +35,12 @@ def create_voice(config: Dict) -> OnlineVoice:
                 config.get("play_executable", "aplay"),
                 config.get("play_device", "default"),
                 path,
+                cancelled=lambda: voice.state == "closed",
             )
 
         playback = play_reply
 
-    return OnlineVoice(
+    voice = OnlineVoice(
         OnlineInteraction(
             DashScopeProvider(config),
             actions,
@@ -57,6 +59,8 @@ def create_voice(config: Dict) -> OnlineVoice:
         retry_delay=float(config.get("tts_retry_delay", 1)),
     )
 
+    return voice
+
 
 def capture_turn(
     voice: OnlineVoice, config: Dict, wav_path: Optional[str] = None
@@ -70,11 +74,19 @@ def capture_turn(
         record_executable=config.get("record_executable", "arecord"),
         record_device=config.get("record_device", "default"),
         record_seconds=config.get("record_seconds", 8),
+        cancelled=lambda: voice.state == "closed",
     )
     # 临时目录属于外部运行数据，capture 和在线识别完成后立即删除副本。
     with tempfile.TemporaryDirectory(prefix="online-voice-") as directory:
         path = Path(directory) / "input.wav"
-        source.capture(path)
+        try:
+            source.capture(path)
+        except (OSError, ValueError, RuntimeError):
+            result = make_result(
+                uuid.uuid4().hex, "failed", "录音输入不可用，本轮未发出动作。"
+            )
+            result["input_status"] = "failed"
+            return result
         return voice.submit_recording(path, direct=wav_path is not None)
 
 

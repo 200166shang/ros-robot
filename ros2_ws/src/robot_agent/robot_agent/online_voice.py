@@ -318,10 +318,15 @@ class OnlineVoice:
         result["session_state"] = "listening" if self._awake else "standby"
         destination = self._directory / (result["turn_id"] + ".json")
         temporary = destination.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        temporary.replace(destination)
+        result["record_status"] = "completed"
+        try:
+            temporary.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary.replace(destination)
+        except OSError:
+            result["record_status"] = "failed"
         return result
 
     def close(self) -> None:

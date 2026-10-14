@@ -55,7 +55,8 @@ CLI 的 `--wav` 缺省时，仅在 `microphone_enabled=true` 才调用麦克风�
 `record_seconds` 可配置；每轮录制结束后识别，再等待回复合成/播放完成，
 然后开始下一次录制。播放启用后通过既有 aplay Adapter 输出已保存 WAV；
 `play_executable`、`play_device` 可配置。播放失败保留音频及动作事实。
-正常退出关闭 ASR/TTS 连接，等待有限的在途录音/模型调用，再释放 ROS。
+正常退出关闭 ASR/TTS 连接，取消在途 arecord/aplay 并回收子进程，
+等待有界模型调用后释放 ROS。
 
 ## ROS Interface
 
@@ -72,6 +73,8 @@ CLI 的 `--wav` 缺省时，仅在 `microphone_enabled=true` 才调用麦克风�
 所有回执在 `/online_agent/result` 发布。相同 `turn_id` 关联识别文本、可信
 回复、动作参数/结果、会话状态与音频路径。对应 `<turn_id>.json` 和
 `<turn_id>.wav` 保存在 `output_dir`，临时录音副本处理后删除。
+记录写入失败返回 `record_status=failed`，仍保留原 turn_id、动作事实、
+回复与已生成音频路径；ROS不会将后阶段失败改写成零动作的新回合。
 产物、记忆、凭证、录音、模型与构建输出都不进入源码提交。
 
 ## 会话状态与交接
