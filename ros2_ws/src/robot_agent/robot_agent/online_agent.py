@@ -114,7 +114,28 @@ class OnlineAgent:
 
 
 class SimulatedDevices:
-    """Explicit simulation Adapter; unsupported actions fail closed."""
+    """保存模拟设备状态，不访问真实硬件或修改系统配置。"""
+
+    _VOLUME_ACTIONS = frozenset({"volume_set", "volume_up", "volume_down", "volume_mute", "volume_unmute", "volume_status"})
+    _MUSIC_ACTIONS = frozenset({"play_music", "play_song", "stop_music", "music_status"})
+    _HEAD_DIRECTIONS = {
+        "head_forward": "forward",
+        "head_left": "left",
+        "head_right": "right",
+        "head_up": "up",
+        "head_down": "down",
+        "head_reset": "reset",
+    }
+    _EXPRESSIONS = {
+        "head_smile": "兴奋",
+        "head_nod": "兴奋",
+        "head_dance": "兴奋",
+        "excited": "兴奋",
+        "head_shake": "正常",
+        "normal": "正常",
+        "sleep": "good_night",
+        "wake_up": "苏醒",
+    }
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -125,82 +146,76 @@ class SimulatedDevices:
         self._head = "center"
 
     def execute(self, name: str, args: List[Argument]) -> DeviceResult:
-        """执行模拟动作，返回确认结果；无效参数抛出 ValueError。"""
-        result: Dict[str, Union[str, float, bool, None]]
+        """按设备职责执行模拟动作；未知动作返回失败，无效参数抛出 ValueError。"""
+        # 状态更新与结果读取必须在同一临界区，避免并发动作返回混合状态。
         with self._lock:
-            if name in {"volume_set", "volume_up", "volume_down"}:
-                if len(args) > 1:
-                    raise ValueError("too many arguments")
-                default_value = 50 if name == "volume_set" else 5
-                value = float(args[0]) if args else default_value
-                if not math.isfinite(value):
-                    raise ValueError("invalid volume")
-                if name == "volume_set":
-                    target_volume = value
-                else:
-                    direction = 1 if name == "volume_up" else -1
-                    target_volume = self._volume + value * direction
-                self._volume = max(0, min(100, target_volume))
-                result = {"volume": self._volume}
-            elif name in {"volume_mute", "volume_unmute", "volume_status"}:
-                if args:
-                    raise ValueError("unexpected arguments")
-                if name != "volume_status":
-                    self._muted = name == "volume_mute"
-                result = {"volume": self._volume, "muted": self._muted}
-            elif name in {"play_music", "play_song"}:
-                if len(args) != 1 or not isinstance(args[0], str) or not args[0].strip():
-                    raise ValueError("song required")
-                self._song = args[0]
-                result = {"song": self._song}
-            elif name in {"stop_music", "music_status"}:
-                if args:
-                    raise ValueError("unexpected arguments")
-                if name == "stop_music":
-                    self._song = None
-                result = {"song": self._song, "is_playing": self._song is not None}
-            elif name in {
-                "head_forward",
-                "head_left",
-                "head_right",
-                "head_up",
-                "head_down",
-                "head_reset",
-            }:
-                if args:
-                    raise ValueError("unexpected arguments")
-                self._head = name[5:]
-                result = {"head": self._head}
-            elif name in {
-                "head_smile",
-                "head_nod",
-                "head_dance",
-                "excited",
-                "head_shake",
-                "normal",
-                "sleep",
-                "wake_up",
-            }:
-                if args:
-                    raise ValueError("unexpected arguments")
-                self._expression = {
-                    "head_smile": "兴奋",
-                    "head_nod": "兴奋",
-                    "head_dance": "兴奋",
-                    "excited": "兴奋",
-                    "head_shake": "正常",
-                    "normal": "正常",
-                    "sleep": "good_night",
-                    "wake_up": "苏醒",
-                }[name]
-                result = {"expression": self._expression}
+            if name in self._VOLUME_ACTIONS:
+                result = self._execute_volume(name, args)
+            elif name in self._MUSIC_ACTIONS:
+                result = self._execute_music(name, args)
+            elif name in self._HEAD_DIRECTIONS or name in self._EXPRESSIONS:
+                result = self._execute_head(name, args)
             else:
                 return {
                     "success": False,
                     "simulated": False,
                     "error": "not_implemented",
                 }
-            return {"success": True, "simulated": True, "result": result}
+
+            return {
+                "success": True,
+                "simulated": True,
+                "result": result,
+            }
+
+    def _execute_volume(self, name: str, args: List[Argument]) -> Dict[str, Union[str, float, bool, None]]:
+        """调整模拟音量或静音状态，并返回对应查询结果。"""
+        if name in {"volume_mute", "volume_unmute", "volume_status"}:
+            if args:
+                raise ValueError("unexpected arguments")
+            if name != "volume_status":
+                self._muted = name == "volume_mute"
+            return {"volume": self._volume, "muted": self._muted}
+
+        if len(args) > 1:
+            raise ValueError("too many arguments")
+        default_value = 50 if name == "volume_set" else 5
+        value = float(args[0]) if args else default_value
+        if not math.isfinite(value):
+            raise ValueError("invalid volume")
+
+        if name == "volume_set":
+            target_volume = value
+        else:
+            direction = 1 if name == "volume_up" else -1
+            target_volume = self._volume + value * direction
+        self._volume = max(0, min(100, target_volume))
+        return {"volume": self._volume}
+
+    def _execute_music(self, name: str, args: List[Argument]) -> Dict[str, Union[str, float, bool, None]]:
+        """模拟播放、停止及查询；播放别名使用同一状态。"""
+        if name in {"play_music", "play_song"}:
+            if len(args) != 1 or not isinstance(args[0], str) or not args[0].strip():
+                raise ValueError("song required")
+            self._song = args[0]
+            return {"song": self._song}
+
+        if args:
+            raise ValueError("unexpected arguments")
+        if name == "stop_music":
+            self._song = None
+        return {"song": self._song, "is_playing": self._song is not None}
+
+    def _execute_head(self, name: str, args: List[Argument]) -> Dict[str, Union[str, float, bool, None]]:
+        """根据动作映射更新模拟方向或表情，不操作舵机与显示设备。"""
+        if args:
+            raise ValueError("unexpected arguments")
+        if name in self._HEAD_DIRECTIONS:
+            self._head = self._HEAD_DIRECTIONS[name]
+            return {"head": self._head}
+
+        self._expression = self._EXPRESSIONS[name]
+        return {"expression": self._expression}
 
 
 def _parse_call(call: str) -> Tuple[str, List[Argument]]:
