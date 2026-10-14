@@ -43,7 +43,16 @@ ros2 topic pub --once /online_agent/text std_msgs/msg/String '{data: "你好，�
 ros2 topic pub --once /online_agent/text std_msgs/msg/String '{data: "请依次点头、微笑、再点头"}'
 ```
 
-Ctrl+C 退出。节点先停止接入/发布再释放 ROS 资源；后台 HTTP 请求受连接与回合超时限制，无自动重试。超时动作不能安全取消，因此在途调用结束前新回合拒绝为 busy。
+Ctrl+C 退出。节点先停止接入/发布再释放 ROS 资源；后台 HTTP 请求受连接与回合超时限制，无自动重试。超时动作不能安全取消，线程退出后也不自动解除 busy。模型超时只保留在途 Future，结束后可接入新回合。
+
+动作超时、异常或回执 unknown 后，按原 turn_id 显式核对迟到回执：
+
+```bash
+ros2 topic pub --once /online_agent/reconcile std_msgs/msg/String '{data: "原动作回合的turn_id"}'
+```
+
+结果仍发布到 `/online_agent/result`，关联原 turn_id。调用未结束时保持 unknown；迟到回执明确成功或失败后解除 busy，后续未执行项不补执行。迟到回执仍未知或异常则继续阻塞，需要操作者核实设备实际状态后重新启动入口，不能以线程退出代替设备确认。
+已发布的超时记录是快照，核对生成新的回执，不改写旧记录。
 
 ## Interface 与回复契约
 
@@ -56,9 +65,9 @@ provider 支持旧 `function/response` 与现有本地 `fc/res`，函数字符�
 
 动作模块分为三个职责：`parse_action` 只把函数字符串解析为位置/关键字参数；注册表按设备签名和参数含义完成全表校验；设备回执只在执行出口检查一次。
 `ActionHandler.execute/validate` 明确表达设备契约，`ActionCommand.name/parameters` 明确表达已绑定动作。ActionCommand 保留原返回元组的解包和相等比较兼容性。
-`submit` 集中展示收齐模型回复、全表校验、顺序执行和确认回复，线程等待机制留在调用期限处理处。
+`submit` 集中展示收齐模型回复、全表校验、顺序执行和确认回复，I/O 隔离只用标准 Future 交还结果；回合互斥、模型在途与动作待核对分别管理，保留不可取消语义。
 
-设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册，配置阶段可显式替换同名契约，处理回合时不修改注册表。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。未来 #64/#65 复用此 Interface，设备异常保守报告 unknown；明确失败回执报告 failed。
+设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册，配置阶段可显式替换同名契约，处理回合时不修改注册表。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。未来 #64/#65 复用此 Interface，设备异常保守报告 unknown 并保持待核对；明确失败回执报告 failed。Adapter 必须按设备实际完成状态返回，排队接受不能作为成功。配置的 action_timeout 仅限制主链路等待，不取消已提交操作。
 本票没有新增持久记忆、语音或真实设备控制。
 
 ## 检查与真实在线验收

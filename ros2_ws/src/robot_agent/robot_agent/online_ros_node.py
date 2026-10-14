@@ -43,6 +43,7 @@ class OnlineRosNode(Node):
         self._accepting = True
         self._publish_lock = threading.Lock()
         self.create_subscription(String, "/online_agent/text", self._on_text, 10)
+        self.create_subscription(String, "/online_agent/reconcile", self._on_reconcile, 10)
         self.get_logger().info("Online Agent ready; dry_run=true")
 
     def _on_text(self, message: String) -> None:
@@ -64,6 +65,11 @@ class OnlineRosNode(Node):
             return
         self._worker = threading.Thread(target=self._handle, args=(message.data,), daemon=True)
         self._worker.start()
+
+    def _on_reconcile(self, message: String) -> None:
+        """按原 turn_id 核对迟到回执；非阻塞查询，不重发设备动作。"""
+        if self._accepting:
+            self._publish(self._agent.reconcile(message.data))
 
     def _handle(self, text: str) -> None:
         """把交互回执原样发布，并以回合标识记录脱敏日志。"""

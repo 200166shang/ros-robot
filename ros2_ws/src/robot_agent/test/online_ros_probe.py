@@ -47,6 +47,21 @@ def main() -> None:
         assert [a["name"] for a in results[1]["actions"]] == ["head_nod", "head_smile", "head_nod"]
         assert all(a["status"] == "simulated_success" for a in results[1]["actions"])
         assert results[0]["turn_id"] != results[1]["turn_id"]
+        # 已完成回合没有待核对动作；公开核对话题必须明确拒绝，不能重发动作。
+        reconcile = probe.create_publisher(String, "/online_agent/reconcile", 10)
+        deadline = time.monotonic() + 10
+        while reconcile.get_subscription_count() == 0 and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.1)
+        assert reconcile.get_subscription_count() > 0, "核对订阅未就绪"
+        message = String()
+        message.data = results[1]["turn_id"]
+        reconcile.publish(message)
+        deadline = time.monotonic() + 10
+        while len(results) < 3 and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.1)
+        assert len(results) == 3
+        assert results[2]["turn_id"] == results[1]["turn_id"]
+        assert results[2]["status"] == "rejected" and not results[2]["actions"]
         print(json.dumps(results, ensure_ascii=False))
     finally:
         agent.stop()

@@ -4,16 +4,12 @@ import json
 import math
 import threading
 import uuid
+from concurrent.futures import Future, wait
 from dataclasses import dataclass
-from queue import Empty, Queue
 from typing import Any, Callable, Dict, List, Optional
 
 from .online_actions import CONFIRMED_SUCCESS, ActionCommand, ActionRegistry
 from .online_provider import TextProvider
-
-
-class OperationTimeout(Exception):
-    """已提交操作在期限内未得到结果。"""
 
 
 @dataclass(frozen=True)
@@ -25,11 +21,42 @@ class ModelReply:
 
 
 @dataclass(frozen=True)
-class CallOutcome:
-    """跨线程传回结果或异常，避免布尔值与值的隐式元组协议。"""
+class PendingAction:
+    """超时调用与原回合记录，必须核对设备最终回执才能恢复接入。"""
 
-    value: Any = None
-    error: Optional[Exception] = None
+    call: Future
+    turn_id: str
+    actions: List[Dict]
+
+
+def make_result(
+    turn_id: str,
+    status: str,
+    reply: str,
+    actions: Optional[List[Dict]] = None,
+) -> Dict:
+    """统一回合结构，返回记录快照，核对迟到回执不改写已发布结果。"""
+    return {
+        "turn_id": turn_id,
+        "status": status,
+        "reply": reply,
+        "actions": [dict(action) for action in actions] if actions is not None else [],
+    }
+
+
+def start_call(operation: Callable[[], Any]) -> Future:
+    """隔离不能保证按时返回的 I/O；Future 只传回回执，不表示调用可取消。"""
+    call = Future()
+
+    def run() -> None:
+        """把 I/O 的结果或异常交给标准 Future，不操作回合业务状态。"""
+        try:
+            call.set_result(operation())
+        except Exception as error:
+            call.set_exception(error)
+
+    threading.Thread(target=run, daemon=True, name="online-agent-io").start()
+    return call
 
 
 def _unique_object(pairs):
@@ -71,7 +98,7 @@ def confirmed_action_reply(actions: List[Dict]) -> str:
 
 
 class OnlineInteraction:
-    """通过 submit 暴露完整回合；超时后在途动作结束前仍保持忙状态。"""
+    """submit 组织回合；reconcile 核对超时动作，线程结束不自动恢复接入。"""
 
     def __init__(
         self,
@@ -89,74 +116,143 @@ class OnlineInteraction:
         self._provider_timeout = provider_timeout
         self._action_timeout = action_timeout
         self._turn_lock = threading.Lock()
-        self._call_finished = threading.Event()
-        self._call_finished.set()
+        self._provider_call: Optional[Future] = None
+        self._pending_action: Optional[PendingAction] = None
 
     def submit(self, text: str) -> Dict:
-        """提交文本，返回关联标识、回复、动作结果与回合终态；忙时立即拒绝。"""
+        """提交文本；回合互斥、模型在途与动作待核对各自保留明确状态。"""
         turn_id = uuid.uuid4().hex
-        result = {"turn_id": turn_id, "status": "failed", "reply": "", "actions": []}
         if not self._turn_lock.acquire(blocking=False):
-            return dict(result, status="busy", reply="正在处理上一回合，请稍后再试。")
+            return make_result(turn_id, "busy", "正在处理上一回合，请稍后再试。")
         try:
-            if not self._call_finished.is_set():
-                return dict(result, status="busy", reply="上一回合的调用结果仍未知，请稍后再试。")
+            if self._pending_action is not None:
+                return make_result(
+                    turn_id,
+                    "busy",
+                    "动作结果待核对，请使用原回合标识请求核对回执。",
+                )
+            if self._provider_call is not None and not self._provider_call.done():
+                return make_result(turn_id, "busy", "上一回合的模型调用仍在进行，请稍后再试。")
+            self._provider_call = None
             if not isinstance(text, str) or not text.strip() or len(text) > 8192:
-                return dict(result, status="rejected", reply="文本为空或过长。")
+                return make_result(turn_id, "rejected", "文本为空或过长。")
 
-            # 1. 收齐 provider 输出；流式片段只拼接，绝不触发动作。
-            raw = self._call_with_timeout(
-                lambda: self._collect_model_output(text),
-                self._provider_timeout,
-            )
-            model_reply = parse_model_reply(raw)
+            # 1. 模型调用与解析失败均发生在提交任何动作之前。
+            try:
+                self._provider_call = start_call(lambda: self._collect_model_output(text))
+                if not wait([self._provider_call], timeout=self._provider_timeout).done:
+                    return make_result(turn_id, "failed", "在线模型超时，本轮未发出动作。")
+                model_reply = parse_model_reply(self._provider_call.result())
+            except (ValueError, TypeError, SyntaxError):
+                return make_result(turn_id, "rejected", "模型输出无效，全部动作未执行。")
+            except Exception:
+                return make_result(turn_id, "failed", "在线模型不可用，本轮未发出动作。")
 
-            # 2. 完整列表校验失败时零执行，聊天直接使用模型回复。
-            commands = self._actions.validate(model_reply.functions)
+            # 2. 整表校验无副作用，任一失败都保证零执行。
+            try:
+                commands = self._actions.validate(model_reply.functions)
+            except (ValueError, TypeError, SyntaxError):
+                return make_result(turn_id, "rejected", "动作参数无效，全部动作未执行。")
+            except Exception:
+                return make_result(turn_id, "failed", "动作校验异常，全部动作未执行。")
             if not commands:
-                return dict(result, status="completed", reply=model_reply.response)
+                return make_result(turn_id, "completed", model_reply.response)
 
-            # 3. 按序执行保留重复，失败或未知停止后续动作。
-            outcomes = self._execute_actions(commands)
+            # 3. 在执行前建立完整记录，后续异常不能丢弃已提交动作的事实。
+            outcomes = [
+                {"name": command.name, "parameters": command.parameters, "status": "not_executed"}
+                for command in commands
+            ]
+            try:
+                self._execute_actions(commands, outcomes, turn_id)
+            except Exception:
+                return make_result(
+                    turn_id, "failed", "动作执行流程异常，请核对执行记录。", outcomes
+                )
 
-            # 4. 根据实际回执生成回复，不采信执行前的成功承诺。
-            completed = all(action["status"] in CONFIRMED_SUCCESS for action in outcomes)
-            return dict(
-                result,
-                status="completed" if completed else "failed",
-                actions=outcomes,
-                reply=confirmed_action_reply(outcomes),
-            )
-        except OperationTimeout:
-            return dict(result, reply="在线模型超时，本轮未发出动作。")
-        except (ValueError, TypeError, SyntaxError):
-            return dict(result, status="rejected", reply="模型输出或动作参数无效，全部动作未执行。")
-        except Exception:
-            return dict(result, reply="在线模型不可用，本轮未发出动作。")
+            # 4. 回复异常仅影响本轮报告，不能把已执行动作归类为模型失败。
+            return self._report_actions(turn_id, outcomes)
         finally:
             self._turn_lock.release()
 
-    def _execute_actions(self, commands: List[ActionCommand]) -> List[Dict]:
-        """先标记全表未执行，再逐项确认；保留失败之后的未执行记录。"""
-        outcomes = [
-            {"name": command.name, "parameters": command.parameters, "status": "not_executed"}
-            for command in commands
-        ]
-        for command, outcome in zip(commands, outcomes):
-            try:
-                receipt = self._call_with_timeout(
-                    lambda: self._actions.execute(command.name, command.parameters),
-                    self._action_timeout,
-                )
-            except OperationTimeout:
-                receipt = {"status": "unknown", "detail": "已发出调用超时，执行结果未知"}
-            except Exception:
-                receipt = {"status": "unknown", "detail": "执行异常，无法确认设备结果"}
+    def reconcile(self, turn_id: str) -> Dict:
+        """只核对原调用的迟到回执，不重新执行；未知或异常回执不能解除阻塞。"""
+        if not self._turn_lock.acquire(blocking=False):
+            return make_result(turn_id, "busy", "正在处理回合，请稍后核对。")
+        try:
+            pending = self._pending_action
+            if pending is None or pending.turn_id != turn_id:
+                return make_result(turn_id, "rejected", "没有匹配的待核对动作回合。")
+            if not pending.call.done():
+                return make_result(turn_id, "failed", "调用仍在执行，结果未知。", pending.actions)
 
-            outcome.update(status=receipt["status"], detail=receipt.get("detail", ""))
+            try:
+                receipt = pending.call.result()
+            except Exception:
+                receipt = {"status": "unknown"}
+            confirmed = receipt["status"] in CONFIRMED_SUCCESS or receipt["status"] == "failed"
+            if not confirmed:
+                return make_result(
+                    turn_id,
+                    "failed",
+                    "设备最终状态仍未知，请核实设备状态后重新启动入口。",
+                    pending.actions,
+                )
+
+            # 仅替换超时项，未执行的后续动作保持原状，绝不补执行。
+            action = next(action for action in pending.actions if action["status"] == "unknown")
+            action.update(status=receipt["status"], detail=receipt.get("detail", ""))
+            self._pending_action = None
+            return self._report_actions(turn_id, pending.actions)
+        finally:
+            self._turn_lock.release()
+
+    def _execute_actions(
+        self,
+        commands: List[ActionCommand],
+        outcomes: List[Dict],
+        turn_id: str,
+    ) -> None:
+        """按序提交不可取消的调用；超时或不确定回执保留原 Future 供核对。"""
+        for command, outcome in zip(commands, outcomes):
+            # 提交前先保守记为未知，任何后续异常都不会伪报未执行。
+            outcome.update(status="unknown", detail="已提交调用，等待设备回执")
+            try:
+                call = start_call(lambda: self._actions.execute(command.name, command.parameters))
+            except Exception:
+                outcome.update(status="failed", detail="调用提交失败，未发出设备动作")
+                break
+            self._pending_action = PendingAction(call, turn_id, outcomes)
+            if not wait([call], timeout=self._action_timeout).done:
+                outcome["detail"] = "已发出调用超时，执行结果未知"
+                break
+
+            try:
+                receipt = call.result()
+                outcome.update(status=receipt["status"], detail=receipt.get("detail", ""))
+            except Exception:
+                outcome["detail"] = "执行异常，无法确认设备结果"
+                break
+            if outcome["status"] == "unknown":
+                break
+            self._pending_action = None
             if outcome["status"] not in CONFIRMED_SUCCESS:
                 break
-        return outcomes
+
+    def _report_actions(self, turn_id: str, outcomes: List[Dict]) -> Dict:
+        """只在报告阶段捕获格式异常，始终保留完整执行记录。"""
+        try:
+            completed = all(action["status"] in CONFIRMED_SUCCESS for action in outcomes)
+            return make_result(
+                turn_id,
+                "completed" if completed else "failed",
+                confirmed_action_reply(outcomes),
+                outcomes,
+            )
+        except Exception:
+            return make_result(
+                turn_id, "failed", "执行结果回复生成失败，请查看动作记录。", outcomes
+            )
 
     def _collect_model_output(self, text: str) -> str:
         """接受完整字符串或增量字符串流，并限制总输出大小。"""
@@ -170,28 +266,3 @@ class OnlineInteraction:
             if len(raw.encode("utf-8")) > 65536:
                 raise ValueError("模型输出过长")
         return raw
-
-    def _call_with_timeout(self, operation: Callable[[], Any], timeout: float) -> Any:
-        """限制等待时间；保留在途标识，避免超时动作与下一轮重叠。"""
-        outcomes: Queue[CallOutcome] = Queue(maxsize=1)
-        self._call_finished.clear()
-
-        def run():
-            """把结果或异常交还主链路，并释放在途标识。"""
-            try:
-                outcome = CallOutcome(value=operation())
-            except Exception as error:
-                outcome = CallOutcome(error=error)
-
-            # 必须先清除在途状态再交还结果，避免下一次调用读到旧线程的释放事件。
-            self._call_finished.set()
-            outcomes.put(outcome)
-
-        threading.Thread(target=run, daemon=True).start()
-        try:
-            outcome = outcomes.get(timeout=timeout)
-        except Empty:
-            raise OperationTimeout() from None
-        if outcome.error is not None:
-            raise outcome.error
-        return outcome.value

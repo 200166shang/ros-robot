@@ -253,3 +253,155 @@ def test_unsupported_call_forms_reject_the_whole_list():
         result = agent.submit("执行")
         assert result["status"] == "rejected"
         assert result["actions"] == []
+
+
+def test_late_action_requires_explicit_reconciliation():
+    """动作线程结束后仍保持忙，只有核对迟到回执才恢复。"""
+    import threading
+    import time
+
+    release = threading.Event()
+    returned = threading.Event()
+
+    def slow():
+        """代表不可取消的设备调用。"""
+        release.wait(2)
+        returned.set()
+        return {"status": "real_success", "detail": "设备确认完成"}
+
+    registry = ActionRegistry()
+    registry.register("slow", slow)
+    provider = FixedProvider(["head_nod", "slow", "head_smile"])
+    agent = OnlineInteraction(provider, registry, action_timeout=0.02)
+    try:
+        result = agent.submit("执行")
+        release.set()
+        assert returned.wait(1)
+        assert agent.submit("下一轮")["status"] == "busy"
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            reconciled = agent.reconcile(result["turn_id"])
+            if reconciled["actions"][1]["status"] == "real_success":
+                break
+            time.sleep(0.005)
+        assert [a["status"] for a in reconciled["actions"]] == [
+            "simulated_success",
+            "real_success",
+            "not_executed",
+        ]
+        provider.functions = []
+        assert agent.submit("你好")["status"] == "completed"
+        assert result["actions"][1]["status"] == "unknown"
+    finally:
+        release.set()
+
+
+def test_reporting_failure_preserves_completed_action(monkeypatch):
+    """回复格式异常不能把已执行动作报告为模型失败或未发出。"""
+    import robot_agent.online_interaction as interaction
+
+    def broken_reply(actions):
+        """在输出边界注入格式化异常。"""
+        raise ValueError("private error")
+
+    monkeypatch.setattr(interaction, "confirmed_action_reply", broken_reply)
+    result = OnlineInteraction(FixedProvider(["head_nod"]), ActionRegistry()).submit("执行")
+    assert result["status"] == "failed"
+    assert result["actions"][0]["status"] == "simulated_success"
+    assert "未发出动作" not in result["reply"]
+    assert "模型不可用" not in result["reply"]
+    assert "private error" not in str(result)
+
+
+def test_uncertain_late_receipt_does_not_restore_service():
+    """迟到的未知或异常回执不能恢复接入，核对不重试动作。"""
+    import threading
+    import time
+
+    for raises in (False, True):
+        release = threading.Event()
+        calls = []
+
+        def slow():
+            """模拟设备完成 I/O 后仍不能确认最终状态。"""
+            calls.append("sent")
+            release.wait(2)
+            if raises:
+                raise RuntimeError("private failure")
+            return {"status": "unknown", "detail": "设备无法确认"}
+
+        registry = ActionRegistry()
+        registry.register("slow", slow)
+        agent = OnlineInteraction(
+            FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
+        )
+        try:
+            result = agent.submit("执行")
+            assert agent.reconcile("wrong-id")["status"] == "rejected"
+            release.set()
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                reconciled = agent.reconcile(result["turn_id"])
+                if "最终状态仍未知" in reconciled["reply"]:
+                    break
+                time.sleep(0.005)
+            assert "最终状态仍未知" in reconciled["reply"]
+            assert [a["status"] for a in reconciled["actions"]] == ["unknown", "not_executed"]
+            assert agent.submit("下一轮")["status"] == "busy"
+            assert calls == ["sent"]
+        finally:
+            release.set()
+
+
+def test_late_failure_reconciles_without_executing_remaining_actions():
+    """设备明确失败也能解除不确定状态，后续动作不补执行。"""
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def slow_failure():
+        """提供迟到的明确失败回执。"""
+        release.wait(2)
+        return {"status": "failed", "detail": "设备确认失败"}
+
+    registry = ActionRegistry()
+    registry.register("slow_failure", slow_failure)
+    provider = FixedProvider(["slow_failure", "head_nod"])
+    agent = OnlineInteraction(provider, registry, action_timeout=0.02)
+    try:
+        result = agent.submit("执行")
+        release.set()
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            reconciled = agent.reconcile(result["turn_id"])
+            if reconciled["actions"][0]["status"] == "failed":
+                break
+            time.sleep(0.005)
+        assert [a["status"] for a in reconciled["actions"]] == ["failed", "not_executed"]
+        provider.functions = []
+        assert agent.submit("聊天")["status"] == "completed"
+    finally:
+        release.set()
+
+
+def test_validation_exception_reports_its_stage_and_executes_nothing():
+    """设备校验器异常属于校验阶段，不误报模型不可用。"""
+    calls = []
+
+    def execute():
+        """记录设备调用以证明校验阶段没有提交动作。"""
+        calls.append("sent")
+        return {"status": "real_success"}
+
+    def validate():
+        """模拟参数校验依赖故障。"""
+        raise RuntimeError("private validation failure")
+
+    registry = ActionRegistry()
+    registry.register("device", execute, validate)
+    result = OnlineInteraction(FixedProvider(["head_nod", "device"]), registry).submit("执行")
+    assert result["status"] == "failed"
+    assert result["actions"] == []
+    assert "校验异常" in result["reply"]
+    assert calls == []
