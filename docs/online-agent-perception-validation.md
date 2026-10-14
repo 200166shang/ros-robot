@@ -118,3 +118,28 @@ Follow 回合 `854ac6bf2c1f4c84a75828b9f0175669`，关闭融合回合
   全轮保持 dry_run=true，未观察到 `/tracking/cmd_vel_safe` Twist 输出。
 
 原固定 ROS 探针的时效未满足项保持原记录，本次没有重跑或声称解决该探针问题。
+
+## 统一能力表注册重构复验
+
+2026-10-14（北京时间），以 `14027e5` 为固定基线重构，代码提交 `56df5b3`。
+
+感知按 #64 的契约返回 `Dict[str, ActionHandler]`，入口通过
+`registry.register_many(perception_actions(perception))` 组装。移除感知流程的
+`register()` 与注册表模块依赖；共享截止时间随 ActionHandler 放在
+`online_action_contracts`，执行层设置并恢复上下文，感知流程读取同一期限。
+15个动作名称、别名、参数、状态与执行步骤保持原契约。
+
+- 单文件感知行为 **13 passed**；完整 Python 回归 **70 passed**。
+- Ruff check/format、Pyright 在线全部模块 **0 errors, 0 warnings**；
+  robot_agent 在源码外重新构建，以下实机验收使用最终安装版本。
+- code-review 对 `git diff 14027e5...HEAD` 双轴审查：
+  Standards **0 findings**；Spec **0 findings**。
+- 真实 qwen-plus、固定硬件组合、实际相机/检测/雷达/TF/服务，
+  在线探针 **9轮 completed，退出码0**，未观察到安全话题 Twist 输出。
+  Follow 回合 `30ac9a6cdd3d4d52aa5ae47a6cb49faf` 实际确认 Follow enabled。
+  混合回合 `4112b313c6134820a58c8412550bfed8` 依次执行 volume_set(35)、
+  start_following、volume_status、stop_following；返回模拟/真实/模拟/真实
+  成功，音量 level=35，最后确认 Follow standby 与 fusion disabled。
+
+此次复验保持原扫描数据前提和 dry_run=true；结束后关闭本次启动的节点。
+原固定 ROS 探针时效未满足项继续保留，未将本轮成功当作该项已解决。
