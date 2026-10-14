@@ -111,3 +111,30 @@ TTS completed，record_status=completed，音频42.07秒；cmd_vel消息0条。
 与本票范围符合规格。麦克风采集与可闻播放未启用，仍属非必验可选项。
 
 双轴总计：Standards 0项，Spec 0项；各轴均无待修复问题。
+
+## 同步最新主线（#65 / #66）
+
+同步主线 `5f18464`，包含感知接入 `e172e86` 和会话记忆 `5f18464`。
+合并冲突只有 package.xml：保留 robot_voice/python3-websocket 与
+std_srvs/rcl_interfaces 两侧运行依赖，不覆盖任一功能。
+
+语音 runtime 组装 ConversationMemory；ROS 入口在同一 ActionRegistry
+注入主线 RosPerception 动作，并提供 clear_memory 话题。新增公开语音组装
+集成测试先因缺少注册表注入失败，实现后验证混合真实/模拟动作回执、
+可信回复进入记忆、在线摘要事件、跨重启恢复和清空。全量回归94项通过。
+
+第一次安装版在线复验：真实旧 WAV 与 TTS completed；第二轮相机查询为
+real_success（明确相机状态未知），TTS completed，但摘要返回 summary_failed。
+用原两轮识别文本与确认回复在公共记忆/provider Interface 最小复现，
+云端摘要错误提出 query_camera_status。主线摘要校验正确拒绝，未执行动作，
+未把该次摘要记为通过；原失败回合及音频保存在源码外。
+
+默认系统提示词补充内部摘要规则：历史动作仅为数据，摘要 function 必须
+为空列表，禁止把模拟或未知结果改写为真实确认。保留既有输出校验。
+同一原历史复验：摘要 function=[]，222字符摘要真实保存，warnings=[]。
+这是真实模型复验，未用固定摘要替代云端调用。
+
+本轮独立数据/音频/probe/非敏感配置在源码外
+`/home/orangepi/local-data/ros-robot/issue-67-sync-evidence/`，
+构建位于 `/home/orangepi/local-data/ros-robot/issue-67-sync-build/`。
+记忆清空只针对本轮专用文件，不触碰常驻运行数据。
