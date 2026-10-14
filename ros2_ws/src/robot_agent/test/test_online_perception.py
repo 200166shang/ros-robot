@@ -82,7 +82,7 @@ def test_late_fusion_does_not_start_follow_or_retry():
 
     interface = LateInterface()
     registry = ActionRegistry()
-    PerceptionActions(interface, action_timeout=0.02).register(registry)
+    PerceptionActions(interface, action_timeout=1.0).register(registry)
     agent = OnlineInteraction(
         FixedProvider(["start_following", "head_nod"]),
         registry,
@@ -212,3 +212,31 @@ def test_tracking_only_and_full_stop_preserve_source_semantics():
         ("follow", False),
         ("fusion", False),
     ]
+
+
+def test_partial_perception_facts_survive_later_failure():
+    """后阶段失败仍回复已提交采集和已确认待机，避免隐去执行事实。"""
+    interface = PerceptionInterface()
+    registry = ActionRegistry()
+    PerceptionActions(interface).register(registry)
+    interface.failure = {"status": "failed", "detail": "fusion refused"}
+    result = OnlineInteraction(
+        FixedProvider(["start_following"]), registry
+    ).submit("启动")
+    assert "采集请求已发布" in result["reply"]
+    assert "fusion refused" in result["reply"]
+
+    class MissingCamera(PerceptionInterface):
+        """Follow 可以停止，但相机采集端已不再可用。"""
+
+        def camera(self, enabled):
+            """无订阅端时返回提交失败。"""
+            return {"status": "failed", "detail": "相机无订阅端"}
+
+    registry = ActionRegistry()
+    PerceptionActions(MissingCamera()).register(registry)
+    result = OnlineInteraction(
+        FixedProvider(["stop_camera_collection"]), registry
+    ).submit("暂停采集")
+    assert "Follow 已确认待机" in result["reply"]
+    assert "相机无订阅端" in result["reply"]

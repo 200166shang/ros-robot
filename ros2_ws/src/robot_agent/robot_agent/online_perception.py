@@ -4,7 +4,7 @@ import json
 import time
 from typing import Dict, Optional, Protocol
 
-from .online_actions import ActionRegistry
+from .online_actions import ActionRegistry, action_deadline
 
 
 class PerceptionInterface(Protocol):
@@ -60,7 +60,7 @@ class PerceptionActions:
     def stop_camera(self) -> Dict:
         """先确认 Follow standby，再暂停采集，失败则不继续。"""
         # 1. Follow 待机回执确认后，才提交无确认的相机开关。
-        deadline = time.monotonic() + self._action_timeout
+        deadline = action_deadline(self._action_timeout)
         receipt = self.disable_tracking()
         if receipt["status"] != "real_success":
             return receipt
@@ -70,7 +70,11 @@ class PerceptionActions:
                 "status": "failed",
                 "detail": "Follow 已确认待机，但回执迟到；未提交相机暂停请求",
             }
-        return self._interface.camera(False)
+        receipt = self._interface.camera(False)
+        return {
+            "status": receipt["status"],
+            "detail": "Follow 已确认待机；" + receipt["detail"],
+        }
 
     def camera_status(self) -> Dict:
         """相机开关话题没有状态查询服务，不从本地意图推断状态。"""
@@ -84,7 +88,7 @@ class PerceptionActions:
     ) -> Dict:
         """成功服务回执更新记录，失败不推断设备当前状态。"""
         if deadline is None:
-            deadline = time.monotonic() + self._action_timeout
+            deadline = action_deadline(self._action_timeout)
         receipt = self._interface.set_enabled(kind, enabled, deadline)
         confirmed = enabled if receipt["status"] == "real_success" else None
         if kind == "follow":
@@ -106,14 +110,23 @@ class PerceptionActions:
     def start_following(self) -> Dict:
         """采集请求、融合确认、Follow 确认按序执行，不重试。"""
         # 1. 恢复相机采集，成功仅代表请求已发布。
-        deadline = time.monotonic() + self._action_timeout
+        deadline = action_deadline(self._action_timeout)
+        if time.monotonic() >= deadline:
+            return {
+                "status": "failed",
+                "detail": "动作期限已过，未提交采集或跟随请求",
+            }
         receipt = self.start_camera()
         if receipt["status"] != "real_success":
             return receipt
         # 2. 融合失败即停止，不越过 TF 和 LiDAR 前提。
         receipt = self._set_state("fusion", True, deadline)
         if receipt["status"] != "real_success":
-            return receipt
+            return {
+                "status": receipt["status"],
+                "detail": "采集请求已发布，无设备确认；融合："
+                + receipt["detail"],
+            }
         # 3. 服务端检查同步数据和近期扫描，不做相机跟随降级。
         if time.monotonic() >= deadline:
             return {
@@ -141,7 +154,7 @@ class PerceptionActions:
     def stop_following(self) -> Dict:
         """按源动作先进入待机，再关闭融合；拒绝或超时不继续。"""
         # 1. 服务确认 Follow standby，不能把提交请求当作停止。
-        deadline = time.monotonic() + self._action_timeout
+        deadline = action_deadline(self._action_timeout)
         receipt = self._set_state("follow", False, deadline)
         if receipt["status"] != "real_success":
             return receipt
