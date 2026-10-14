@@ -1,5 +1,5 @@
 [tool.ruff]
-# ROS 2 Foxy 板端 Python 3.8；仅检查此次迁移模块，旧本地桥接继续可用。
+# ROS 2 Foxy uses Python 3.8; scope checks to the online migration.
 target-version = "py38"
 line-length = 79
 include = ["pyproject.toml", "**/online_*.py", "**/test_online_*.py"]
