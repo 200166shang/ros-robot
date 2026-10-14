@@ -165,4 +165,4 @@ robot_agent（在线ASR/TTS） → robot_audio ← robot_voice（本地ASR/TTS�
 上述检查日志位于同一源码外证据目录，文件名前缀audio-。
 联合收集时曾观察到两个名为test的Python包冲突，已把新包测试
 目录命名为tests；最终98项回归包含该修正。运行Interface未改变。
-双轴审查首轮Standards/Spec均0项发现，目录修正后复审待补充。
+双轴审查首轮及目录修正后复审：Standards/Spec均0项剩余发现。
