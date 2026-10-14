@@ -38,3 +38,15 @@ DashScope qwen-plus、北京兼容 HTTPS 端点、provider_timeout=60 秒、acti
 - Ruff check/format、Pyright 全部在线模块、robot_agent colcon build 通过。
 - 真实 ROS 话题在线复验：聊天 turn `e4229516c939417190a86ce7f31f7842` completed；点头→微笑→点头 turn `cc73104713034b378ae802a5bf860c53` completed，三项仍为 simulated_success。
 - 以重构前 `ac35276` 为固定点重新进行 code-review：Standards **0 findings**，Spec **0 findings**。
+
+## 超时生命周期与执行事实修正
+
+此前“动作调用线程退出后即可恢复接入”的规则由以下规则替代：模型超时调用结束后丢弃迟到输出；动作超时/异常/unknown 保留 Future 和原回合记录，只有显式 `reconcile(turn_id)` 核对明确成功或失败回执后解除 busy。未知或异常回执继续阻塞，须核实实际设备状态后重新启动入口。不取消、重试或补执行动作。
+
+删除 Event、Queue、CallOutcome、OperationTimeout 的同步协议，改用标准 Future；回合锁只承担互斥，模型在途与动作待核对分别管理。统一 make_result 构造返回结构。模型、参数校验、执行与回复报告的异常各自处理，执行后的任何报告异常都保留动作记录。
+
+- 修复前两项回归测试分别复现自动恢复接入和回复异常误报动作未执行；修复后通过。
+- 公共 Interface 验证迟到成功、迟到失败、未知/异常持续阻塞、错 turn_id 拒绝、核对不补执行、已发布结果不被核对改写、报告故障保留完成项，以及迟到模型动作建议被丢弃。
+- Python 完整回归 **55 passed**；Ruff、Pyright 与 robot_agent colcon build 通过。
+- 首次真实 ROS 在线复验聊天回合失败、动作回合成功；未把首次运行报告为通过。重新运行后聊天 `4ad64c2bfcd94da88d92357d8c55effc` 和模拟动作 `91b507b96a2848c59eb9c3431cb3f8e6` 均 completed。对已完成回合经 `/online_agent/reconcile` 核对，返回同 turn_id 的 rejected，不重新执行。真实未知硬件回执未验收，本票仍只模拟硬件。
+- 对固定点 `12f3410` 执行双轴审查：Standards 0 findings，Spec 0 findings。

@@ -405,3 +405,51 @@ def test_validation_exception_reports_its_stage_and_executes_nothing():
     assert result["actions"] == []
     assert "校验异常" in result["reply"]
     assert calls == []
+
+
+def test_late_model_output_is_discarded_without_executing_actions():
+    """模型超时后迟到的动作建议被丢弃，调用结束后可接入新聊天。"""
+    import threading
+    import time
+
+    release = threading.Event()
+    submitted = []
+
+    class SlowFirstProvider:
+        """第一次响应延迟，后续请求正常返回聊天。"""
+
+        def __init__(self):
+            """保存外部请求次数。"""
+            self.calls = 0
+
+        def complete(self, text, timeout):
+            """第一次返回迟到动作列表，后续返回普通聊天。"""
+            self.calls += 1
+            if self.calls == 1:
+                release.wait(2)
+                return '{"function":["device"],"response":"动作建议"}'
+            return '{"function":[],"response":"新的聊天"}'
+
+    def execute():
+        """记录设备调用，迟到模型输出不得触发它。"""
+        submitted.append("sent")
+        return {"status": "real_success"}
+
+    registry = ActionRegistry()
+    registry.register("device", execute)
+    agent = OnlineInteraction(SlowFirstProvider(), registry, provider_timeout=0.02)
+    try:
+        first = agent.submit("请求动作")
+        assert first["status"] == "failed" and not first["actions"]
+        release.set()
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            next_turn = agent.submit("聊天")
+            if next_turn["status"] != "busy":
+                break
+            time.sleep(0.005)
+        assert next_turn["reply"] == "新的聊天"
+        assert not next_turn["actions"]
+        assert submitted == []
+    finally:
+        release.set()
