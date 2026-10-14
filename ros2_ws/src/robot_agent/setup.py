@@ -18,6 +18,7 @@ setup(
     license='MIT',
     entry_points={
         'console_scripts': [
+            'online_agent = robot_agent.online_ros_node:main',
             'command_agent = robot_agent.command_agent:main',
             'llm_ros_node = robot_agent.llm_ros_node:main',
         ]
