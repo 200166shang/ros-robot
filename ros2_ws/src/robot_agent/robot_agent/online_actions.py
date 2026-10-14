@@ -3,22 +3,18 @@
 import ast
 import inspect
 from dataclasses import dataclass
-from functools import partial
-from typing import Any, Callable, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
-from .online_head_simulation import HeadSimulation
+from .online_action_contracts import ActionHandler
+from .online_head_simulation import HeadSimulation, head_actions
 from .online_simulation import (
     MusicSimulation,
     NavigationSimulation,
     VolumeSimulation,
-    show_wifi_info,
-    validate_level,
-    validate_location,
-    validate_pose,
-    validate_recommendation,
-    validate_song,
-    validate_step,
-    wifi_status,
+    music_actions,
+    navigation_actions,
+    volume_actions,
+    wifi_actions,
 )
 
 CONFIRMED_SUCCESS = frozenset({"simulated_success", "real_success"})
@@ -41,14 +37,6 @@ class ActionCommand(NamedTuple):
 
     name: str
     parameters: Dict[str, Any]
-
-
-@dataclass(frozen=True)
-class ActionHandler:
-    """设备执行与无副作用参数校验组成同一个动作契约。"""
-
-    execute: Callable[..., Dict]
-    validate: Optional[Callable[..., None]] = None
 
 
 def parse_action(source: str) -> ActionCall:
@@ -84,44 +72,12 @@ class ActionRegistry:
         self.music = MusicSimulation(self.head.expression)
         self.volume = VolumeSimulation()
         self._handlers: Dict[str, ActionHandler] = {}
-        self.head.register(self)
-
-        # 2. 导航校验只检查参数，状态转换在按序执行阶段确认。
-        for name in ("navigate_to", "go_to"):
-            self.register(name, self.navigation.navigate_to, validate_location)
-        self.register(
-            "add_location", self.navigation.add_location, validate_pose
-        )
-        for name in (
-            "cancel_navigation",
-            "navigation_status",
-            "list_locations",
-        ):
-            self.register(name, getattr(self.navigation, name))
-
-        # 3. 音乐别名绑定同一契约，播放状态供后续会话读取。
-        for name in ("play_music", "play_song"):
-            self.register(name, self.music.play_music, validate_song)
-        self.register("add_to_queue", self.music.add_to_queue, validate_song)
-        self.register(
-            "recommend_songs",
-            self.music.recommend_songs,
-            validate_recommendation,
-        )
-        for name in ("stop_music", "next_song", "music_status"):
-            self.register(name, getattr(self.music, name))
-
-        # 4. 系统能力只模拟，不调用主机命令或网络。
-        self.register("volume_up", self.volume.volume_up, validate_step)
-        self.register("volume_down", self.volume.volume_down, validate_step)
-        self.register("volume_set", self.volume.volume_set, validate_level)
-        for name in ("volume_mute", "volume_unmute", "volume_status"):
-            self.register(name, getattr(self.volume, name))
-        for name in ("get_wifi_ip", "wifi_status"):
-            self.register(name, wifi_status)
-        self.register(
-            "show_wifi_info", partial(show_wifi_info, self.head.expression)
-        )
+        # 2. 各能力定义自己的动作契约，注册表统一批量加载。
+        self.register_many(head_actions(self.head))
+        self.register_many(navigation_actions(self.navigation))
+        self.register_many(music_actions(self.music))
+        self.register_many(volume_actions(self.volume))
+        self.register_many(wifi_actions(self.head.expression))
 
     def register(
         self, name: str, execute: Callable, validate: Optional[Callable] = None
@@ -130,6 +86,10 @@ class ActionRegistry:
         self._handlers[name] = ActionHandler(
             execute=execute, validate=validate
         )
+
+    def register_many(self, handlers: Mapping[str, ActionHandler]) -> None:
+        """批量加载能力表；同名覆盖沿用单项注册的配置阶段语义。"""
+        self._handlers.update(handlers)
 
     def validate(self, functions: List[str]) -> List[ActionCommand]:
         """全表校验无副作用，任一动作无效则不返回可执行列表。"""

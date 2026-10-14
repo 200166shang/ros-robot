@@ -1,12 +1,10 @@
 """头部和 LCD 的可观察模拟；源动作序列使用虚拟时间，不创建驱动。"""
 
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Dict, Optional, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
+from .online_action_contracts import ActionHandler
 from .online_simulation import simulated, validate_number
-
-if TYPE_CHECKING:
-    from .online_actions import ActionRegistry
 
 # 旧注册函数仅改变 LCD，不能把这些表情宣称为真实舵机点头或跳舞。
 EXPRESSIONS = {
@@ -249,29 +247,44 @@ class HeadSimulation:
         """返回当前姿态和 LCD 显示字段。"""
         return dict(pitch=self.pitch, yaw=self.yaw, display=self.display)
 
-    def register(self, registry: "ActionRegistry") -> None:
-        """将同职责动作集中接入已有注册 Interface。"""
-        # 1. 旧LCD映射和无参数姿态共用小函数契约。
-        for name, display in EXPRESSIONS.items():
-            registry.register(name, partial(self.expression, display))
-        for name, (pitch, yaw) in BASIC_POSES.items():
-            registry.register(
-                name, partial(self._perform, [(pitch, yaw)], 0.0)
+
+def head_actions(head: HeadSimulation) -> Dict[str, ActionHandler]:
+    """头部能力返回完整动作表，不依赖或修改动作注册表。"""
+    # 1. 无参数LCD和基础姿态使用已绑定的执行函数。
+    handlers = {
+        name: ActionHandler(partial(head.expression, display))
+        for name, display in EXPRESSIONS.items()
+    }
+    handlers.update(
+        {
+            name: ActionHandler(partial(head._perform, [(pitch, yaw)], 0.0))
+            for name, (pitch, yaw) in BASIC_POSES.items()
+        }
+    )
+
+    # 2. 组合动作在同一能力表中绑定执行与校验契约。
+    handlers.update(
+        {
+            name: ActionHandler(
+                head.gesture_handler(name, default), validate_duration
             )
-        registry.register(
-            "head_position", self.head_position, validate_position
-        )
-        # 2. 组合动作共用duration契约，特殊参数单独校验。
-        for name, (default, _) in GESTURES.items():
-            registry.register(
-                name, self.gesture_handler(name, default), validate_duration
-            )
-        registry.register(
-            "head_breathing", self.head_breathing, validate_breathing
-        )
-        registry.register(
-            "head_attention", self.head_attention, validate_attention
-        )
-        registry.register(
-            "head_emotional", self.head_emotional, validate_emotional
-        )
+            for name, (default, _) in GESTURES.items()
+        }
+    )
+    handlers.update(
+        {
+            "head_position": ActionHandler(
+                head.head_position, validate_position
+            ),
+            "head_breathing": ActionHandler(
+                head.head_breathing, validate_breathing
+            ),
+            "head_attention": ActionHandler(
+                head.head_attention, validate_attention
+            ),
+            "head_emotional": ActionHandler(
+                head.head_emotional, validate_emotional
+            ),
+        }
+    )
+    return handlers

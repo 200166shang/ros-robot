@@ -40,3 +40,21 @@ PYTHONPATH=ros2_ws/src/robot_agent python3 -m robot_agent.online_simulation_demo
 保留旧LCD映射：head_smile/head_nod/head_dance/excited显示兴奋，head_shake/normal显示正常，sleep显示good_night，wake_up显示苏醒。旧这些注册动作没有舵机点头或跳舞，不添加未经约定的物理含义。音乐和WiFi共享同一LCD状态。
 
 真实底盘驱动、ROS navigation action client、PWM、LCD驱动、系统音量/网络修改及音乐/提示音播放均不进入模拟Implementation。没有额外发明底盘或提示音模型动作。真实ASR/LLM/TTS、记忆和综合验收仍归属后续票。
+
+## 能力表与统一加载
+
+各能力在实现旁边提供动作表：`head_actions`、`navigation_actions`、`music_actions`、`volume_actions`、`wifi_actions`。表的形式统一为`Dict[str, ActionHandler]`，处理器同时持有执行函数和可选参数校验函数。别名引用同一处理器，状态继续由绑定的模拟对象持有。
+
+注册表的初始化只组装状态对象并加载能力表，例如：
+
+```python
+self.register_many(head_actions(self.head))
+self.register_many(navigation_actions(self.navigation))
+self.register_many(music_actions(self.music))
+self.register_many(volume_actions(self.volume))
+self.register_many(wifi_actions(self.head.expression))
+```
+
+`register_many`统一合并能力表，同名覆盖沿用`register`的配置阶段语义。已有`register/validate/execute`和默认52项动作保持兼容。共享`ActionHandler`放在`online_action_contracts.py`，能力定义不依赖注册表实现；原`online_actions.ActionHandler`导入路径仍可用。
+
+本次先完成能力定义与注册机制的分离。尚未新增外部配置、动态导入或自动发现，全部能力默认可用；部署能力选择与别名配置可在确有需求时基于同一能力表接入。

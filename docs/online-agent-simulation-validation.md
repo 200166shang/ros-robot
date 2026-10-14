@@ -37,3 +37,12 @@ PYTHONPATH="$PWD/ros2_ws/src/robot_agent:$PWD/ros2_ws/src/robot_voice:$PYTHONPAT
 0 findings。独立审查确认52项动作/别名、默认参数、状态、顺序/重复、失败停止和演示覆盖验收要求；云端未复验与凭证缺失明确记录，未发现范围扩张或错误行为。
 
 审查固定点为`1e2929f93c2721675f912e74f4f33d0aca12af8f`，命令`git diff <固定点>...HEAD`。总计Standards 0项、Spec 0项，各轴均无待修复问题。
+
+## 能力表重构复验
+
+按用户确认将动作定义放在能力实现旁，采用五份`Dict[str, ActionHandler]`能力表和`register_many`统一加载。共享契约独立于注册表，别名共享处理器；未新增外部配置或动态导入。
+
+- 批量加载行为测试先因`register_many`不存在失败，实现后通过；通过交互输入验证别名、默认参数、整表校验零执行和同名替换。
+- 原18项模拟测试保留，完整Python回归 **55 passed**；Ruff检查/格式、Pyright和robot_agent构建通过。
+- 安装版本独立演示通过，真实ROS话题固定provider探针再次完成16个模拟动作；turn `cd129da682ee4e08b1dc281a7b5a47c5`，无cmd_vel消息。云端模型复验仍未运行。
+- 对固定点`9fe6b6884dbd61306847f2d9782ca4f81c1c698d`执行独立双轴审查：Standards 0 findings，Spec 0 findings。动作契约、默认覆盖范围和状态语义保持一致，无待修复项。

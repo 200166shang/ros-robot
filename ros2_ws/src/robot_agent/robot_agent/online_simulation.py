@@ -3,7 +3,10 @@
 import logging
 import math
 from copy import deepcopy
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional
+
+from .online_action_contracts import ActionHandler
 
 LOGGER = logging.getLogger(__name__)
 
@@ -115,6 +118,21 @@ class NavigationSimulation:
         )
 
 
+def navigation_actions(
+    navigation: NavigationSimulation,
+) -> Dict[str, ActionHandler]:
+    """导航动作与校验在本能力旁定义，别名共享同一个处理器。"""
+    navigate = ActionHandler(navigation.navigate_to, validate_location)
+    return {
+        "navigate_to": navigate,
+        "go_to": navigate,
+        "add_location": ActionHandler(navigation.add_location, validate_pose),
+        "cancel_navigation": ActionHandler(navigation.cancel_navigation),
+        "navigation_status": ActionHandler(navigation.navigation_status),
+        "list_locations": ActionHandler(navigation.list_locations),
+    }
+
+
 RECOMMENDATIONS = {
     "小幸运": ["青花瓷", "稻香", "夜曲", "告白气球"],
     "青花瓷": ["小幸运", "稻香", "夜曲", "东风破"],
@@ -196,6 +214,22 @@ class MusicSimulation:
         )
 
 
+def music_actions(music: MusicSimulation) -> Dict[str, ActionHandler]:
+    """音乐能力集中声明播放、队列和查询的执行及参数契约。"""
+    play = ActionHandler(music.play_music, validate_song)
+    return {
+        "play_music": play,
+        "play_song": play,
+        "add_to_queue": ActionHandler(music.add_to_queue, validate_song),
+        "recommend_songs": ActionHandler(
+            music.recommend_songs, validate_recommendation
+        ),
+        "stop_music": ActionHandler(music.stop_music),
+        "next_song": ActionHandler(music.next_song),
+        "music_status": ActionHandler(music.music_status),
+    }
+
+
 def validate_step(step: float = 5) -> None:
     """音量步长为非负有限百分比，结果按源0至100范围饱和。"""
     validate_number(step, "step")
@@ -250,6 +284,18 @@ class VolumeSimulation:
         )
 
 
+def volume_actions(volume: VolumeSimulation) -> Dict[str, ActionHandler]:
+    """音量能力声明修改与查询动作，校验与实现保持相邻。"""
+    return {
+        "volume_up": ActionHandler(volume.volume_up, validate_step),
+        "volume_down": ActionHandler(volume.volume_down, validate_step),
+        "volume_set": ActionHandler(volume.volume_set, validate_level),
+        "volume_mute": ActionHandler(volume.volume_mute),
+        "volume_unmute": ActionHandler(volume.volume_unmute),
+        "volume_status": ActionHandler(volume.volume_status),
+    }
+
+
 def wifi_status() -> Dict:
     """查询固定模拟网络，文档专用IP不代表主机真实连接。"""
     return simulated(
@@ -264,6 +310,16 @@ def show_wifi_info(display: Callable[[str], Dict]) -> Dict:
     """模拟LCD显示WiFi信息，不查询主机网络或创建屏幕驱动。"""
     display("wifi_info")
     return wifi_status()
+
+
+def wifi_actions(display: Callable[[str], Dict]) -> Dict[str, ActionHandler]:
+    """WiFi能力绑定LCD协作者，注册表无需了解显示参数。"""
+    status = ActionHandler(wifi_status)
+    return {
+        "wifi_status": status,
+        "get_wifi_ip": status,
+        "show_wifi_info": ActionHandler(partial(show_wifi_info, display)),
+    }
 
 
 def simulate_cue(kind: str) -> Dict:
