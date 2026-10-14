@@ -144,7 +144,7 @@ robot_agent（在线ASR/TTS） → robot_audio ← robot_voice（本地ASR/TTS�
 现有离线前端仅更新导入并按根Ruff配置整理格式与说明。
 在线感知、模型和语音流程未改变，没有新增topic或进程。
 
-- 迁移后完整Python回归98 passed（13.55秒），其中设备音频
+- 迁移后最终Python回归98 passed（11.58秒），其中设备音频
   工具5项测试迁入新包；在线麦克风相关单项先检查16项通过。
 - Ruff45文件格式和lint、`git diff --check`通过。
 - 新音频包与在线组装模块Pyright零错误/警告。
@@ -163,4 +163,6 @@ robot_agent（在线ASR/TTS） → robot_audio ← robot_voice（本地ASR/TTS�
   行为覆盖证据。日志为audio-clean-test.log。
 
 上述检查日志位于同一源码外证据目录，文件名前缀audio-。
-双轴审查结果在提交前补充。
+联合收集时曾观察到两个名为test的Python包冲突，已把新包测试
+目录命名为tests；最终98项回归包含该修正。运行Interface未改变。
+双轴审查首轮Standards/Spec均0项发现，目录修正后复审待补充。
