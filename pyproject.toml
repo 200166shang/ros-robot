@@ -1,0 +1,14 @@
+[tool.ruff]
+# ROS 2 Foxy uses Python 3.8; scope checks to migrated online/demo modules.
+target-version = "py38"
+line-length = 79
+include = ["pyproject.toml", "**/online_*.py", "**/test_online_*.py", "**/tracking_control_node.py", "**/person_tracking_demo.launch.py"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I"]
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 72
+
+[tool.ruff.lint.isort]
+known-first-party = ["robot_agent"]

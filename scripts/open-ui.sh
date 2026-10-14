@@ -15,7 +15,7 @@ usage() {
 用法：scripts/open-ui.sh [--help]
 
 在 Orange Pi 演示启动后于 Mac 运行。本脚本只建立 ROS 网页界面的 SSH 隧道，
-不会启动或停止 Qwen、ROS。
+不会启动或停止 Online Agent、ROS。
 
 可选环境变量：
   ORANGEPI_SSH_TARGET（默认 orangepi-ts；SSH 配置别名或 user@host）
@@ -150,7 +150,7 @@ log_ok '板端网页服务健康'
 
 TUNNEL_PID=""
 cleanup() {
-  # 此脚本只拥有 Mac 上的 SSH 隧道，不会停止板端 ROS 或 Qwen。
+  # 此脚本只拥有 Mac 上的 SSH 隧道，不会停止板端 ROS 或 Online Agent。
   local status=$?
   trap - EXIT INT TERM
   if [[ -n "$TUNNEL_PID" ]] && kill -0 "$TUNNEL_PID" 2>/dev/null; then

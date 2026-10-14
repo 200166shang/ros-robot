@@ -1,4 +1,4 @@
-"""组合基础视觉跟踪、语音 Agent 与 Web 视频服务的演示入口。"""
+"""组合固定跟踪与网页控制，可显式启用 Online Agent。"""
 
 import os
 
@@ -12,72 +12,49 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
-    """声明演示参数，并组合跟踪、Agent、Web 和语音节点。"""
-    bringup_share = get_package_share_directory('robot_bringup')
-    voice_share = get_package_share_directory('robot_voice')
-    tracking_launch = os.path.join(bringup_share, 'launch', 'tracking.launch.py')
-    web_config = os.path.join(bringup_share, 'config', 'web_video_server.yaml')
-    voice_launch = os.path.join(voice_share, 'launch', 'voice_frontend.launch.py')
-    local_voice_fixture = (
-        '/home/orangepi/local-data/ros-robot/voice-fixtures/'
-        'start_person_tracking_zh_2026-09-24.wav'
+    """保留网页设备控制，在线交互使用外部配置，不启动本地模型。"""
+    bringup_share = get_package_share_directory("robot_bringup")
+    tracking_launch = os.path.join(
+        bringup_share, "launch", "tracking.launch.py"
     )
-
+    web_config = os.path.join(bringup_share, "config", "web_video_server.yaml")
     return LaunchDescription(
         [
-            DeclareLaunchArgument(
-                'audio_source',
-                default_value='wav_file',
-                description=(
-                    '默认使用本地 WAV 样例；麦克风输入需显式选择。'
-                ),
-            ),
-            DeclareLaunchArgument(
-                'input_wav_path',
-                default_value=local_voice_fixture,
-                description='audio_source=wav_file 时使用的本地样例路径。',
-            ),
-            DeclareLaunchArgument('run_acceptance_probe', default_value='true'),
+            DeclareLaunchArgument("with_online_agent", default_value="false"),
+            DeclareLaunchArgument("online_config_file", default_value=""),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(tracking_launch),
-                launch_arguments={
-                    'with_foxglove': 'false',
-                }.items(),
+                launch_arguments={"with_foxglove": "false"}.items(),
             ),
             Node(
-                package='robot_agent',
-                executable='command_agent',
-                name='command_agent',
-                output='screen',
+                package="web_video_server",
+                executable="tracking_control",
+                name="tracking_control",
+                output="screen",
             ),
             Node(
-                package='web_video_server',
-                executable='web_video_node',
-                name='web_video_server',
-                output='screen',
+                package="web_video_server",
+                executable="web_video_node",
+                name="web_video_server",
+                output="screen",
                 parameters=[web_config],
             ),
             Node(
-                package='robot_agent',
-                executable='llm_ros_node',
-                name='qwen_ros_bridge',
-                output='screen',
-                parameters=[{'enable_commands': True}],
-            ),
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(voice_launch),
-                launch_arguments={
-                    'audio_source': LaunchConfiguration('audio_source'),
-                    'input_wav_path': LaunchConfiguration('input_wav_path'),
-                    'play_audio': 'false',
-                }.items(),
-            ),
-            Node(
-                package='robot_bringup',
-                executable='voice_tracking_acceptance_probe.py',
-                name='voice_tracking_acceptance_probe',
-                output='screen',
-                condition=IfCondition(LaunchConfiguration('run_acceptance_probe')),
+                package="robot_agent",
+                executable="online_agent",
+                name="online_agent",
+                output="screen",
+                parameters=[
+                    {
+                        "config_file": LaunchConfiguration(
+                            "online_config_file"
+                        ),
+                        "dry_run": True,
+                    }
+                ],
+                condition=IfCondition(
+                    LaunchConfiguration("with_online_agent")
+                ),
             ),
         ]
     )

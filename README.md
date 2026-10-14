@@ -36,6 +36,12 @@ source /opt/ros/foxy/setup.bash
 Package-specific backend, SDK, asset, and test setup is documented in each
 package README.
 
-The demo depends on locally installed Rockchip SDK headers, model weights, and
-voice assets. These machine-specific files are kept outside Git. The tracking
+The demo depends on locally installed Rockchip SDK headers, perception model weights, and
+optional local voice assets. These machine-specific files are kept outside Git. The tracking
 demo defaults to `dry_run: true` and does not drive a physical base.
+
+
+The local LLM bridge is retired. `robot_agent` provides Online Agent only;
+see [online text startup](docs/online-agent-text.md). `run-demo.sh` starts the
+tracking/web composition and accepts `with_online_agent:=true` plus an external
+`online_config_file`. Web device controls are independent of model inference.

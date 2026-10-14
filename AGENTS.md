@@ -6,16 +6,24 @@ Work from the issue's scope and acceptance criteria. For module design or restru
 
 Keep tracking in dry-run mode unless the user explicitly authorizes hardware actuation. Keep model weights, recordings, proprietary SDK headers, credentials, and generated build output outside source commits.
 
-### C++ readability and review
+### Avoid speculative defensive programming
 
-- Keep the main call chain easy to follow. Group related functions by runtime role or lifecycle stage, and group member variables by purpose and ownership.
-- Separate distinct logical blocks with blank lines, such as parameter reading, validation, conversion, setup, execution, and reporting. Keep statements in the same step together.
-- Add a brief Chinese comment above each named function, including constructors, destructors, and entry points, to explain its responsibility. Use inline comments for important reasons, handoffs, ordering constraints, and resource ownership.
-- For logic with multiple processing stages or consecutive function calls, use numbered comments such as `1.` and `2.` at key call sites to explain the execution order, each step's purpose, and how data flows to the next step. Keep the numbering consistent with the actual call chain; do not force numbering onto simple functions.
-- When commenting formulas, explain their purpose, the meaning of each symbol, the coordinate frame and units, and what the result represents. Also document important assumptions, boundary handling, or clamping.
-- Use comments to explain intent, handoffs between steps, and the basis for calculations; avoid restating code line by line. Update comments when the code flow changes.
-- Name validation conditions or intermediate steps when that makes their meaning easier to scan. Apply the repository `.clang-format` and preserve semantic grouping in the formatted code.
-- Split functions by meaningful work. Keep coherent flows together and avoid adding indirection or types solely to shorten functions or make the file look more layered.
+Implement documented contracts directly. Add guards, fallback values, retries,
+and exception handling only for specified failure modes or observed failures.
+Validate untrusted input at external boundaries, then trust the established
+contract internally instead of repeating type, null, or range checks. Let
+unexpected programming errors surface rather than silently replacing them with
+defaults or success. Keep required safety checks and explicit recovery rules;
+every defensive branch must have a concrete reason in the specification or
+failure evidence.
+
+### Language-specific style
+
+Before writing, refactoring, or reviewing Python, follow PEP 8 and read
+[Python style](docs/agents/python-style.md). Before writing, refactoring, or
+reviewing C++, read [C++ style](docs/agents/cpp-style.md). For mixed changes,
+read both. The language documents define readability and review requirements;
+`pyproject.toml` and `.clang-format` define the formatter settings.
 
 ## Agent skills
 

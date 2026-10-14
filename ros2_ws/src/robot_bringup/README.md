@@ -54,7 +54,7 @@ ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
 ros2 launch robot_bringup tracking.launch.py with_foxglove:=true
 ```
 
-固定组合只包含日常相机、检测、雷达、平台 TF 与跟踪链路；Agent、Voice 和 Web 视频演示由另一个入口负责。不要传入 `mode` 或逐模块开关，这些不是该 Launch 支持的参数。
+固定组合只包含日常相机、检测、雷达、平台 TF 与跟踪链路；Online Agent 和 Web 视频演示由另一个入口负责；本地语音前端单独启动。不要传入 `mode` 或逐模块开关，这些不是该 Launch 支持的参数。
 
 ### 使用已有 ROSBridge 观看
 

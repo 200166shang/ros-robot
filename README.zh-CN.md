@@ -35,3 +35,6 @@ source /opt/ros/foxy/setup.bash
 
 演示程序依赖本机安装的 Rockchip SDK 头文件、模型权重和语音资源。这些设备
 相关文件不纳入 Git。人物跟踪默认使用 `dry_run: true`，不会驱动实体底盘。
+
+
+本地 LLM 桥接已弃用，robot_agent 仅提供 Online Agent。启动及外部配置见 [在线文本说明](docs/online-agent-text.md)。run-demo.sh 使用标准 ROS launch 启动跟踪与网页；网页设备控制独立于模型推理。

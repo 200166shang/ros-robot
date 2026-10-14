@@ -22,7 +22,7 @@ setup(
     zip_safe=True,
     maintainer="robot",
     maintainer_email="robot@example.com",
-    description="Decoupled half-duplex offline voice front end for the Qwen ROS text bridge.",
+    description="Decoupled half-duplex offline voice front end for the Online Agent text Interface.",
     license="MIT",
     entry_points={
         "console_scripts": [
