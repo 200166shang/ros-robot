@@ -138,3 +138,32 @@ real_success（明确相机状态未知），TTS completed，但摘要返回 sum
 `/home/orangepi/local-data/ros-robot/issue-67-sync-evidence/`，
 构建位于 `/home/orangepi/local-data/ros-robot/issue-67-sync-build/`。
 记忆清空只针对本轮专用文件，不触碰常驻运行数据。
+
+### 同步后最终安装版通过
+
+使用 ROS_DOMAIN_ID=175，从 /tmp 运行最新安装版，不替换ASR、模型、TTS。
+- turn `9311d72b0ef04093b542c531f3f26055`：completed，动作 wake_up, head_forward, volume_status, navigation_status, show_wifi_info；TTS 33.59秒，record_status=completed，memory_warnings=[]。音频SHA256 `5b0c6e5ac284ec52282326d8b0c3a5bb955cb1d202f3909931517911f1c8ef73`。
+- turn `0276d628a66e4d488f02530bcf7ede1d`：completed，动作 query_camera_status；TTS 10.49秒，record_status=completed，memory_warnings=[]。音频SHA256 `88c6d917de615d6fc937f252b7c4dad5c2d9baf56e8234594f1600fe63bba954`。
+
+第一轮实际识别旧 WAV 为“你好机器人。请报告当前状态。”。第二轮 query_camera_status
+为真实感知动作 Interface 的 real_success 回执，明确相机采集状态未知，
+没有声称实际设备开启，也没有启动 Follow。原两轮记忆生成237字符
+在线摘要并保存。clear_memory 回合 `eb35154a9e4d44cf9f12d9b448b19841` completed，
+专用持久文件为空摘要。/cmd_vel 与 /tracking/cmd_vel_safe 共0条运动消息。
+
+最终完整Python回归94 passed（8.64秒）；Ruff34文件格式和静态检查、
+Pyright改动模块0 errors/0 warnings、robot_voice/robot_agent构建均通过。
+
+同步复审固定点5f18464，git diff 5f18464...HEAD。
+
+#### Standards
+
+0项未解决问题；ROS边缘接线、实际注册表注入、记忆互斥及有证据的摘要
+修复符合仓库标准。
+
+#### Spec
+
+0项未解决问题；主线感知/记忆能力与语音并存，摘要仍禁止动作，原会话
+恢复、取消与保存失败保留事实契约完整。
+
+双轴总计：Standards 0项，Spec 0项。
