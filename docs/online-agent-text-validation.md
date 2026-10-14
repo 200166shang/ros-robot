@@ -27,3 +27,14 @@ DashScope qwen-plus、北京兼容 HTTPS 端点、provider_timeout=60 秒、acti
 本票不验收完整设备模拟 #64、真实相机/融合/Follow #65、持久记忆 #66、在线语音/TTS #67、综合启动 #68。无参数表情以外动作明确整表拒绝，不报告成功。聊天允许流式，本票采用流式传输后完整回复发布。动作回复是已确认结果汇总，未使用模型提前生成的动作承诺或混合聊天文本。
 
 已发出的动作超时无法证明未执行，故报告 unknown，停止后项、不重试，并在在途调用结束前拒绝新回合。未来真实设备 Adapter 必须有参数校验和明确回执，不能把排队接受当作动作完成。
+
+## 代码可读性重构复验
+
+按用户的代码审美要求，`submit` 保留四步业务主线，模型解析、顺序执行及结果回复按职责集中；动作处理器、调用与已校验命令采用具名字段，取消执行器/校验器的索引约定。参数解析与业务校验分开，线程结果使用具名回执。
+
+保留 register/execute、动作参数语法、默认参数、元组解包与相等比较及原错误状态。没有新增设备功能、每动作类或插件框架。同名 register 保持显式替换语义，配置阶段使用，不在处理回合时修改。
+
+- Python 完整回归 **49 passed**；补充合法调用/default/literal 参数与非法展开/重复参数/属性调用的公共交互测试。
+- Ruff check/format、Pyright 全部在线模块、robot_agent colcon build 通过。
+- 真实 ROS 话题在线复验：聊天 turn `e4229516c939417190a86ce7f31f7842` completed；点头→微笑→点头 turn `cc73104713034b378ae802a5bf860c53` completed，三项仍为 simulated_success。
+- 以重构前 `ac35276` 为固定点重新进行 code-review：Standards **0 findings**，Spec **0 findings**。
