@@ -206,3 +206,50 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
     registry.register("invalid", invalid)
     result = OnlineInteraction(FixedProvider(["invalid", "head_nod"]), registry).submit("执行")
     assert [a["status"] for a in result["actions"]] == ["unknown", "not_executed"]
+
+
+def test_call_syntax_defaults_and_literal_arguments_remain_compatible():
+    """文本入口仍接受裸函数、空调用、位置/关键字参数与默认值。"""
+    registry = ActionRegistry()
+
+    def display(message="默认", options=None):
+        """设备回执携带收到的业务参数，供交互结果观察。"""
+        return {"status": "simulated_success", "detail": message}
+
+    registry.register("display", display)
+    provider = FixedProvider(
+        [
+            "head_nod()",
+            "display",
+            "display()",
+            "display('你好', {'colors': ['red'], 'enabled': True})",
+            "display(options=None, message='关键字')",
+        ]
+    )
+    result = OnlineInteraction(provider, registry).submit("按顺序显示")
+    assert result["status"] == "completed"
+    assert [action["parameters"] for action in result["actions"]] == [
+        {},
+        {"message": "默认", "options": None},
+        {"message": "默认", "options": None},
+        {"message": "你好", "options": {"colors": ["red"], "enabled": True}},
+        {"message": "关键字", "options": None},
+    ]
+
+
+def test_unsupported_call_forms_reject_the_whole_list():
+    """展开参数、重复参数和属性调用均不能越过整表校验。"""
+    registry = ActionRegistry()
+    provider = FixedProvider()
+    agent = OnlineInteraction(provider, registry)
+    for source in (
+        "head_nod(*[])",
+        "head_nod(**{})",
+        "head_nod(x=1, x=2)",
+        "device.head_nod()",
+        "head_nod(1+2)",
+    ):
+        provider.functions = ["head_smile", source]
+        result = agent.submit("执行")
+        assert result["status"] == "rejected"
+        assert result["actions"] == []

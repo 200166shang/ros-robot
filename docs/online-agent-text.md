@@ -54,7 +54,11 @@ Ctrl+C 退出。节点先停止接入/发布再释放 ROS 资源；后台 HTTP �
 provider 支持旧 `function/response` 与现有本地 `fc/res`，函数字符串可为 `head_nod` 或 `head_nod()`，参数只接受 Python 字面量，不使用 eval。
 流式 JSON 片段先完整收集后解析一次；普通聊天目前完整回复输出，未新增逐字话题。动作回复由确认结果生成，不采用模型提前承诺，故混合聊天的自由文本不纳入动作结果回复。
 
-设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。未来 #64/#65 复用此 Interface，设备异常保守报告 unknown；明确失败回执报告 failed。
+动作模块分为三个职责：`parse_action` 只把函数字符串解析为位置/关键字参数；注册表按设备签名和参数含义完成全表校验；设备回执只在执行出口检查一次。
+`ActionHandler.execute/validate` 明确表达设备契约，`ActionCommand.name/parameters` 明确表达已绑定动作。ActionCommand 保留原返回元组的解包和相等比较兼容性。
+`submit` 集中展示收齐模型回复、全表校验、顺序执行和确认回复，线程等待机制留在调用期限处理处。
+
+设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册，配置阶段可显式替换同名契约，处理回合时不修改注册表。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。未来 #64/#65 复用此 Interface，设备异常保守报告 unknown；明确失败回执报告 failed。
 本票没有新增持久记忆、语音或真实设备控制。
 
 ## 检查与真实在线验收
