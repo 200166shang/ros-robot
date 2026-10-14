@@ -38,6 +38,7 @@ class DashScopeProvider:
 
     def complete(self, text: str, timeout: float) -> Iterable[str]:
         """请求 SSE 增量输出；无重试，异常由交互模块脱敏处理。"""
+        # 1. 把文本与动作契约编码为结构化模型请求。
         body = json.dumps(
             {
                 "model": self._model,
@@ -50,11 +51,13 @@ class DashScopeProvider:
                 "enable_thinking": False,
             }
         ).encode("utf-8")
+        # 2. 仅在 HTTPS 请求头携带凭证，不记录原始 HTTP 错误。
         request = urllib.request.Request(
             self._endpoint,
             data=body,
             headers={"Authorization": "Bearer " + self._key, "Content-Type": "application/json"},
         )
+        # 3. 将 SSE 增量内容交给主链路收齐后统一校验。
         # 连接归属本次调用，结束或异常时释放；限制单行避免无限 SSE 数据。
         with urllib.request.urlopen(request, timeout=timeout) as response:
             while True:

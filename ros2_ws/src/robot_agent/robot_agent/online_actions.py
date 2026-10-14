@@ -2,7 +2,7 @@
 
 import ast
 import inspect
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 class ActionRegistry:
@@ -14,7 +14,7 @@ class ActionRegistry:
         for name in ("head_nod", "head_smile", "head_shake"):
             self.register(name, self._simulate_expression)
 
-    def register(self, name: str, execute: Callable, validate: Callable = None) -> None:
+    def register(self, name: str, execute: Callable, validate: Optional[Callable] = None) -> None:
         """在设备 Seam 注册执行函数与无副作用参数校验函数。"""
         self._entries[name] = (execute, validate)
 

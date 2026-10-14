@@ -1,6 +1,6 @@
 # Online Agent 源业务与动作清单
 
-源代码取自本机旧 ROS 1 checkout `robot/src/agent`，不是现有本地 Qwen 桥接。
+源代码取自本机旧 ROS 1 checkout `robot/src/agent`，不是现有本地 Qwen 桥接。源版本 `22cd28d2d63ba1165f3fbceba205e02ed94f204d`。
 动作来源 `function_executor.py::_register_default_functions`，包括条件注册能力，不因 SDK 或硬件缺失而删行。
 下表参数保留原默认值和别名。所有未实现项在 #63 整表校验时拒绝，零动作执行。
 
@@ -70,7 +70,7 @@
 ## 状态与依赖
 
 - 表情/LCD：`emoji.py`、`lcd.py`，显示命令及动画线程；旧 head_nod/head_dance 实际显示兴奋而非舵机点头/舞蹈。#64 完整模拟显示状态。
-- 头部：`head_servo_controller.py`、`servo_controller_pwm.py`，pitch/yaw 当前角度和动作队列；#64 模拟角度与动作状态。源 pitch 为度、限 0–45，yaw 为度、限 0–180；后续实现需明确校验，不能照搬队列接受即成功。
+- 头部：`head_servo_controller.py`、`servo_controller_pwm.py`，pitch/yaw 当前角度和动作队列；#64 模拟角度与动作状态。源 pitch 为度、限 65–120，yaw 为度、限 50–130；后续实现需明确校验，不能照搬队列接受即成功。
 - 音量：系统 amixer，音量/静音；#64 模拟，禁止改系统音量。level 旧实现限制 0–100。
 - 音乐：`cloud_music.py`，播放状态、当前歌曲、队列、推荐与 ASR music_playing；#64 模拟，不播放或拉取歌曲。
 - WiFi：LCD 显示、主机 IP/连接状态，#64 模拟，不修改网络。

@@ -167,19 +167,19 @@ def test_parameter_validation_precedes_all_execution():
 
     def validate(pitch=0):
         """拒绝超出源头部角度范围的参数。"""
-        if type(pitch) not in (int, float) or not 0 <= pitch <= 45:
+        if type(pitch) not in (int, float) or not 65 <= pitch <= 120:
             raise ValueError("pitch 越界")
 
     registry = ActionRegistry()
     registry.register("head_position", position, validate)
-    provider = FixedProvider(["head_position(10)", "head_position(pitch=90)"])
+    provider = FixedProvider(["head_position(70)", "head_position(pitch=200)"])
     agent = OnlineInteraction(provider, registry)
     assert agent.submit("执行")["status"] == "rejected"
     assert events == []
-    provider.functions = ["head_position(10)", "head_position(pitch=20)"]
+    provider.functions = ["head_position(70)", "head_position(pitch=80)"]
     result = agent.submit("执行")
-    assert events == [10, 20]
-    assert [a["parameters"] for a in result["actions"]] == [{"pitch": 10}, {"pitch": 20}]
+    assert events == [70, 80]
+    assert [a["parameters"] for a in result["actions"]] == [{"pitch": 70}, {"pitch": 80}]
     assert [a["status"] for a in result["actions"]] == ["real_success", "real_success"]
 
 

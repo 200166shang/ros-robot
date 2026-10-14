@@ -60,11 +60,11 @@ provider 支持旧 `function/response` 与现有本地 `fc/res`，函数字符�
 ## 检查与真实在线验收
 
 ```bash
-PYTHONPATH=ros2_ws/src/robot_agent python3 -m pytest -q ros2_ws/src/robot_agent/test
+PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" python3 -m pytest -q ros2_ws/src/robot_agent/test
 ruff check .
 ruff format --check .
 # 需要 ROS 环境、外部 Key 与配置，真实在线探针通过公开话题验证两轮
-PYTHONPATH=ros2_ws/src/robot_agent python3 ros2_ws/src/robot_agent/test/online_ros_probe.py \
+PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" python3 ros2_ws/src/robot_agent/test/online_ros_probe.py \
   --ros-args -p config_file:="$HOME/.config/ros-robot/online.json"
 ```
 

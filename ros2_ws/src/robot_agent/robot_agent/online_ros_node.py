@@ -18,20 +18,25 @@ class OnlineRosNode(Node):
 
     def __init__(self) -> None:
         """读取外部配置，接入单回合交互 Interface。"""
-        super().__init__("online_agent")
+        super().__init__("online_agent", parameter_overrides=[])
+        # 1. 读取外部参数并验证 dry-run，凭证由 provider 从环境取得。
         config_file = self.declare_parameter("config_file", "").value
         dry_run = self.declare_parameter("dry_run", True).value
         if dry_run is not True:
             raise ValueError("在线文本入口要求 dry_run=true")
+        if not isinstance(config_file, str) or not config_file:
+            raise ValueError("必须指定外部 config_file 路径")
         with open(config_file, encoding="utf-8") as source:
             config = json.load(source)
 
+        # 2. 组装交互 Implementation 与边缘 Adapters。
         self._agent = OnlineInteraction(
             DashScopeProvider(config),
             ActionRegistry(),
             provider_timeout=float(config.get("provider_timeout", 60.0)),
             action_timeout=float(config.get("action_timeout", 5.0)),
         )
+        # 3. 接入文本和结果话题，由交互模块管理回合执行。
         self._publisher = self.create_publisher(String, "/online_agent/result", 10)
         self._worker: Optional[threading.Thread] = None
         self._processing = threading.Lock()
@@ -90,6 +95,7 @@ class OnlineRosNode(Node):
 
 def main(args: Optional[List[str]] = None) -> None:
     """初始化 ROS，退出时先停止交互接入再释放节点。"""
+    # 1. 初始化 ROS 并建立薄入口，进入话题事件循环。
     rclpy.init(args=args)
     node = None
     try:
@@ -98,6 +104,7 @@ def main(args: Optional[List[str]] = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        # 2. 先禁止后台发布，再销毁节点与 ROS 上下文。
         if node is not None:
             node.stop()
             node.destroy_node()
