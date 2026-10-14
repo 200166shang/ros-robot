@@ -24,6 +24,15 @@ ROS 2 Foxy / Python 3.8，使用 Python 标准库，不需要 OpenAI 或 DashSco
 
 需要自定义时，在外部配置中添加 `"system_prompt_file": "/absolute/path/prompt.txt"`。文件为 UTF-8，启动时读取一次；指定文件为空或不存在则启动失败，不静默回退。自定义文件负责保留 JSON 契约，实际执行仍受动作注册表限制。
 
+若本机 HTTPS 代理出现间歇性超时、且网络允许直连北京端点，可只对 DashScope 域名绕过代理。启动节点前在该终端设置（不修改全局代理配置）：
+
+```bash
+export NO_PROXY="${NO_PROXY:+${NO_PROXY},}dashscope.aliyuncs.com"
+export no_proxy="$NO_PROXY"
+```
+
+已验证安装版本在此设置下完成真实在线聊天、顺序模拟动作与 ROS 回执。使用其他 endpoint 时替换成对应主机名；需要代理的环境保持自身路由配置。
+
 端点/模型需要匹配 Key 地域与授权；不会输出 Key 或 HTTP 错误正文。`api_key` 明文字段禁止使用。
 provider_timeout/action_timeout 单位秒，必须是正有限数。网络和模型访问失败返回失败回合，不能用模拟 provider 冒充真实通过。
 

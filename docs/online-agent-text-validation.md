@@ -60,3 +60,14 @@ DashScope qwen-plus、北京兼容 HTTPS 端点、provider_timeout=60 秒、acti
 - 回归59 passed，覆盖实际 HTTPS 请求中的旧提示词内容、外部覆盖和空/缺失配置失败。Ruff、Pyright及 colcon 构建通过。双轴审查 Standards/Spec 均0 findings。
 - 本次真实 ROS 首轮聊天 completed，动作轮 failed；重跑聊天模型调用达到60秒超时，紧接的新请求正确 busy。单独 HTTPS 诊断在约11秒报 timeout，未输出凭证或错误正文。
 - 本次修改的真实在线端到端复验 **未通过**，外部调用超时仍是未满足项；历史在线通过记录不能替代此版本的复验。未以模拟 provider 伪报真实通过。
+
+## 完整提示词版本的云端复验通过
+
+前一节未通过的真实在线项现已重新验证通过，未修改或缩短完整提示词、未替换模型和真实 provider、未放宽动作断言。
+
+- 原代理环境运行 ROS 探针：聊天 `dcd30baee65d4819930c99700fa7da42` completed；动作 `d0b99d3bfcd54b4bb10eb2462aae3f9a` completed。三项动作按 head_nod→head_smile→head_nod 排序，均 simulated_success。对已完成回合核对返回同 turn_id 的 rejected。
+- 安装版本加载包内完整提示词，只在验收进程的 NO_PROXY/no_proxy 中追加 dashscope.aliyuncs.com：聊天 `76f3e69e09054e8e95ee9b55c3cbcdcc` completed，约1.2秒；动作 `34cb709c4e86435dbb36db54f88b4682` completed，约1.4秒；核对正确 rejected。ROS 输入→实际 DashScope qwen-plus→校验→模拟动作→ROS 结果全链路通过，dry_run=true。
+- 网络对照：同一个无凭证 `/models` 请求，经本机代理建立 TLS 后10秒无响应；直连约0.25秒返回预期401。代理上的模型请求随后也成功，因此观测结果支持代理路径间歇性不稳定，不能把所有历史超时归因于提示词或声称查明了代理内部故障。
+- 没有改动全局代理设置、凭证或动作实现，没有自动重试动作。直接连接仅用于获准的验收进程；操作说明记录按域名绕过代理的方法。
+
+当前完整提示词版本的云端链路已真实跑通；上述通过记录补足了此前未满足项。原失败记录保留，便于区分历史失败和后续复验结果。
