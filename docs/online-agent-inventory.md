@@ -2,7 +2,7 @@
 
 源代码取自本机旧 ROS 1 checkout `robot/src/agent`，不是现有本地 Qwen 桥接。源版本 `22cd28d2d63ba1165f3fbceba205e02ed94f204d`。
 动作来源 `function_executor.py::_register_default_functions`，包括条件注册能力，不因 SDK 或硬件缺失而删行。
-下表参数保留原默认值和别名。当前 #64 完整模拟52项动作及别名；其余8项感知动作由 #65 接入，仍明确整表拒绝。
+下表参数保留原默认值和别名。当前 #64 完整模拟52项动作及别名；8项源感知动作及相机兼容入口由 #65 接入真实 ROS Interface。
 
 | 动作 | 原参数与默认值 | 别名目标 | 源行为 | 源函数/行 | 当前状态及归属 |
 |---|---|---|---|---|---|
@@ -37,14 +37,14 @@
 | `add_to_queue` | `song_name` | — | 添加歌曲到播放队列 | `_add_to_queue` L874 | #64 完整状态模拟 |
 | `music_status` | `无` | — | 获取音乐播放状态 | `_music_status` L886 | #64 完整状态模拟 |
 | `recommend_songs` | `song_name=None` | — | 获取推荐歌曲 | `_recommend_songs` L903 | #64 完整状态模拟 |
-| `start_following` | `无` | — | 启动机器人跟随功能 | `_start_following` L919 | 本票整表拒绝；#65 |
-| `stop_following` | `无` | — | 停止机器人跟随功能 | `_stop_following` L933 | 本票整表拒绝；#65 |
-| `toggle_following` | `无` | — | 切换机器人跟随功能状态 | `_toggle_following` L947 | 本票整表拒绝；#65 |
-| `following_status` | `无` | — | 获取机器人跟随状态 | `_following_status` L961 | 本票整表拒绝；#65 |
-| `enable_tracking` | `无` | — | 启用跟踪功能 | `_enable_tracking` L975 | 本票整表拒绝；#65 |
-| `disable_tracking` | `无` | — | 禁用跟踪功能 | `_disable_tracking` L989 | 本票整表拒绝；#65 |
-| `enable_lidar` | `无` | — | 启用激光雷达功能 | `_enable_lidar` L1003 | 本票整表拒绝；#65 |
-| `disable_lidar` | `无` | — | 禁用激光雷达功能 | `_disable_lidar` L1017 | 本票整表拒绝；#65 |
+| `start_following` | `无` | — | 启动机器人跟随功能 | `_start_following` L919 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `stop_following` | `无` | — | 停止机器人跟随功能 | `_stop_following` L933 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `toggle_following` | `无` | — | 切换机器人跟随功能状态 | `_toggle_following` L947 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `following_status` | `无` | — | 获取机器人跟随状态 | `_following_status` L961 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `enable_tracking` | `无` | — | 启用跟踪功能 | `_enable_tracking` L975 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `disable_tracking` | `无` | — | 禁用跟踪功能 | `_disable_tracking` L989 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `enable_lidar` | `无` | — | 启用激光雷达功能 | `_enable_lidar` L1003 | 真实感知 Interface；#65，见 online-agent-perception.md |
+| `disable_lidar` | `无` | — | 禁用激光雷达功能 | `_disable_lidar` L1017 | 真实感知 Interface；#65，见 online-agent-perception.md |
 | `navigate_to` | `location` | — | 导航到指定位置 | `_navigate_to` L1032 | #64 完整状态模拟 |
 | `go_to` | `location` | navigate_to | 导航到指定位置 | `_navigate_to` L1032 | #64 完整状态模拟 |
 | `cancel_navigation` | `无` | — | 取消当前导航任务 | `_cancel_navigation` L1051 | #64 完整状态模拟 |

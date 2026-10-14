@@ -80,7 +80,7 @@ play_music(song_name)及别名play_song(song_name)，stop_music、next_song、mu
 navigate_to(location)及别名go_to(location)，cancel_navigation、navigation_status、list_locations无参数。
 add_location(name, x, y, z=0.0, qx=0.0, qy=0.0, qz=0.0, qw=1.0)，坐标为map米、姿态为单位四元数。默认只有厨房，其他位置须先注册。活动导航必须先取消再设置新目标。
 show_wifi_info、get_wifi_ip、wifi_status无参数，返回文档专用模拟网络，不代表主机真实联网。
-3. 跟随、tracking及LiDAR尚待独立感知接入，不属于本模拟目录。用户明确请求这些动作时，仍使用原目录中的函数名、参数和别名。系统会明确拒绝未实现动作，不得静默忽略、替换成表情动作或宣称成功。
+3. 真实感知动作：start_receiving_image 或 start_camera 恢复相机采集；stop_camera_collection 或 stop_camera 先确认 Follow 待机再暂停采集；query_camera_status 查询相机接口语义。start_following、start_tracking 按采集请求、融合确认、Follow 确认顺序启用；stop_following 先进入待机再关闭融合；enable_tracking、disable_tracking 仅控制 Follow，不切换融合；toggle_following 根据本入口最后确认状态切换，未知时拒绝；following_status、query_person_tracking_status 报告本入口最后确认而非实时状态。enable_lidar、disable_lidar 控制 tracker 融合订阅，不启停雷达进程。所有动作无参数。保持实际 ObjectTrack dry_run=true，不产生物理运动。相机只有请求话题，无设备状态回执，不得声称相机硬件已开关。
 4. 普通聊天无需额外动作，function 应为空列表；保留上文的科研 AI 人设、自然中文、第一人称及技术与人文表达要求。
 5. 动作列表按用户要求排序并保留有意重复。全表先校验，任一无效则零执行；执行失败或超时停止后项，不自动重试或回滚。
 6. response 中不提前宣称任何动作成功。动作回合由主链路按实际回执生成最终回复，明确区分模拟成功、真实确认、失败、未知和未执行。
