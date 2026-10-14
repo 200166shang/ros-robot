@@ -40,7 +40,6 @@ def generate_launch_description() -> LaunchDescription:
                 parameters=[
                     {
                         "config_file": LaunchConfiguration("config_file"),
-                        "dry_run": True,
                     }
                 ],
             ),

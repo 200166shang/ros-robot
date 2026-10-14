@@ -116,7 +116,7 @@ def confirmed_action_reply(actions: List[Dict]) -> str:
 
 
 class OnlineInteraction:
-    """组织交互与动作核对；线程结束不自动解除待核对状态。"""
+    """单一调用者组织交互与动作核对；线程结束不等于设备确认。"""
 
     def __init__(
         self,
@@ -135,130 +135,107 @@ class OnlineInteraction:
         self._actions = actions
         self._provider_timeout = provider_timeout
         self._action_timeout = action_timeout
-        self._turn_lock = threading.Lock()
         self._provider_call: Optional[Future] = None
         self._pending_action: Optional[PendingAction] = None
 
     def submit(self, text: str) -> Dict:
-        """提交文本；回合互斥、模型在途与动作待核对各自保留明确状态。"""
+        """单一调用者按序提交；模型仍在途或动作未知时不重叠执行。"""
         turn_id = uuid.uuid4().hex
-        if not self._turn_lock.acquire(blocking=False):
+        if self._pending_action is not None:
             return make_result(
-                turn_id, "busy", "正在处理上一回合，请稍后再试。"
+                turn_id,
+                "busy",
+                "动作结果待核对，请使用原回合标识请求核对回执。",
             )
+        if self._provider_call is not None and not self._provider_call.done():
+            return make_result(
+                turn_id, "busy", "上一回合的模型调用仍在进行，请稍后再试。"
+            )
+        self._provider_call = None
+        if (
+            not isinstance(text, str)
+            or not text.strip()
+            or len(text) > MAX_INPUT_LENGTH
+        ):
+            return make_result(turn_id, "rejected", "文本为空或过长。")
+
+        # 1. 模型调用与解析失败均发生在提交任何动作之前。
         try:
-            if self._pending_action is not None:
-                return make_result(
-                    turn_id,
-                    "busy",
-                    "动作结果待核对，请使用原回合标识请求核对回执。",
+            self._provider_call = start_call(
+                lambda: self._collect_model_output(
+                    self._memory.context(text) if self._memory else text
                 )
-            if (
-                self._provider_call is not None
-                and not self._provider_call.done()
-            ):
-                return make_result(
-                    turn_id, "busy", "上一回合的模型调用仍在进行，请稍后再试。"
-                )
-            self._provider_call = None
-            if (
-                not isinstance(text, str)
-                or not text.strip()
-                or len(text) > MAX_INPUT_LENGTH
-            ):
-                return make_result(turn_id, "rejected", "文本为空或过长。")
-
-            # 1. 模型调用与解析失败均发生在提交任何动作之前。
-            try:
-                self._provider_call = start_call(
-                    lambda: self._collect_model_output(
-                        self._memory.context(text) if self._memory else text
-                    )
-                )
-                if not wait(
-                    [self._provider_call], timeout=self._provider_timeout
-                ).done:
-                    return make_result(
-                        turn_id, "failed", "在线模型超时，本轮未发出动作。"
-                    )
-                model_reply = parse_model_reply(self._provider_call.result())
-            except (ValueError, TypeError, SyntaxError):
-                return make_result(
-                    turn_id, "rejected", "模型输出无效，全部动作未执行。"
-                )
-            except Exception:
-                return make_result(
-                    turn_id, "failed", "在线模型不可用，本轮未发出动作。"
-                )
-
-            # 2. 整表校验无副作用，任一失败都保证零执行。
-            try:
-                commands = self._actions.validate(model_reply.functions)
-            except (ValueError, TypeError, SyntaxError):
-                return make_result(
-                    turn_id, "rejected", "动作参数无效，全部动作未执行。"
-                )
-            except Exception:
-                return make_result(
-                    turn_id, "failed", "动作校验异常，全部动作未执行。"
-                )
-            if not commands:
-                return self._remember(
-                    text,
-                    make_result(turn_id, "completed", model_reply.response),
-                )
-
-            # 3. 先建立全表记录，执行后的异常不能丢弃已提交动作。
-            outcomes = [
-                {
-                    "name": command.name,
-                    "parameters": command.parameters,
-                    "status": "not_executed",
-                }
-                for command in commands
-            ]
-            try:
-                self._execute_actions(commands, outcomes, turn_id)
-            except Exception:
-                return make_result(
-                    turn_id,
-                    "failed",
-                    "动作执行流程异常，请核对执行记录。",
-                    outcomes,
-                )
-
-            # 4. 回复异常保留执行记录，不能归类为模型失败。
-            return self._remember(
-                text, self._report_actions(turn_id, outcomes)
             )
-        finally:
-            self._turn_lock.release()
+            if not wait(
+                [self._provider_call], timeout=self._provider_timeout
+            ).done:
+                return make_result(
+                    turn_id, "failed", "在线模型超时，本轮未发出动作。"
+                )
+            model_reply = parse_model_reply(self._provider_call.result())
+        except (ValueError, TypeError, SyntaxError):
+            return make_result(
+                turn_id, "rejected", "模型输出无效，全部动作未执行。"
+            )
+        except Exception:
+            return make_result(
+                turn_id, "failed", "在线模型不可用，本轮未发出动作。"
+            )
+
+        # 2. 整表校验无副作用，任一失败都保证零执行。
+        try:
+            commands = self._actions.validate(model_reply.functions)
+        except (ValueError, TypeError, SyntaxError):
+            return make_result(
+                turn_id, "rejected", "动作参数无效，全部动作未执行。"
+            )
+        except Exception:
+            return make_result(
+                turn_id, "failed", "动作校验异常，全部动作未执行。"
+            )
+        if not commands:
+            return self._remember(
+                text,
+                make_result(turn_id, "completed", model_reply.response),
+            )
+
+        # 3. 先建立全表记录，执行后的异常不能丢弃已提交动作。
+        outcomes = [
+            {
+                "name": command.name,
+                "parameters": command.parameters,
+                "status": "not_executed",
+            }
+            for command in commands
+        ]
+        try:
+            self._execute_actions(commands, outcomes, turn_id)
+        except Exception:
+            return make_result(
+                turn_id,
+                "failed",
+                "动作执行流程异常，请核对执行记录。",
+                outcomes,
+            )
+
+        # 4. 回复异常保留执行记录，不能归类为模型失败。
+        return self._remember(text, self._report_actions(turn_id, outcomes))
 
     def clear_memory(self) -> Dict:
-        """与回合共用互斥锁；模型仍在途时拒绝清空，避免旧摘要回写。"""
+        """由同一调用者清空；模型仍在途时拒绝，避免旧摘要回写。"""
         turn_id = uuid.uuid4().hex
-        if not self._turn_lock.acquire(blocking=False):
-            return make_result(turn_id, "busy", "正在处理回合，请稍后清空。")
-        try:
-            if (
-                self._provider_call is not None
-                and not self._provider_call.done()
-            ):
-                return make_result(
-                    turn_id, "busy", "模型仍在调用，请稍后清空。"
-                )
-            notices = self._memory.clear() if self._memory else []
-            result = make_result(
-                turn_id,
-                "failed" if notices else "completed",
-                "内存已清空，但持久清空失败，重启可能恢复旧摘要。"
-                if notices
-                else "近期上下文与持久摘要已清空。",
-            )
-            result["memory_warnings"] = notices
-            return result
-        finally:
-            self._turn_lock.release()
+        if self._provider_call is not None and not self._provider_call.done():
+            return make_result(turn_id, "busy", "模型仍在调用，请稍后清空。")
+        notices = self._memory.clear() if self._memory else []
+        result = make_result(
+            turn_id,
+            "failed" if notices else "completed",
+            "内存已清空，但持久清空失败，重启可能恢复旧摘要。"
+            if notices
+            else "近期上下文与持久摘要已清空。",
+        )
+        result["memory_warnings"] = notices
+        return result
 
     def _remember(self, text: str, result: Dict) -> Dict:
         """在回复已确定后更新记忆；摘要超时不改变当前动作与回复事实。"""
@@ -285,53 +262,48 @@ class OnlineInteraction:
 
     def reconcile(self, turn_id: str) -> Dict:
         """只核对原调用的迟到回执，不重新执行；未知或异常回执不能解除阻塞。"""
-        if not self._turn_lock.acquire(blocking=False):
-            return make_result(turn_id, "busy", "正在处理回合，请稍后核对。")
+        pending = self._pending_action
+        if pending is None or pending.turn_id != turn_id:
+            return make_result(
+                turn_id, "rejected", "没有匹配的待核对动作回合。"
+            )
+        if not pending.call.done():
+            return make_result(
+                turn_id,
+                "failed",
+                "调用仍在执行，结果未知。",
+                pending.actions,
+            )
+
         try:
-            pending = self._pending_action
-            if pending is None or pending.turn_id != turn_id:
-                return make_result(
-                    turn_id, "rejected", "没有匹配的待核对动作回合。"
-                )
-            if not pending.call.done():
-                return make_result(
-                    turn_id,
-                    "failed",
-                    "调用仍在执行，结果未知。",
-                    pending.actions,
-                )
+            receipt = pending.call.result()
+        except Exception:
+            receipt = {"status": "unknown"}
+        confirmed = (
+            receipt["status"] in CONFIRMED_SUCCESS
+            or receipt["status"] == "failed"
+        )
+        if not confirmed:
+            return make_result(
+                turn_id,
+                "failed",
+                "设备最终状态仍未知，请核实设备状态后重新启动入口。",
+                pending.actions,
+            )
 
-            try:
-                receipt = pending.call.result()
-            except Exception:
-                receipt = {"status": "unknown"}
-            confirmed = (
-                receipt["status"] in CONFIRMED_SUCCESS
-                or receipt["status"] == "failed"
-            )
-            if not confirmed:
-                return make_result(
-                    turn_id,
-                    "failed",
-                    "设备最终状态仍未知，请核实设备状态后重新启动入口。",
-                    pending.actions,
-                )
-
-            # 仅替换超时项，未执行的后续动作保持原状，绝不补执行。
-            action = next(
-                action
-                for action in pending.actions
-                if action["status"] == "unknown"
-            )
-            action.update(
-                status=receipt["status"], detail=receipt.get("detail", "")
-            )
-            if "data" in receipt:
-                action["data"] = receipt["data"]
-            self._pending_action = None
-            return self._report_actions(turn_id, pending.actions)
-        finally:
-            self._turn_lock.release()
+        # 仅替换超时项，未执行的后续动作保持原状，绝不补执行。
+        action = next(
+            action
+            for action in pending.actions
+            if action["status"] == "unknown"
+        )
+        action.update(
+            status=receipt["status"], detail=receipt.get("detail", "")
+        )
+        if "data" in receipt:
+            action["data"] = receipt["data"]
+        self._pending_action = None
+        return self._report_actions(turn_id, pending.actions)
 
     def _execute_actions(
         self,

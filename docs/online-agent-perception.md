@@ -1,7 +1,7 @@
 # Online Agent 感知控制
 
 #65 在 Online Agent 注册已有相机采集、Follow 和 LiDAR fusion Interface。
-保持 `dry_run=true`；不启动子进程、不向底盘话题发布运动、不改变固定 bringup。
+ObjectTrack继续dry_run=true，Agent不配置或读取该模式；不启动子进程、不向底盘话题发布运动、不改变固定 bringup。
 
 ## 启动
 
@@ -36,8 +36,8 @@ ROS 环境、SDK 和模型配置沿用各包说明。外部在线配置及凭证
 没有相机话题订阅端时报告 failed；查询不会猜测状态或改变设备。
 
 Follow/fusion 必须消费实际 `SetBool.success/message`；服务不可用或拒绝报告
-failed，保留原因。启用前读取 `/object_track/get_parameters` 的实际 `dry_run`，
-只有 bool true 才发启用请求。TF、同步图像/检测、LiDAR 发布端、近期扫描的
+failed，保留原因。Agent直接消费设备服务回执，不再读取或校验设备输出模式；
+部署模式由ObjectTrack配置负责。TF、同步图像/检测、LiDAR发布端、近期扫描的
 检查继续由 ObjectTrack 执行。关闭 fusion 的成功回执也确认 Follow 已待机。
 
 这些服务没有只读实时状态 Interface；状态回复明确标记“本入口最后确认”，
@@ -45,7 +45,7 @@ failed，保留原因。启用前读取 `/object_track/get_parameters` 的实际
 明确启动或停止，不依赖历史快照推断。相机语义不是网页预览订阅控制。
 
 多阶段动作共享截止时间。超时只报告 unknown，保留调用，不取消或重试。
-迟到融合/安全参数回执不能继续提交 Follow；迟到待机回执不能继续暂停相机。
+迟到融合回执不能继续提交 Follow；迟到待机回执不能继续暂停相机。
 通过 `/online_agent/reconcile` 显式核对，后续动作不会补执行。完整参数与
 回合语义见[在线文本入口](online-agent-text.md)。
 

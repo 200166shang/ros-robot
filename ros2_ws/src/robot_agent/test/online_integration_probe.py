@@ -1,8 +1,9 @@
-"""通过统一启动的公开话题验收真实在线、实机感知和重启记忆。"""
+"""独立文本/WAV验收：复用正常交互与真实ROS感知，不接入麦克风节点。"""
 
 import argparse
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -11,25 +12,28 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import GetParameters
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, LaserScan
-from std_msgs.msg import String
+
+from robot_agent.online_voice import OnlineVoice
+from robot_agent.online_voice_ros_node import create_ros_voice
+from robot_agent.online_voice_runtime import capture_turn
 
 
 class OnlineIntegrationProbe(Node):
-    """只观察已启动的入口，不创建 provider 或管理感知进程。"""
+    """独立验收进程；单一调用者逐项提交，ROS线程只接收设备回执。"""
 
-    def __init__(self) -> None:
+    def __init__(self, config: Dict) -> None:
         """记录公开回执、真实传感器数据和两个运动出口。"""
         super().__init__("online_integration_probe")
+        self._config = config
+        self._updated = threading.Event()
         self.results: List[Dict] = []
         self.motion: List[Twist] = []
         self.scans = 0
         self.images = 0
-        self.create_subscription(
-            String, "/online_agent/result", self._receive, 10
-        )
         for topic in ("/cmd_vel", "/tracking/cmd_vel_safe"):
             self.create_subscription(Twist, topic, self.motion.append, 10)
         self.create_subscription(
@@ -39,28 +43,27 @@ class OnlineIntegrationProbe(Node):
             Image, "/camera/image_det", self._image, qos_profile_sensor_data
         )
 
-    def _receive(self, message: String) -> None:
-        """解析在线入口的外部回执，保留识别文本及动作事实。"""
-        self.results.append(json.loads(message.data))
-
     def _scan(self, message: LaserScan) -> None:
         """累计真实雷达输入，不使用固定扫描替代。"""
         self.scans += 1
+        self._updated.set()
 
     def _image(self, message: Image) -> None:
         """累计实际检测标注图像，作为 Follow 输入前提证据。"""
         self.images += 1
+        self._updated.set()
 
     def wait(
         self, predicate: Callable[[], bool], timeout: float, description: str
     ) -> None:
         """有界处理回调，验收条件未满足时直接失败。"""
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
-            if predicate():
-                return
-        raise AssertionError(description)
+        while not predicate():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(description)
+            self._updated.wait(min(remaining, 0.05))
+            self._updated.clear()
 
     def confirm_dry_run(self, name: str) -> None:
         """读取实际节点参数，不能用入口意图代替设备安全确认。"""
@@ -79,25 +82,23 @@ class OnlineIntegrationProbe(Node):
         self.destroy_client(client)
 
     def submit(
-        self, topic: str, text: str, expected: Optional[List[str]] = None
+        self,
+        voice: OnlineVoice,
+        kind: str,
+        text: str,
+        expected: Optional[List[str]] = None,
     ) -> Dict:
         """真实输入等待完整在线回复，失败不重试，不替换模型选择。"""
-        publisher = self.create_publisher(String, topic, 10)
-        self.wait(
-            lambda: publisher.get_subscription_count() == 1,
-            15,
-            "必须且仅能发现一个在线入口",
-        )
-        before = len(self.results)
-        message = String()
-        message.data = text
-        publisher.publish(message)
-        self.wait(lambda: len(self.results) > before, 180, "在线回合未回复")
-        self.destroy_publisher(publisher)
-        result = self.results[-1]
+        operations = {
+            "text": lambda: voice.submit_transcript(text, direct=True),
+            "wav": lambda: capture_turn(voice, self._config, text),
+            "clear_memory": voice.clear_memory,
+        }
+        result = operations[kind]()
+        self.results.append(result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
         assert result["status"] == "completed", result
-        if topic != "/online_agent/clear_memory":
+        if kind != "clear_memory":
             assert result["tts_status"] == "completed", result
             assert result["record_status"] == "completed", result
             assert not result.get("memory_warnings"), result
@@ -117,18 +118,29 @@ class OnlineIntegrationProbe(Node):
 def main() -> None:
     """运行综合或重启阶段；原始回执和计数保存到源码外指定目录。"""
     parser = argparse.ArgumentParser(description="真实在线综合验收")
+    parser.add_argument("--config", required=True)
     parser.add_argument("--wav", required=True)
     parser.add_argument("--evidence-dir", required=True)
     phase = parser.add_mutually_exclusive_group()
     phase.add_argument("--recall", action="store_true")
     phase.add_argument("--recording-only", action="store_true")
     args = parser.parse_args()
+    config = json.loads(
+        Path(args.config).expanduser().read_text(encoding="utf-8")
+    )
     rclpy.init()
-    probe = OnlineIntegrationProbe()
+    probe = OnlineIntegrationProbe(config)
+    executor = SingleThreadedExecutor()
+    executor.add_node(probe)
+    ros_worker = threading.Thread(
+        target=executor.spin, name="test-ros-receipts"
+    )
+    ros_worker.start()
+    voice = None
     passed = False
     try:
-        # 1. 确认统一入口及实际 tracker 的安全参数。
-        probe.confirm_dry_run("/online_voice_agent")
+        # 1. 独立组装同一交互Implementation，确认实际tracker及数据。
+        voice = create_ros_voice(probe, config)
         probe.confirm_dry_run("/object_track")
         probe.wait(
             lambda: probe.scans > 1 and probe.images > 1,
@@ -137,18 +149,19 @@ def main() -> None:
         )
         if args.recall:
             recalled = probe.submit(
-                "/online_agent/text", "我之前告诉你的验收代号是什么？只聊天。"
+                voice, "text", "我之前告诉你的验收代号是什么？只聊天。"
             )
             assert "蓝鹭" in recalled["reply"], recalled
-            probe.submit("/online_agent/clear_memory", "clear", [])
+            probe.submit(voice, "clear_memory", "clear", [])
             cleared = probe.submit(
-                "/online_agent/text", "我之前告诉你的验收代号是什么？只聊天。"
+                voice, "text", "我之前告诉你的验收代号是什么？只聊天。"
             )
             assert "蓝鹭" not in cleared["reply"], cleared
         elif args.recording_only:
             # 录音动作验收先建立真实扫描前提，不预置识别文本。
             probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "请开启激光融合，只调用 enable_lidar。",
                 ["enable_lidar"],
             )
@@ -156,7 +169,7 @@ def main() -> None:
             probe.wait(
                 lambda: probe.scans >= before + 2, 5, "融合后扫描未到达"
             )
-            recording = probe.submit("/online_agent/wav", args.wav)
+            recording = probe.submit(voice, "wav", args.wav)
             assert recording["transcript"], recording
             assert any(
                 action["name"]
@@ -165,19 +178,22 @@ def main() -> None:
                 for action in recording["actions"]
             ), recording
             probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "请停止跟随，只调用 stop_following。",
                 ["stop_following"],
             )
         else:
             # 2. 在线模型选择感知动作；观察扫描后才请求 Follow。
             probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "请恢复相机采集，只调用 start_receiving_image。",
                 ["start_receiving_image"],
             )
             probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "请开启激光融合，只调用 enable_lidar。",
                 ["enable_lidar"],
             )
@@ -186,7 +202,8 @@ def main() -> None:
                 lambda: probe.scans >= before + 2, 5, "融合后扫描未到达"
             )
             mixed = probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "请严格依次调用 volume_set(35)、start_following、"
                 "head_nod、head_nod、volume_status、stop_following。",
                 [
@@ -200,26 +217,27 @@ def main() -> None:
             )
             assert mixed["actions"][4]["data"]["level"] == 35
             probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "请暂停相机采集，只调用 stop_camera_collection。",
                 ["stop_camera_collection"],
             )
             probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "请恢复相机采集，只调用 start_receiving_image。",
                 ["start_receiving_image"],
             )
             # 3. 原录音经真实 ASR，不预置或猜测其文本。
-            recording = probe.submit("/online_agent/wav", args.wav)
+            recording = probe.submit(voice, "wav", args.wav)
             assert recording["transcript"], recording
             probe.submit(
-                "/online_agent/text",
+                voice,
+                "text",
                 "我的验收代号是蓝鹭，请记住。只聊天，不执行动作。",
                 [],
             )
-            probe.submit(
-                "/online_agent/text", "我的验收代号是什么？只聊天。", []
-            )
+            probe.submit(voice, "text", "我的验收代号是什么？只聊天。", [])
         assert probe.count_publishers("/cmd_vel") == 0
         assert probe.count_publishers("/tracking/cmd_vel_safe") == 0
         passed = True
@@ -260,9 +278,15 @@ def main() -> None:
                     raise
         finally:
             try:
-                probe.destroy_node()
+                if voice is not None:
+                    voice.close()
             finally:
-                rclpy.shutdown()
+                executor.shutdown()
+                ros_worker.join()
+                try:
+                    probe.destroy_node()
+                finally:
+                    rclpy.shutdown()
 
 
 if __name__ == "__main__":

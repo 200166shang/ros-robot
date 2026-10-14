@@ -22,8 +22,6 @@ def create_voice(
     config: Dict, actions: Optional[ActionRegistry] = None
 ) -> OnlineVoice:
     """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
-    if config.get("dry_run", True) is not True:
-        raise ValueError("在线语音要求 dry_run=true")
     directory = Path(config["output_dir"]).expanduser().resolve()
     checkout = Path(__file__).resolve().parents[4]
     if directory == checkout or checkout in directory.parents:
@@ -79,9 +77,7 @@ def create_voice(
 def capture_turn(
     voice: OnlineVoice, config: Dict, wav_path: Optional[str] = None
 ) -> Dict:
-    """复用 WAV/麦克风 capture Interface；只在显式启用时访问麦克风。"""
-    if wav_path is None and not config.get("microphone_enabled", False):
-        raise ValueError("麦克风未启用，必须提交 WAV 路径")
+    """麦克风逐轮运行或独立WAV验收，共用既有capture Interface。"""
     source = create_audio_source(
         "wav_file" if wav_path is not None else "microphone",
         input_wav_path=wav_path or "",
@@ -106,9 +102,9 @@ def capture_turn(
 
 def main() -> None:
     """执行一轮真实录音链路，输出结构化回执并关闭在线连接。"""
-    parser = argparse.ArgumentParser(description="dry-run 在线录音交互")
+    parser = argparse.ArgumentParser(description="独立在线WAV验收")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--wav")
+    parser.add_argument("--wav", required=True)
     args = parser.parse_args()
     # 1. 外部配置和凭证由组装入口/provider 分别负责。
     config = json.loads(

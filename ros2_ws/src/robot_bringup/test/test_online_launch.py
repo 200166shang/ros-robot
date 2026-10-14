@@ -11,7 +11,7 @@ from launch_ros.actions import Node
 
 
 def test_online_launch_composes_one_complete_agent_with_tracking() -> None:
-    """统一启动仅有一个在线入口，默认保持 dry-run 和无可视化。"""
+    """统一启动仅有一个在线入口，默认关闭可视化，Agent无需运行模式参数。"""
     source = Path(__file__).parents[1]
     spec = importlib.util.spec_from_file_location(
         "online_launch", source / "launch" / "online_agent.launch.py"

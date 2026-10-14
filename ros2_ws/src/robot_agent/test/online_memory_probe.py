@@ -91,7 +91,7 @@ def main() -> None:
     cleared.start()
     cleared.join()
     assert cleared.exitcode == 0, "清空后的独立进程验收失败"
-    print("clear_and_process_restart: passed; dry_run=true; no actions")
+    print("clear_and_process_restart: passed; no actions")
 
 
 if __name__ == "__main__":

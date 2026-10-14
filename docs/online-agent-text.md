@@ -1,10 +1,13 @@
-# 在线文本交互（#63）
+# 独立在线文本验收（#63）
+
+正常运行仅麦克风，见[统一指南](online-agent.md)。本入口仅供独立文本测试，
+每项等待完整回执再提交下一项，不与麦克风运行混用。
 
 ROS 2 Foxy / Python 3.8，使用 Python 标准库，不需要 OpenAI 或 DashScope SDK。
 用户已确认弃用本地桥接。robot_agent 仅保留 Online Agent；本地模型节点、客户端、校验器和专用探针均已移除。模型输出解析仍接受 `fc/res`，这仅是响应契约兼容，不再提供本地桥接进程。
 
 网页相机/Follow 控制由 web_video_server 的 tracking_control 入口独立提供，使用 /web/control 和 /web/control_result；它不调用模型，也不是 Online Agent 的真实设备 Adapter（#65）。
-本入口保持 `dry_run=true`，完整模拟头部/LCD、导航、音乐、音量和WiFi的52项动作及别名，无硬件输出。详见 [模拟演示与契约](online-agent-simulation.md)。
+本入口没有dry_run参数，完整模拟头部/LCD、导航、音乐、音量和WiFi的52项动作及别名，无硬件输出。详见 [模拟演示与契约](online-agent-simulation.md)。
 完整迁移范围、参数和后续票见 [动作与业务清单](online-agent-inventory.md)。
 
 ## 外部配置与启动
@@ -46,7 +49,7 @@ cd ros2_ws
 colcon build --packages-select robot_agent
 source install/setup.bash
 ros2 run robot_agent online_agent --ros-args \
-  -p config_file:="$HOME/.config/ros-robot/online.json" -p dry_run:=true
+  -p config_file:="$HOME/.config/ros-robot/online.json"
 ```
 
 上面 `read` 是 zsh 语法；bash 使用 `read -rs -p 'API Key: ' DASHSCOPE_API_KEY`。
@@ -59,7 +62,7 @@ ros2 topic pub --once /online_agent/text std_msgs/msg/String '{data: "你好，�
 ros2 topic pub --once /online_agent/text std_msgs/msg/String '{data: "请依次点头、微笑、再点头"}'
 ```
 
-Ctrl+C 退出。节点先停止接入/发布再释放 ROS 资源；后台 HTTP 请求受连接与回合超时限制，无自动重试。超时动作不能安全取消，线程退出后也不自动解除 busy。模型超时只保留在途 Future，结束后可接入新回合。
+Ctrl+C 退出。节点先停止接入，等待测试工作线程结束再释放ROS资源；后台 HTTP 请求受连接与回合超时限制，无自动重试。超时动作不能安全取消，线程退出后也不自动解除 busy。模型超时只保留在途 Future，结束后可接入新回合。
 
 动作超时、异常或回执 unknown 后，按原 turn_id 显式核对迟到回执：
 

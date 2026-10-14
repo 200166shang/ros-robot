@@ -13,7 +13,7 @@ LOGGER = logging.getLogger(__name__)
 
 def simulated(detail: str, **data: Any) -> Dict:
     """返回独立的模拟快照，日志不含外部凭证或系统信息。"""
-    LOGGER.info("dry_run=true %s", detail)
+    LOGGER.info("模拟：%s", detail)
     return {
         "status": "simulated_success",
         "detail": "模拟：" + detail,

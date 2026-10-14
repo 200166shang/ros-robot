@@ -136,3 +136,12 @@ robot_following_controller，业务覆盖如下：
 普通聊天收齐 JSON 后回复，未增加逐字话题；这是 #63/#67 已记录限度。
 本票未引入未讨论的业务变更。统一操作见[完整入口](online-agent.md)，
 真实验收与未通过限度见[综合报告](online-agent-integration-validation.md)。
+
+
+## 用户确认的单麦克风运行调整
+
+正常入口仅麦克风逐轮交互，文本/WAV改为独立测试；删除接入/会话锁及
+Agent自身dry_run配置、检查和模拟日志标记。设备模拟契约和60项动作参数
+保持不变，ObjectTrack自己的输出模式保持现状。未进行目录重构。
+空识别不再刷新静音期限；明确的在途模型/未知动作恢复规则保留。
+生成环境音全链路与物理麦克风限度见[重构验收](online-agent-microphone-validation.md)。

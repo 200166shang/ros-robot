@@ -145,38 +145,28 @@ def test_action_timeout_is_unknown_and_busy_until_return():
         released.set()
 
 
-def test_provider_timeout_and_busy_rejection():
-    """模型超时不执行动作，处理中的第二回合立即拒绝。"""
-
-    entered = threading.Event()
+def test_provider_timeout_blocks_next_turn_until_call_finishes():
+    """等待已超时的调用结束，不把等待超时当作调用完成或重试动作。"""
     released = threading.Event()
 
     class SlowProvider:
-        """代表阻塞的模型连接。"""
+        """代表超出主链等待期限的模型连接。"""
 
         def complete(self, text, timeout):
-            """等待外部响应释放。"""
-            entered.set()
+            """外部释放前保持真实调用在途。"""
             released.wait(2)
             return '{"function":["head_nod"],"response":"好了"}'
 
     agent = OnlineInteraction(
-        SlowProvider(), ActionRegistry(), provider_timeout=0.1
+        SlowProvider(), ActionRegistry(), provider_timeout=0.01
     )
-    results = []
-    worker = threading.Thread(
-        target=lambda: results.append(agent.submit("你好"))
-    )
-    worker.start()
     try:
-        assert entered.wait(1)
-        assert agent.submit("第二轮")["status"] == "busy"
-        worker.join(1)
-        assert results[0]["actions"] == []
-        assert results[0]["status"] == "failed"
+        first = agent.submit("你好")
+        assert first["status"] == "failed"
+        assert first["actions"] == []
+        assert agent.submit("下一轮")["status"] == "busy"
     finally:
         released.set()
-        worker.join(1)
 
 
 def test_exception_and_invalid_receipt_cannot_be_success():

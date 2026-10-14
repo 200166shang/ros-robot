@@ -100,7 +100,7 @@ class SpeechOutput(Protocol):
 
 
 class OnlineVoice:
-    """单回合语音 Interface；录音绕过唤醒，识别事件遵循连续会话。"""
+    """单一调用者逐轮语音Interface；录音验收绕过唤醒，麦克风遵循会话。"""
 
     def __init__(
         self,
@@ -141,7 +141,7 @@ class OnlineVoice:
         self._last_activity = clock()
         self._awake = False
         self._closed = threading.Event()
-        self._turn = threading.Lock()
+        self._processing = False
         self._failures = 0
         self._tts_enabled = True
 
@@ -150,14 +150,14 @@ class OnlineVoice:
         """公开会话快照；处理回合时不因静音计时而进入待机。"""
         if self._closed.is_set():
             return "closed"
-        if self._turn.locked():
+        if self._processing:
             return "processing"
         self.tick()
         return "listening" if self._awake else "standby"
 
     def tick(self) -> None:
         """静音期限到达时回到待机，可由 ROS 定时器驱动。"""
-        if not self._turn.locked() and self._awake:
+        if not self._processing and self._awake:
             if self._clock() - self._last_activity >= self._silence_timeout:
                 self._awake = False
 
@@ -176,26 +176,16 @@ class OnlineVoice:
         return self._submit(reconcile_turn_id=turn_id)
 
     def clear_memory(self) -> Dict:
-        """清空主线会话记忆；与语音回合互斥并保留模型在途约束。"""
+        """由同一调用者清空记忆；保留模型仍在途时的执行约束。"""
         turn_id = uuid.uuid4().hex
         if self._closed.is_set():
             return make_result(turn_id, "rejected", "语音入口已关闭。")
-        if not self._turn.acquire(blocking=False):
-            return make_result(turn_id, "busy", "正在处理上一回合。")
-        try:
-            return self._interaction.clear_memory()
-        finally:
-            self._turn.release()
+        return self._interaction.clear_memory()
 
     def enable_tts(self) -> None:
-        """显式恢复连续失败后的合成，下一回合重新尝试在线 provider。"""
-        if not self._turn.acquire(blocking=False):
-            raise RuntimeError("回合忙碌时不能重置合成状态")
-        try:
-            self._failures = 0
-            self._tts_enabled = True
-        finally:
-            self._turn.release()
+        """由同一调用者在两轮之间显式恢复在线合成。"""
+        self._failures = 0
+        self._tts_enabled = True
 
     def _submit(
         self,
@@ -208,12 +198,13 @@ class OnlineVoice:
         turn_id = uuid.uuid4().hex
         if self._closed.is_set():
             return make_result(turn_id, "rejected", "语音入口已关闭。")
-        if not self._turn.acquire(blocking=False):
-            return make_result(turn_id, "busy", "正在处理上一回合。")
+        self._processing = True
         paused = False
+        heard_input = False
         result = make_result(turn_id, "failed", "语音回合失败。")
         try:
             if reconcile_turn_id is not None:
+                heard_input = True
                 paused = True
                 self._input.pause()
                 result = self._interaction.reconcile(reconcile_turn_id)
@@ -239,6 +230,7 @@ class OnlineVoice:
             if not isinstance(text, str) or not text.strip():
                 result.update(status="rejected", reply="未识别到有效文本。")
                 return self._save(result, "")
+            heard_input = True
             clean = re.sub(r"[^\w]", "", text)
 
             paused = True
@@ -282,14 +274,17 @@ class OnlineVoice:
             self._speak(result)
             return self._save(result, text)
         finally:
-            # 4. 无论识别、合成、播放或保存如何退出，都释放回合所有权。
+            # 4. 结束处理并恢复采集；空识别不延长唤醒后的静音期限。
             try:
                 if paused and not self._closed.is_set():
                     self._input.resume()
-                if result["status"] not in ("ignored", "filtered"):
+                if heard_input and result["status"] not in (
+                    "ignored",
+                    "filtered",
+                ):
                     self._last_activity = self._clock()
             finally:
-                self._turn.release()
+                self._processing = False
 
     def _speak(self, result: Dict) -> None:
         """有限合成重试，连续回合失败后降级为文本；播放失败保留音频。"""

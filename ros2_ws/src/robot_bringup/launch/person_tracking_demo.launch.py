@@ -41,15 +41,14 @@ def generate_launch_description() -> LaunchDescription:
             ),
             Node(
                 package="robot_agent",
-                executable="online_agent",
-                name="online_agent",
+                executable="online_voice_agent",
+                name="online_voice_agent",
                 output="screen",
                 parameters=[
                     {
                         "config_file": LaunchConfiguration(
                             "online_config_file"
                         ),
-                        "dry_run": True,
                     }
                 ],
                 condition=IfCondition(

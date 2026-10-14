@@ -209,14 +209,14 @@ def test_asr_and_storage_failure_release_turn(tmp_path, monkeypatch):
     )
 
 
-def test_busy_input_is_rejected_and_close_releases_adapters(tmp_path):
-    """在途模型回合拒绝重叠；退出后不恢复已关闭的采集连接。"""
+def test_close_releases_adapters_during_provider_call(tmp_path):
+    """退出时关闭在途语音资源，不恢复已关闭的采集连接。"""
     voice, speech, model, tts = make_voice(tmp_path)
     entered, release = threading.Event(), threading.Event()
     original = model.complete
 
     def complete(text, timeout):
-        """保持模型在途，允许从公共入口检查忙碌与退出。"""
+        """保持模型在途，允许从公共退出Interface关闭资源。"""
         entered.set()
         release.wait(2)
         return original(text, timeout)
@@ -226,7 +226,6 @@ def test_busy_input_is_rejected_and_close_releases_adapters(tmp_path):
         turn = executor.submit(voice.submit_recording, tmp_path / "input.wav")
         assert entered.wait(1)
         assert voice.state == "processing"
-        assert voice.submit_transcript("你好")["status"] == "busy"
         voice.close()
         release.set()
         assert turn.result(timeout=2)["tts_status"] == "disabled"
@@ -299,3 +298,17 @@ def test_filtered_input_does_not_extend_silence_and_playback_failure_recovers(
     assert voice.submit_transcript("天气")["status"] == "filtered"
     now[0] = 120
     assert voice.state == "standby"
+
+
+def test_empty_microphone_recognition_does_not_extend_wake_session(tmp_path):
+    """持续录音中的空识别不算用户活动，静音期限仍使会话回待机。"""
+    now = [0.0]
+    voice, speech, model, tts = make_voice(tmp_path, clock=lambda: now[0])
+    voice.submit_transcript("小沫小沫")
+    now[0] = 60
+    speech.text = ""
+    result = voice.submit_recording(tmp_path / "input.wav", direct=False)
+    assert result["status"] == "rejected"
+    now[0] = 121
+    assert voice.state == "standby"
+    assert model.inputs == []

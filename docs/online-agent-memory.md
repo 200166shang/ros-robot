@@ -22,13 +22,13 @@
 
 ## 清空与故障反馈
 
-`OnlineInteraction.clear_memory()` 清空近期上下文及内存摘要，并原子保存空摘要。ROS 入口：
+`OnlineInteraction.clear_memory()` 清空近期上下文及内存摘要，并原子保存空摘要。独立文本验收ROS入口（正常麦克风节点没有此话题）：
 
 ```bash
 ros2 topic pub --once /online_agent/clear_memory std_msgs/msg/String '{data: "clear"}'
 ```
 
-同一 `/online_agent/result` 返回关联 turn_id、status、reply 和 `memory_warnings`。回合或摘要请求在途时返回 busy，请在其结束后重新请求清空。摘要超时不取消外部调用，其结束前新回合也返回 busy；迟到摘要可能保存，但不能与成功清空重叠。
+同一 `/online_agent/result` 返回关联 turn_id、status、reply 和 `memory_warnings`。摘要请求仍在途时返回busy，请在其结束后重新请求清空。摘要超时不取消外部调用，其结束前新回合也返回 busy；迟到摘要可能保存，但不能与成功清空重叠。
 
 已确定回复保持其状态和动作事实，记忆错误放在脱敏 `memory_warnings` 中：`summary_failed`、`summary_timeout`、`save_failed`、`load_failed`。不输出原始 provider 错误或记忆内容。摘要/保存的等待使用 provider_timeout；底层磁盘写入不支持取消，因此在途写入也保持 busy。
 
@@ -36,7 +36,7 @@ ros2 topic pub --once /online_agent/clear_memory std_msgs/msg/String '{data: "cl
 
 ## 脱敏复验
 
-启动继续保持 `dry_run=true`。按照 [在线文本启动](online-agent-text.md) 配置真实云端凭证。使用不存在的源码外专用验收文件，不使用用户现有记忆：
+Agent没有dry_run配置，ObjectTrack自身模式保持现状。按照 [在线文本启动](online-agent-text.md) 配置真实云端凭证。使用不存在的源码外专用验收文件，不使用用户现有记忆：
 
 ```bash
 PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" \

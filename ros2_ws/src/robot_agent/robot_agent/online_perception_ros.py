@@ -4,8 +4,6 @@ import threading
 import time
 from typing import Dict
 
-from rcl_interfaces.msg import ParameterType
-from rcl_interfaces.srv import GetParameters
 from rclpy.node import Node
 from std_msgs.msg import Bool
 from std_srvs.srv import SetBool
@@ -23,9 +21,6 @@ class RosPerception:
                 SetBool, "/tracking/set_lidar_enabled"
             ),
         }
-        self._parameters = node.create_client(
-            GetParameters, "/object_track/get_parameters"
-        )
 
     def camera(self, enabled: bool) -> Dict:
         """没有采集端订阅时拒绝；发布完成不确认设备状态。"""
@@ -53,7 +48,7 @@ class RosPerception:
         return future.result()
 
     def set_enabled(self, kind: str, enabled: bool, deadline: float) -> Dict:
-        """启用前验证实际 dry-run；仅最终服务回执可报告确认。"""
+        """直接调用设备Interface；仅最终服务回执可报告确认。"""
         client = self._clients[kind]
         if not client.service_is_ready():
             return {
@@ -61,36 +56,11 @@ class RosPerception:
                 "detail": client.srv_name + " 服务不可用",
             }
 
-        # 1. 启用行为前读取设备安全参数，不能仅相信入口的 dry_run。
-        if enabled:
-            if not self._parameters.service_is_ready():
-                return {
-                    "status": "failed",
-                    "detail": "无法确认 dry_run=true，未提交启用请求",
-                }
-            request = GetParameters.Request()
-            request.names = ["dry_run"]
-            response = self._call(self._parameters, request)
-            if response is None or len(response.values) != 1:
-                return {
-                    "status": "failed",
-                    "detail": "设备未返回 dry_run 参数，未提交启用请求",
-                }
-            parameter = response.values[0]
-            if (
-                parameter.type != ParameterType.PARAMETER_BOOL
-                or not parameter.bool_value
-            ):
-                return {
-                    "status": "failed",
-                    "detail": "ObjectTrack dry_run 不是 true，未提交启用请求",
-                }
-
-        # 2. 服务端保留 TF、近期扫描、同步数据检查，不重试或降级。
+        # 设备服务负责TF、同步数据和近期扫描前提，入口不重复读取模式。
         if time.monotonic() >= deadline:
             return {
                 "status": "failed",
-                "detail": "安全参数回执迟到，未提交行为请求，不补执行",
+                "detail": "动作期限已过，未提交行为请求，不补执行",
             }
         request = SetBool.Request()
         request.data = enabled

@@ -2,7 +2,6 @@
 
 import json
 import threading
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -11,7 +10,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from .online_actions import ActionRegistry
-from .online_interaction import OnlineInteraction, make_result
+from .online_interaction import OnlineInteraction
 from .online_memory import ConversationMemory
 from .online_perception import PerceptionActions, perception_actions
 from .online_perception_ros import RosPerception
@@ -20,16 +19,13 @@ from .online_simulation import simulate_cue
 
 
 class OnlineRosNode(Node):
-    """独立话题避免影响现有本地模型桥接。"""
+    """独立文本验收入口；调用者按回执逐项提交，不参与麦克风运行。"""
 
     def __init__(self) -> None:
         """读取外部配置，接入单回合交互 Interface。"""
         super().__init__("online_agent", parameter_overrides=[])
-        # 1. 读取外部参数并验证 dry-run，凭证由 provider 从环境取得。
+        # 1. 读取外部参数，凭证由 provider 从环境取得。
         config_file = self.declare_parameter("config_file", "").value
-        dry_run = self.declare_parameter("dry_run", True).value
-        if dry_run is not True:
-            raise ValueError("在线文本入口要求 dry_run=true")
         if not isinstance(config_file, str) or not config_file:
             raise ValueError("必须指定外部 config_file 路径")
         with open(config_file, encoding="utf-8") as source:
@@ -61,9 +57,7 @@ class OnlineRosNode(Node):
             String, "/online_agent/result", 10
         )
         self._worker: Optional[threading.Thread] = None
-        self._processing = threading.Lock()
         self._accepting = True
-        self._publish_lock = threading.Lock()
         self.create_subscription(
             String, "/online_agent/text", self._on_text, 10
         )
@@ -75,21 +69,11 @@ class OnlineRosNode(Node):
         )
         cue = simulate_cue("startup")
         self.get_logger().info(cue["detail"])
-        self.get_logger().info("Online Agent ready; dry_run=true")
+        self.get_logger().info("Online text test ready")
 
     def _on_text(self, message: String) -> None:
         """后台处理回合；忙时立即返回带关联标识的拒绝结果。"""
         if not self._accepting:
-            return
-        if not self._processing.acquire(blocking=False):
-            # submit 自身保证忙时拒绝；不能在 ROS 回调里等待在线调用。
-            self._publish(
-                make_result(
-                    uuid.uuid4().hex,
-                    "busy",
-                    "正在处理上一回合，请稍后再试。",
-                )
-            )
             return
         self._worker = threading.Thread(
             target=self._handle, args=(message.data,), daemon=True
@@ -108,35 +92,29 @@ class OnlineRosNode(Node):
 
     def _handle(self, text: str) -> None:
         """把交互回执原样发布，并以回合标识记录脱敏日志。"""
-        try:
-            result = self._agent.submit(text)
-        finally:
-            # 确认交互完成后先释放接入标识，回执到达后可立即提交下一轮。
-            self._processing.release()
+        result = self._agent.submit(text)
         if self._accepting:
             self._publish(result)
 
     def _publish(self, result: dict) -> None:
         """发布结构化回复和动作结果，不记录凭证与 provider 内部异常。"""
-        with self._publish_lock:
-            if not self._accepting:
-                return
-            if result["status"] == "failed":
-                cue = simulate_cue("error")
-                self.get_logger().info(cue["detail"])
-            message = String()
-            message.data = json.dumps(result, ensure_ascii=False)
-            self._publisher.publish(message)
-            self.get_logger().info(
-                f"turn={result['turn_id']} status={result['status']}"
-            )
+        if not self._accepting:
+            return
+        if result["status"] == "failed":
+            cue = simulate_cue("error")
+            self.get_logger().info(cue["detail"])
+        message = String()
+        message.data = json.dumps(result, ensure_ascii=False)
+        self._publisher.publish(message)
+        self.get_logger().info(
+            f"turn={result['turn_id']} status={result['status']}"
+        )
 
     def stop(self) -> None:
         """停止接入与发布，避免退出时线程访问已销毁节点。"""
-        with self._publish_lock:
-            self._accepting = False
+        self._accepting = False
         if self._worker is not None:
-            self._worker.join(timeout=0.5)
+            self._worker.join()
 
 
 def main(args: Optional[List[str]] = None) -> None:

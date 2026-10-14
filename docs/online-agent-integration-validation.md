@@ -1,5 +1,9 @@
 # #68 统一启动与综合验收
 
+本报告记录最初PR交付版本。用户确认的单麦克风与删除Agent模式的后续
+实现/验收见[单麦克风重构报告](online-agent-microphone-validation.md)，
+操作以[当前指南](online-agent.md)为准；下文历史命令和证据保留。
+
 2026-10-14（北京时间）。独立 worktree `/home/orangepi/code/ros-robot-68`，
 分支 `codex/issue-68-online-integration`。实施前 `git fetch origin main`，
 基线 `0bfb5477b57c5830b4cda68140a892e86d9add4f`，包含 #63–#67全部交付。

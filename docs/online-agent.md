@@ -1,10 +1,10 @@
 # 完整 Online Agent：统一启动与操作
 
 ROS 2 Foxy / Python 3.8，统一入口组合真实在线 ASR、LLM、TTS、
-完整动作注册表、会话记忆与真实感知 Adapter。文本和录音使用同一个
-`online_voice_agent`，不要同时启动 `online_agent` 或另一份语音入口。
+完整动作注册表、会话记忆与真实感知 Adapter。正常运行只有麦克风
+`online_voice_agent`；文本/WAV由独立测试进程使用同一交互Implementation。
 LCD、舵机、底盘、导航、音乐、系统音量、WiFi 与提示音均保持日志模拟。
-`dry_run=true`；Follow 的设备参数、安全路由、TF 和数据前提继续生效。
+Agent不配置dry_run；ObjectTrack自身仍dry_run=true，服务保留数据/TF前提。
 
 ## 准备依赖与外部资源
 
@@ -45,7 +45,6 @@ source "$ONLINE_BUILD_ROOT/install/setup.bash"
 
 ```json
 {
-  "dry_run": true,
   "model": "qwen-plus",
   "api_key_env": "DASHSCOPE_API_KEY",
   "provider_timeout": 60,
@@ -63,7 +62,8 @@ source "$ONLINE_BUILD_ROOT/install/setup.bash"
   "memory_file": "/absolute/external/conversation-summary.json",
   "memory_recent_turns": 6,
   "memory_summary_trigger": 6,
-  "microphone_enabled": false,
+  "record_device": "plughw:2,0",
+  "record_seconds": 8,
   "playback_enabled": false
 }
 ```
@@ -98,27 +98,22 @@ ros2 launch robot_bringup online_agent.launch.py \
 安装 Foxglove Bridge 后可加 `with_foxglove:=true`。全部进程由正常 ROS
 Launch 生命周期管理，没有第二进程管理器或自动重启策略。
 
-另一终端加载相同 ROS/install 环境，先监听结果，再发输入：
+正常入口自动录制麦克风，不能向它发布text/WAV/transcript或文本控制命令。
+另一终端仅观察结果：
 
 ```bash
 ros2 topic echo /online_agent/result std_msgs/msg/String
-# 在第三个终端输入：
-ros2 topic pub --once /online_agent/text std_msgs/msg/String \
-  '{data: "请依次点头、微笑、再点头"}'
-ros2 topic pub --once /online_agent/wav std_msgs/msg/String \
-  '{data: "/absolute/path/to/existing.wav"}'
 ```
 
-WAV 须为非空 PCM16、单声道、16kHz；直接录音不要求唤醒词。实际识别文本
-在 `transcript` 中，不能以文件名作为识别证据。LLM 与 TTS 均实际在线。
-每回合 JSON/WAV 在 `output_dir`，以 `turn_id` 关联，回复只依据动作回执。
-`real_success` 的相机结果仅确认控制请求已发布，不确认硬件开关；查询会
-明确未知。fusion/Follow 则需要真实服务确认。状态查询是本入口最后确认，
-不能当作外部控制后的实时设备状态。
+说“小沫小沫”后连续请求，明确“晚安”或静音120秒回待机。每轮录音默认
+8秒，识别、动作和合成/播放结束后才开始下一轮；日志提示采集窗口。
+音频/ASR/模型规则见[麦克风说明](online-agent-voice.md)。
 
-开启融合后，观察真实 `/scan` 与 `/camera/image_det` 数据到达，再请求
-Follow。若前提未满足，失败即停止余下动作，不自动重试，也不削弱前提。
-详情见[感知操作](online-agent-perception.md)。
+每轮JSON/WAV在output_dir，以turn_id关联，回复只依据动作确认。
+相机real_success只确认请求已发布，查询明确未知；fusion/Follow由服务
+确认，状态查询表示本入口最后确认。融合开启后应另行观察真实扫描和检测
+到达，再请求Follow；失败停止余下动作，不自动重试或弱化前提。
+详情见[感知说明](online-agent-perception.md)。
 
 独立单 WAV CLI 只用于在线语音/模拟设备诊断，不接入 ROS 感知：
 
@@ -130,31 +125,18 @@ ros2 run robot_agent online_voice_wav \
 
 ### 可选麦克风与播放
 
-需安装 `arecord`/`aplay`（alsa-utils）。外部配置设
-`microphone_enabled=true`，按需要指定 `record_executable`、
-`record_device`（默认 default）、`record_seconds`（默认8）；
-`playback_enabled=true` 及 `play_executable`、`play_device` 可启用回复播放。
-麦克风按半双工录制→识别→动作→合成/播放→恢复采集。
-麦克风识别需要“小沫小沫”或五种同音唤醒，随后连续对话；明确休眠或
-静音120秒回 standby。录音/文本直接回合绕过该会话门控。
-音乐只模拟，但麦克风会话仍依原音乐控制关键词过滤。
+需安装arecord/aplay（alsa-utils）；麦克风始终是正常入口唯一输入。
+arecord -l核对record_device，配置record_executable、record_device与
+record_seconds。playback_enabled=true及play_executable/play_device
+可开启回复播放。缺失LCD、导航、舵机等仍保持明确模拟实现。
 
 ### 记忆、恢复与退出
 
-```bash
-ros2 topic pub --once /online_agent/clear_memory std_msgs/msg/String \
-  '{data: "clear"}'
-ros2 topic pub --once /online_agent/tts_enable std_msgs/msg/String \
-  '{data: "enable"}'
-ros2 topic pub --once /online_agent/reconcile std_msgs/msg/String \
-  '{data: "原动作回合turn_id"}'
-```
-
-清空影响本配置的近期上下文与持久摘要；忙时拒绝。摘要达到配置阈值后
-保存，重启同一配置加载摘要。详见[记忆说明](online-agent-memory.md)。
-TTS 连续失败后降级文本，显式 enable 恢复；不重复模型或动作。
-动作在途/未知时保持 busy，reconcile 核对迟到回执，不补执行余下动作。
-仍未知需操作者核实设备状态，不能仅以线程退出解除安全互斥。
+正常入口没有clear_memory/tts_enable/reconcile文本话题。公共Interface
+由同一调用者轮间调用，独立文本验收支持clear_memory/reconcile；退出后
+可清理专用记忆文件。模型仍在途、动作unknown时继续保留无执行重叠与
+显式核对规则。TTS降级后可停止/重启恢复，绝不自动重试原动作。
+记忆语义见[记忆说明](online-agent-memory.md)。
 
 启动终端 Ctrl+C 退出本次 Launch 创建的全部进程。在线入口关闭语音连接，
 取消/回收录制与播放子进程，等待有界在线调用后释放 ROS。凭证、录音、
@@ -162,10 +144,13 @@ TTS音频、记忆、模型、SDK头和构建输出不提交。
 
 ## 可复现综合验收
 
-统一启动运行中，用真实录音执行探针；不传入固定模型或传感器替身：
+停止麦克风入口，单独启动固定感知组合；探针自身组装交互并按序测试文本/WAV：
 
 ```bash
+ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
+# 另一个已加载环境的终端，使用专用外部配置：
 python3 ros2_ws/src/robot_agent/test/online_integration_probe.py \
+  --config /absolute/external/test-config.json \
   --wav /absolute/path/to/existing.wav \
   --evidence-dir "$HOME/local-data/ros-robot/online-acceptance"
 ```
@@ -173,7 +158,7 @@ python3 ros2_ws/src/robot_agent/test/online_integration_probe.py \
 探针读取实际 dry_run 参数，验证真实图像/扫描、在线相机控制、fusion、
 Follow、模拟/真实混合顺序、有意重复、WAV全链路，以及零运动消息/发布者。
 使用专用验收配置（memory_summary_trigger=2），避免干扰日常记忆。
-停止并重新启动同一 Launch/配置，再加 `--recall` 验证摘要召回与清空。
+重新启动同一探针进程/配置，加--recall验证跨进程摘要召回与清空。
 该阶段会清空专用记忆。失败记录仍保存，断言失败不能计为通过。
 
 覆盖核对见[源业务清单](online-agent-inventory.md)，实际命令、结果、版本
@@ -187,6 +172,7 @@ WAV，要求实际ASR文本非空且Follow动作有真实确认，最后停止�
 
 ```bash
 python3 ros2_ws/src/robot_agent/test/online_integration_probe.py \
+  --config /absolute/external/test-config.json \
   --recording-only --wav /absolute/path/to/existing-tracking-request.wav \
   --evidence-dir "$HOME/local-data/ros-robot/online-acceptance"
 ```

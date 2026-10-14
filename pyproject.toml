@@ -2,7 +2,7 @@
 # ROS 2 Foxy uses Python 3.8; scope checks to migrated online/demo modules.
 target-version = "py38"
 line-length = 79
-include = ["pyproject.toml", "**/online_*.py", "**/robot_agent/setup.py", "**/robot_voice/audio_io.py", "**/robot_voice/audio_sources.py", "**/test_audio_io.py", "**/test_online_*.py", "**/tracking_control_node.py", "**/person_tracking_demo.launch.py", "**/online_agent.launch.py", "**/tracking_control_acceptance_probe.py"]
+include = ["pyproject.toml", "**/online_*.py", "**/robot_agent/setup.py", "**/robot_voice/audio_io.py", "**/robot_voice/audio_sources.py", "**/test_audio_io.py", "**/test_online_*.py", "**/tracking_control_node.py", "**/person_tracking_demo.launch.py", "**/online_agent.launch.py", "**/tracking_control_acceptance_probe.py", "**/test_tracking_launch.py"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I"]
