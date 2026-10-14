@@ -38,3 +38,5 @@ source /opt/ros/foxy/setup.bash
 
 
 本地 LLM 桥接已弃用，robot_agent 仅提供 Online Agent。启动及外部配置见 [在线文本说明](docs/online-agent-text.md)，相机、融合及 Follow 见 [感知控制](docs/online-agent-perception.md)。run-demo.sh 使用标准 ROS launch 启动跟踪与网页；网页设备控制独立于模型推理。
+
+完整在线语音、文本、感知和记忆的一次启动与验收见 [统一 Online Agent 指南](docs/online-agent.md)。

@@ -45,3 +45,5 @@ The local LLM bridge is retired. `robot_agent` provides Online Agent only;
 see [online text startup](docs/online-agent-text.md). `run-demo.sh` starts the
 tracking/web composition and accepts `with_online_agent:=true` plus an external
 `online_config_file`. Web device controls are independent of model inference.
+
+For unified online text, WAV, perception and memory startup, see the [Online Agent guide](docs/online-agent.md).

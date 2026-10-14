@@ -14,6 +14,7 @@ from .online_actions import ActionRegistry
 from .online_interaction import make_result
 from .online_perception import PerceptionActions, perception_actions
 from .online_perception_ros import RosPerception
+from .online_simulation import simulate_cue
 from .online_voice_runtime import capture_turn, create_voice
 
 
@@ -70,6 +71,7 @@ class OnlineVoiceRosNode(Node):
                 target=self._microphone_loop, name="online-microphone"
             )
             self._microphone.start()
+        self.get_logger().info(simulate_cue("startup")["detail"])
         self.get_logger().info("Online voice ready; dry_run=true")
 
     def _on_wav(self, message: String) -> None:
@@ -139,6 +141,8 @@ class OnlineVoiceRosNode(Node):
         with self._publish_lock:
             if self._stop.is_set():
                 return
+            if result["status"] == "failed":
+                self.get_logger().info(simulate_cue("error")["detail"])
             message = String()
             message.data = json.dumps(result, ensure_ascii=False)
             self._publisher.publish(message)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """通过公开 ROS 控制接口验证单一跟踪组合的安全行为。"""
 
+import threading
 import time
 from typing import Any, Callable, List, Sequence, Tuple
 
@@ -13,12 +14,12 @@ from robot_interfaces.msg import Det, Dets
 from sensor_msgs.msg import Image, LaserScan
 from std_srvs.srv import SetBool
 
-
 Box = Tuple[int, int, int, int]
 
 
 class AcceptanceFailure(RuntimeError):
     """表示公开 ROS 接口验收未达到预期。"""
+
     pass
 
 
@@ -26,6 +27,7 @@ class TrackingControlAcceptanceProbe(Node):
     """通过 ROS topic 和 service 验收 LiDAR 融合与 Follow 控制。"""
 
     def __init__(self) -> None:
+        """建立公开观察和样例输入，雷达采样不受大图像传输阻塞。"""
         super().__init__("tracking_control_acceptance_probe")
         self._sequence: int = 1
         self._annotations: List[Image] = []
@@ -45,7 +47,10 @@ class TrackingControlAcceptanceProbe(Node):
         sensor_qos.durability = DurabilityPolicy.VOLATILE
 
         self.annotation_subscription = self.create_subscription(
-            Image, "/camera/image_det_track", self._annotations.append, output_qos
+            Image,
+            "/camera/image_det_track",
+            self._annotations.append,
+            output_qos,
         )
         self.create_subscription(Log, "/rosout", self._on_log, log_qos)
         self.create_subscription(
@@ -57,14 +62,39 @@ class TrackingControlAcceptanceProbe(Node):
         self.detections_publisher = self.create_publisher(
             Dets, "/ai_msg_det", fixture_qos
         )
-        self.scan_publisher = self.create_publisher(LaserScan, "/scan", sensor_qos)
-        self.enable_client = self.create_client(SetBool, "/tracking/set_enabled")
+        self.scan_publisher = self.create_publisher(
+            LaserScan, "/scan", sensor_qos
+        )
+        self.enable_client = self.create_client(
+            SetBool, "/tracking/set_enabled"
+        )
         self.lidar_client = self.create_client(
             SetBool, "/tracking/set_lidar_enabled"
         )
+        # 1280×720图像传输在板端约1.8秒，超过1秒扫描新鲜度契约。
+        # 样例雷达按真实设备10Hz独立发布，不能随图像单发后等待标注。
+        self._scan_stop = threading.Event()
+        self._scan_worker = threading.Thread(
+            target=self._publish_scans, name="acceptance-scan-fixture"
+        )
+        self._scan_worker.start()
+
+    def _publish_scans(self) -> None:
+        """持续提供10Hz扫描，让探针遵守tracker的近期量程前提。"""
+        while not self._scan_stop.wait(0.1):
+            self.publish_scan_fixture()
+
+    def stop_fixture(self) -> None:
+        """先停止并回收采样线程，再允许销毁ROS publisher。"""
+        self._scan_stop.set()
+        self._scan_worker.join()
 
     def _on_log(self, message: Log) -> None:
-        if message.name.endswith("object_track") and "dry-run preview" in message.msg:
+        """只保存tracker的dry-run预览，用于检查公开控制结果。"""
+        if (
+            message.name.endswith("object_track")
+            and "dry-run preview" in message.msg
+        ):
             self._previews.append(message.msg)
 
     def spin_until(
@@ -103,7 +133,9 @@ class TrackingControlAcceptanceProbe(Node):
         scan.ranges = [0.5, float("inf"), 0.5, 0.5]
         self.scan_publisher.publish(scan)
 
-    def enable_follow_with_fresh_scan(self, timeout: float = 5.0) -> SetBool.Response:
+    def enable_follow_with_fresh_scan(
+        self, timeout: float = 5.0
+    ) -> SetBool.Response:
         """刷新扫描并重试，直到 Follow 就绪或返回其他拒绝原因。"""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -122,9 +154,8 @@ class TrackingControlAcceptanceProbe(Node):
         wait_for_annotation: bool = True,
     ) -> None:
         """发布同步图像与检测框，并可等待 tracker 的标注图像。"""
-        if wait_for_annotation:
-            before = len(self._annotations)
-            deadline = time.monotonic() + 10.0
+        before = len(self._annotations)
+        deadline = time.monotonic() + 10.0
 
         while True:
             sequence = self._sequence
@@ -143,6 +174,7 @@ class TrackingControlAcceptanceProbe(Node):
             detections.header = image.header
             detections.image_width = image.width
             detections.image_height = image.height
+            people: List[Det] = []
             for x1, y1, x2, y2 in boxes:
                 detection = Det()
                 detection.x1 = x1
@@ -150,7 +182,8 @@ class TrackingControlAcceptanceProbe(Node):
                 detection.x2 = x2
                 detection.y2 = y2
                 detection.class_name = "person"
-                detections.detections.append(detection)
+                people.append(detection)
+            detections.detections = people
 
             self.publish_scan_fixture()
             self.image_publisher.publish(image)
@@ -165,8 +198,8 @@ class TrackingControlAcceptanceProbe(Node):
                     return
             if time.monotonic() >= deadline:
                 raise AcceptanceFailure(
-                    'timed out waiting for tracking-annotated image '
-                    'for synchronized inputs'
+                    "timed out waiting for tracking-annotated image "
+                    "for synchronized inputs"
                 )
 
     def publish_until_preview(
@@ -191,7 +224,7 @@ class TrackingControlAcceptanceProbe(Node):
                 if matching_preview:
                     return self._previews[-1]
         raise AcceptanceFailure(
-            'timed out waiting for dry-run preview containing ' + expected
+            "timed out waiting for dry-run preview containing " + expected
         )
 
 
@@ -200,15 +233,20 @@ def main() -> None:
     rclpy.init()
     node = TrackingControlAcceptanceProbe()
     try:
+        # 1. 服务发现后核对待机与输入未就绪的拒绝。
         node.spin_until(
-            lambda: node.enable_client.service_is_ready()
-            and node.lidar_client.service_is_ready(),
+            lambda: (
+                node.enable_client.service_is_ready()
+                and node.lidar_client.service_is_ready()
+            ),
             10.0,
             "tracking control services",
         )
         node.spin_until(
-            lambda: node.image_publisher.get_subscription_count() > 0
-            and node.detections_publisher.get_subscription_count() > 0,
+            lambda: (
+                node.image_publisher.get_subscription_count() > 0
+                and node.detections_publisher.get_subscription_count() > 0
+            ),
             5.0,
             "tracker input subscriptions",
         )
@@ -216,12 +254,14 @@ def main() -> None:
         refused = node.call_set_bool(node.enable_client, True)
         if refused.success or "input" not in refused.message.lower():
             raise AcceptanceFailure(
-                'Follow enable should be refused before synchronized input; '
-                'received {!r}'.format(refused)
+                "Follow enable should be refused before synchronized input; "
+                "received {!r}".format(refused)
             )
 
         if node.count_subscribers("/scan") != 0:
-            raise AcceptanceFailure("LiDAR Fusion should be disabled at startup")
+            raise AcceptanceFailure(
+                "LiDAR Fusion should be disabled at startup"
+            )
 
         # 输入就绪但融合关闭时必须拒绝 Follow，且不生成预览命令。
         previews_before_input = len(node._previews)
@@ -240,6 +280,7 @@ def main() -> None:
                 + refused_without_lidar.message
             )
 
+        # 2. 融合订阅确认后，才提交有新鲜扫描依据的Follow。
         lidar_enabled = node.call_set_bool(node.lidar_client, True)
         if not lidar_enabled.success:
             raise AcceptanceFailure(
@@ -260,9 +301,11 @@ def main() -> None:
             )
         enabled = node.enable_follow_with_fresh_scan()
         if not enabled.success:
-            raise AcceptanceFailure("Follow enable was rejected: " + enabled.message)
+            raise AcceptanceFailure(
+                "Follow enable was rejected: " + enabled.message
+            )
 
-        # 无目标时保持 Follow 并输出零命令；检测到人物后恢复跟随。
+        # 3. 核对无目标零预览、人物量程与观察者断开后的跟随。
         no_target_preview = node.publish_until_preview(
             [], "no target found", 2.5
         )
@@ -271,7 +314,7 @@ def main() -> None:
             or "angular.z=0.000" not in no_target_preview
         ):
             raise AcceptanceFailure(
-                'no-person command was not zero: ' + no_target_preview
+                "no-person command was not zero: " + no_target_preview
             )
 
         target_preview = node.publish_until_preview(
@@ -282,8 +325,8 @@ def main() -> None:
         )
         if "angular.z=-1.800" not in target_preview:
             raise AcceptanceFailure(
-                "LiDAR-backed target did not preserve the expected turn command: "
-                + target_preview
+                "LiDAR-backed target did not preserve "
+                "the expected turn command: " + target_preview
             )
 
         # 移除观察者订阅后继续输入，Follow 命令仍应产生。
@@ -295,12 +338,15 @@ def main() -> None:
             wait_for_annotation=False,
         )
 
+        # 4. 核对待机停止、融合关闭与订阅清理，不发布实际速度。
         preview_deadline = time.monotonic() + 1.1
         while time.monotonic() < preview_deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
         paused = node.call_set_bool(node.enable_client, False)
         if not paused.success:
-            raise AcceptanceFailure("Follow pause was rejected: " + paused.message)
+            raise AcceptanceFailure(
+                "Follow pause was rejected: " + paused.message
+            )
         node.spin_until(
             lambda: any(
                 "disabled" in preview
@@ -324,12 +370,14 @@ def main() -> None:
         if not lidar_disabled.success:
             raise AcceptanceFailure("LiDAR Fusion disable was rejected")
         node.spin_until(
-            lambda: node.count_subscribers("/scan") == 0
-            and any(
-                "LiDAR fusion disabled" in preview
-                and "linear.x=0.000" in preview
-                and "angular.z=0.000" in preview
-                for preview in node._previews
+            lambda: (
+                node.count_subscribers("/scan") == 0
+                and any(
+                    "LiDAR fusion disabled" in preview
+                    and "linear.x=0.000" in preview
+                    and "angular.z=0.000" in preview
+                    for preview in node._previews
+                )
             ),
             3.0,
             "LiDAR subscription cleanup and Follow stop",
@@ -347,7 +395,8 @@ def main() -> None:
             raise AcceptanceFailure("dry-run created a Twist publisher")
         if node.count_subscribers("/scan") != 0:
             raise AcceptanceFailure(
-                "ObjectTrack remained subscribed to /scan with LiDAR Fusion disabled"
+                "ObjectTrack remained subscribed to /scan "
+                "with LiDAR Fusion disabled"
             )
 
         print("tracking_control=passed")
@@ -358,6 +407,7 @@ def main() -> None:
         print("scan_subscription_lifecycle=passed")
         print("dry_run=true")
     finally:
+        node.stop_fixture()
         node.destroy_node()
         rclpy.shutdown()
 

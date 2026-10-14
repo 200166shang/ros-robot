@@ -93,10 +93,46 @@
 | 搜索依赖 | search_engine.py 未被在线主入口/动作表引用 | 不新增不存在的搜索动作 | 清单记录，无新增票 |
 | 真实录音与在线综合验收 | ASR→LLM→动作→TTS | 必须真实在线，阻塞明确报告 | #67/#68 |
 
-#63 交付三项代表表情及顺序执行主链路；#64 补齐52项模拟动作与别名。#65 感知动作仍待真实接入。当前状态语义、源实现差异及独立演示见 [完整模拟说明](online-agent-simulation.md)。
+#63 交付顺序执行主链路；#64 已补齐52项模拟动作与别名；#65 已接入8项源感知动作和7项兼容入口；#66/#67 已组装记忆与语音。当前状态语义、源实现差异及独立演示见 [完整模拟说明](online-agent-simulation.md)。
 
 ## 底盘与提示音核对（#64）
 
 - 旧 `robot_following_controller.py` 经跟随控制栈使用底盘；没有额外直行/转弯/速度动作注册。8项跟随/tracking/LiDAR属于 #65，不能在本票以模拟成功替代真实感知接口。导航模拟不创建 action client 或发布 `/cmd_vel`。
 - 旧 `main.py::play_startup_sound/play_error_sound` 调用 ffplay 播放启动/错误提示音，不是模型注册动作。新 ROS 入口启动和失败回执仅记录 `simulate_cue(startup/error)`，不启动播放器、不生成音频。唤醒/语音生命周期的提示音由 #67 复用，未发明新的模型动作。
 - LCD 显示状态包括兴奋、正常、good_night、苏醒、wifi_info；音乐播放/切歌设兴奋，停止设正常，保留源跨能力状态。
+
+
+## #68 最新主线覆盖复核
+
+2026-10-14，以主线 `0bfb547` 和同一旧源版本独立复核。通过 AST 读取
+`_register_default_functions` 的所有条件注册字典，得到 **60项源动作**，
+其中52项缺失设备模拟、8项真实感知。对每项调用公开
+`ActionRegistry.validate`，核对源签名的必填参数和默认值：60项均可绑定，
+默认值差异0项，核对期间执行设备动作0项。别名 `play_song`、`go_to`
+仍映射同一音乐/导航契约；所有条件能力均保留，无因设备缺失删行。
+15项感知注册名中另7项为相机/跟踪兼容名，统一入口合计67项注册名。
+原始逐项参数证据在源码外 `issue-68-evidence/source-audit.json`。
+
+主入口逐文件核对 main/config/start_agent、llm、asr、function_executor、
+head_servo_controller、emoji/lcd、cloud_music、navigation_controller 和
+robot_following_controller，业务覆盖如下：
+
+- 配置/初始化/退出：统一 Launch 与薄 ROS 入口，外部配置/数据，有限退出。
+- ASR/唤醒/连续会话/音乐过滤：OnlineVoice + DashScopeASR，WAV/麦克风
+  共用既有 capture Interface；重连与总期限、半双工恢复均保留。
+- LLM/执行/可信回复：OnlineInteraction 集中全表校验、按序重复、失败停止、
+  busy/未知核对；所有回复和记忆保留确认事实，不播报提前成功。
+- TTS/播放：DashScopeTTS，流式合成、有限重试/文本降级/显式恢复、保留音频。
+- 摘要/近期上下文：ConversationMemory，有限近期上下文、跨重启摘要和清空。
+- 状态能力：头部/LCD、音乐、音量、导航按职责持有；真实感知 Adapter 位于
+  ROS 边缘，统一注册表复用原动作签名，不为每项动作创建类。
+- 提示音/系统功能继续模拟，无PWM权限修改或旧播放器启动；search_engine
+  不被原在线主链或动作表使用，未增加搜索动作。
+
+与旧源差异均来自 #54 已确认的顺序执行、保留重复、整表校验、可信回复、
+摘要记忆、精确休眠、外部配置及设备模拟。`head_position()` 无指定轴被拒绝，
+无效方向/情感/非有限数/非法四元数等在动作输入处拒绝，详见 #64契约说明；
+不复制旧源静默忽略、队列接受即成功、默认方向替换或并发去重缺陷。
+普通聊天收齐 JSON 后回复，未增加逐字话题；这是 #63/#67 已记录限度。
+本票未引入未讨论的业务变更。统一操作见[完整入口](online-agent.md)，
+真实验收与未通过限度见[综合报告](online-agent-integration-validation.md)。
