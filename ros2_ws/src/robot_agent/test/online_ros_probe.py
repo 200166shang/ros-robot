@@ -54,7 +54,9 @@ def main() -> None:
         assert (
             results[0]["status"] == "completed" and not results[0]["actions"]
         )
-        assert results[1]["status"] == "completed"
+        assert results[1]["status"] == "completed", json.dumps(
+            results[1], ensure_ascii=False
+        )
         assert [a["name"] for a in results[1]["actions"]] == [
             "head_nod",
             "head_smile",

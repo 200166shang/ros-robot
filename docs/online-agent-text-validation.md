@@ -50,3 +50,13 @@ DashScope qwen-plus、北京兼容 HTTPS 端点、provider_timeout=60 秒、acti
 - Python 完整回归 **55 passed**；Ruff、Pyright 与 robot_agent colcon build 通过。
 - 首次真实 ROS 在线复验聊天回合失败、动作回合成功；未把首次运行报告为通过。重新运行后聊天 `4ad64c2bfcd94da88d92357d8c55effc` 和模拟动作 `91b507b96a2848c59eb9c3431cb3f8e6` 均 completed。对已完成回合经 `/online_agent/reconcile` 核对，返回同 turn_id 的 rejected，不重新执行。真实未知硬件回执未验收，本票仍只模拟硬件。
 - 对固定点 `12f3410` 执行双轴审查：Standards 0 findings，Spec 0 findings。
+
+## 完整主提示词迁移
+
+旧 ROS 1 `LLMAgent.agent_sys_prompt` 从本机 `robot/src/agent/llm.py` 提取，原1655字符（去除首尾空白）完整保留在 `robot_agent/online_system_prompt.txt` 的前缀。用户提供的 macOS 路径在当前 Linux 环境不可访问，因此对照已存在的旧 checkout。迁移保留人设、表达要求、JSON契约、全部旧示例与提示词动作目录；末尾显式追加当前部署约束，优先于旧可用服务描述，保持模拟/拒绝与可信结果语义。摘要记忆专用提示词属于 #66。
+
+默认提示词通过 package_data 安装，并由 Python3.8 importlib.resources 读取；源码外 system_prompt_file 可覆盖，空或缺失文件启动失败。源码目录外 `/tmp` 中验证实际安装包资源加载，提示词共2188字符。
+
+- 回归59 passed，覆盖实际 HTTPS 请求中的旧提示词内容、外部覆盖和空/缺失配置失败。Ruff、Pyright及 colcon 构建通过。双轴审查 Standards/Spec 均0 findings。
+- 本次真实 ROS 首轮聊天 completed，动作轮 failed；重跑聊天模型调用达到60秒超时，紧接的新请求正确 busy。单独 HTTPS 诊断在约11秒报 timeout，未输出凭证或错误正文。
+- 本次修改的真实在线端到端复验 **未通过**，外部调用超时仍是未满足项；历史在线通过记录不能替代此版本的复验。未以模拟 provider 伪报真实通过。
