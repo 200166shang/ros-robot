@@ -11,7 +11,7 @@ from std_msgs.msg import String
 
 from .online_actions import ActionRegistry
 from .online_interaction import OnlineInteraction, make_result
-from .online_perception import PerceptionActions
+from .online_perception import PerceptionActions, perception_actions
 from .online_perception_ros import RosPerception
 from .online_provider import DashScopeProvider
 from .online_simulation import simulate_cue
@@ -36,9 +36,8 @@ class OnlineRosNode(Node):
         # 2. 组装交互 Implementation 与边缘 Adapters。
         action_timeout = float(config.get("action_timeout", 5.0))
         registry = ActionRegistry()
-        PerceptionActions(RosPerception(self), action_timeout).register(
-            registry
-        )
+        perception = PerceptionActions(RosPerception(self), action_timeout)
+        registry.register_many(perception_actions(perception))
         self._agent = OnlineInteraction(
             DashScopeProvider(config),
             registry,

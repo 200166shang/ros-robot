@@ -15,7 +15,10 @@ from std_srvs.srv import SetBool  # noqa: E402
 
 from robot_agent.online_actions import ActionRegistry  # noqa: E402
 from robot_agent.online_interaction import OnlineInteraction  # noqa: E402
-from robot_agent.online_perception import PerceptionActions  # noqa: E402
+from robot_agent.online_perception import (  # noqa: E402
+    PerceptionActions,
+    perception_actions,
+)
 from robot_agent.online_perception_ros import RosPerception  # noqa: E402
 
 
@@ -81,7 +84,9 @@ def ros_devices():
 def make_agent(interface, functions):
     """通过现有注册表构造真实 ROS 感知交互 Interface。"""
     registry = ActionRegistry()
-    PerceptionActions(interface, action_timeout=0.1).register(registry)
+    registry.register_many(
+        perception_actions(PerceptionActions(interface, action_timeout=0.1))
+    )
     return OnlineInteraction(
         FixedProvider(functions), registry, action_timeout=0.1
     )

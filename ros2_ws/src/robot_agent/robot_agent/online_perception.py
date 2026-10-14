@@ -4,7 +4,7 @@ import json
 import time
 from typing import Dict, Optional, Protocol
 
-from .online_actions import ActionRegistry, action_deadline
+from .online_action_contracts import ActionHandler, action_deadline
 
 
 class PerceptionInterface(Protocol):
@@ -30,28 +30,6 @@ class PerceptionActions:
         self._action_timeout = action_timeout
         self._follow: Optional[bool] = None
         self._fusion: Optional[bool] = None
-
-    def register(self, registry: ActionRegistry) -> None:
-        """保留全部源函数与旧相机入口名称，无参数动作共用流程。"""
-        handlers = {
-            "start_receiving_image": self.start_camera,
-            "start_camera": self.start_camera,
-            "stop_camera_collection": self.stop_camera,
-            "stop_camera": self.stop_camera,
-            "query_camera_status": self.camera_status,
-            "start_following": self.start_following,
-            "start_tracking": self.start_following,
-            "enable_tracking": self.enable_tracking,
-            "stop_following": self.stop_following,
-            "disable_tracking": self.disable_tracking,
-            "toggle_following": self.toggle_following,
-            "following_status": self.following_status,
-            "query_person_tracking_status": self.following_status,
-            "enable_lidar": self.enable_lidar,
-            "disable_lidar": self.disable_lidar,
-        }
-        for name, handler in handlers.items():
-            registry.register(name, handler)
 
     def start_camera(self) -> Dict:
         """恢复采集，不把发布完成当作设备开启确认。"""
@@ -197,3 +175,28 @@ class PerceptionActions:
             + detail
             + "；不是实时状态，外部控制或节点重启可能改变状态",
         }
+
+
+def perception_actions(
+    perception: PerceptionActions,
+) -> Dict[str, ActionHandler]:
+    """声明感知动作及兼容名称，入口负责批量注册，流程不依赖注册表。"""
+    return {
+        "start_receiving_image": ActionHandler(perception.start_camera),
+        "start_camera": ActionHandler(perception.start_camera),
+        "stop_camera_collection": ActionHandler(perception.stop_camera),
+        "stop_camera": ActionHandler(perception.stop_camera),
+        "query_camera_status": ActionHandler(perception.camera_status),
+        "start_following": ActionHandler(perception.start_following),
+        "start_tracking": ActionHandler(perception.start_following),
+        "enable_tracking": ActionHandler(perception.enable_tracking),
+        "stop_following": ActionHandler(perception.stop_following),
+        "disable_tracking": ActionHandler(perception.disable_tracking),
+        "toggle_following": ActionHandler(perception.toggle_following),
+        "following_status": ActionHandler(perception.following_status),
+        "query_person_tracking_status": ActionHandler(
+            perception.following_status
+        ),
+        "enable_lidar": ActionHandler(perception.enable_lidar),
+        "disable_lidar": ActionHandler(perception.disable_lidar),
+    }

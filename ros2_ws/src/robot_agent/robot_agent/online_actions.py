@@ -2,12 +2,10 @@
 
 import ast
 import inspect
-import time
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
-from .online_action_contracts import ActionHandler
+from .online_action_contracts import ACTION_DEADLINE, ActionHandler
 from .online_head_simulation import HeadSimulation, head_actions
 from .online_simulation import (
     MusicSimulation,
@@ -21,17 +19,6 @@ from .online_simulation import (
 
 CONFIRMED_SUCCESS = frozenset({"simulated_success", "real_success"})
 DEVICE_OUTCOMES = CONFIRMED_SUCCESS | {"failed", "unknown"}
-_ACTION_DEADLINE: ContextVar[Optional[float]] = ContextVar(
-    "online_action_deadline", default=None
-)
-
-
-def action_deadline(timeout: float) -> float:
-    """复用交互层绝对期限；直接调用设备 Interface 时使用配置期限。"""
-    deadline = _ACTION_DEADLINE.get()
-    return deadline if deadline is not None else time.monotonic() + timeout
-
-
 MAX_ACTIONS = 64
 MAX_ACTION_SOURCE_LENGTH = 2048
 
@@ -135,11 +122,11 @@ class ActionRegistry:
         """设备回执在 Adapter 出口确认，内部只消费统一的结果状态。"""
         handler = self._handlers[name]
         # 标准上下文按线程隔离，设备流程共享交互层期限，不改变动作参数。
-        token = _ACTION_DEADLINE.set(deadline)
+        token = ACTION_DEADLINE.set(deadline)
         try:
             receipt = handler.execute(**parameters)
         finally:
-            _ACTION_DEADLINE.reset(token)
+            ACTION_DEADLINE.reset(token)
         if (
             not isinstance(receipt, dict)
             or receipt.get("status") not in DEVICE_OUTCOMES

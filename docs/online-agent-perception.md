@@ -65,3 +65,17 @@ python3 ros2_ws/src/robot_agent/test/online_perception_probe.py \
 探针依次恢复采集、开启融合、开启 Follow、查询、关闭融合、暂停并恢复采集，
 检查真实在线模型选出的函数、实际回执以及无 Twist 输出。环境阻塞时探针失败，
 不能用固定 provider 或传感器样例替代实机通过。详情见[验收报告](online-agent-perception-validation.md)。
+
+## 能力表组装
+
+感知与 #64 的头部、导航、音乐能力统一使用 `Dict[str, ActionHandler]`：
+
+```python
+perception = PerceptionActions(RosPerception(self), action_timeout)
+registry.register_many(perception_actions(perception))
+```
+
+`perception_actions()` 声明动作名称与实现；入口负责把能力表装入注册表。
+`PerceptionActions` 只持有设备 Interface、期限配置和最后确认状态，不引用
+注册表。动作截止时间由共享 `online_action_contracts` 提供，执行层设置与恢复
+线程上下文，业务流程读取同一期限，保持超时不重试、不补执行。
