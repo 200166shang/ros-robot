@@ -22,7 +22,7 @@ ROS 2 Foxy / Python 3.8，使用 Python 标准库，不需要 OpenAI 或 DashSco
 ```
 
 默认 system prompt 保存在包内 `robot_agent/online_system_prompt.txt`，随安装包发布，通过 Python 3.8 的 importlib.resources 读取，不依赖启动目录。
-它完整保留旧 `LLMAgent.agent_sys_prompt` 的人设、格式要求、示例和动作目录，末尾添加当前部署约束，避免把未实现动作或模拟动作当成真实成功。旧摘要记忆提示词属于 #66，本票不合并进主提示词。
+它完整保留旧 `LLMAgent.agent_sys_prompt` 的人设、格式要求、示例和动作目录，末尾添加当前部署约束，避免把未实现动作或模拟动作当成真实成功。会话记忆的摘要任务由记忆职责构造，配置及清空见 [在线会话记忆](online-agent-memory.md)。
 
 需要自定义时，在外部配置中添加 `"system_prompt_file": "/absolute/path/prompt.txt"`。文件为 UTF-8，启动时读取一次；指定文件为空或不存在则启动失败，不静默回退。自定义文件负责保留 JSON 契约，实际执行仍受动作注册表限制。
 
@@ -84,7 +84,7 @@ provider 支持旧 `function/response` 与现有本地 `fc/res`，函数字符�
 `submit` 集中展示收齐模型回复、全表校验、顺序执行和确认回复，I/O 隔离只用标准 Future 交还结果；回合互斥、模型在途与动作待核对分别管理，保留不可取消语义。
 
 设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册，配置阶段可显式替换同名契约，处理回合时不修改注册表。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。未来 #64/#65 复用此 Interface，设备异常保守报告 unknown 并保持待核对；明确失败回执报告 failed。Adapter 必须按设备实际完成状态返回，排队接受不能作为成功。配置的 action_timeout 仅限制主链路等待，不取消已提交操作。
-本票没有新增持久记忆、语音或真实设备控制。
+持久摘要与有限近期上下文见 [在线会话记忆](online-agent-memory.md)；语音和真实设备控制由后续票实现。
 
 ## 检查与真实在线验收
 
