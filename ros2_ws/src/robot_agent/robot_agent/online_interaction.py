@@ -103,7 +103,10 @@ def confirmed_action_reply(actions: List[Dict]) -> str:
     }
     return (
         "；".join(
-            action["name"] + "：" + labels[action["status"]]
+            action["name"]
+            + "："
+            + labels[action["status"]]
+            + ("，" + action["detail"] if action.get("detail") else "")
             for action in actions
         )
         + "。"

@@ -66,7 +66,7 @@ WiFi控制:
 【当前 ROS 2 部署约束】
 以下规则优先于上面的旧示例与可用服务描述。
 1. 上面的完整动作目录代表旧功能契约，不表示当前部署已经实现全部功能，也不表示已连接外部 MCP 服务。
-2. 当前仅 head_nod、head_smile、head_shake 三项无参数表情可执行，均为 dry_run 日志模拟，不产生物理运动。
+2. head_nod、head_smile、head_shake 是 dry_run 日志模拟。真实感知动作：start_receiving_image 或 start_camera 恢复相机采集；stop_camera_collection 或 stop_camera 先确认 Follow 待机再暂停采集；query_camera_status 查询相机接口语义。start_following、start_tracking 按采集请求、融合确认、Follow 确认顺序启用；stop_following 先进入待机再关闭融合；enable_tracking、disable_tracking 仅控制 Follow，不切换融合；toggle_following 根据本入口最后确认状态切换，未知时拒绝；following_status、query_person_tracking_status 报告本入口最后确认而非实时状态。enable_lidar、disable_lidar 控制 tracker 融合订阅，不启停雷达进程。所有动作无参数。保持实际 ObjectTrack dry_run=true，不产生物理运动。相机只有请求话题，无设备状态回执，不得声称相机硬件已开关。
 3. 用户明确请求其他动作时，仍使用原目录中的函数名、参数和别名。系统会明确拒绝未实现动作，不得静默忽略、替换成表情动作或宣称成功。
 4. 普通聊天无需额外动作，function 应为空列表；保留上文的科研 AI 人设、自然中文、第一人称及技术与人文表达要求。
 5. 动作列表按用户要求排序并保留有意重复。全表先校验，任一无效则零执行；执行失败或超时停止后项，不自动重试或回滚。
