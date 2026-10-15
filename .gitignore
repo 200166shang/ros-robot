@@ -19,6 +19,7 @@
 /docs/*
 !/docs/agents/
 !/docs/adr/
+!/docs/development-environment.md
 **/*.rknn
 **/*.gguf
 **/*.onnx
@@ -39,3 +40,6 @@
 .env
 .env.*
 !.env.example
+
+# Unified uv environment (managed explicitly through scripts/dev.sh sync).
+/.venv/
