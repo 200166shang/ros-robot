@@ -70,11 +70,7 @@ MUSIC_CONTROLS = (
 
 
 class SpeechInput(Protocol):
-    """在线识别 Adapter；暂停仅阻止输入，不代表会话休眠。"""
-
-    def recognize(self, path: Path, timeout: float) -> str:
-        """识别 PCM16 单声道 16kHz WAV；失败抛出 I/O 异常。"""
-        ...
+    """音频输入生命周期；暂停真实音频，持续ASR仍发送静音保活。"""
 
     def pause(self) -> None:
         """暂停有效音频；活跃连接只发送静音保活。"""
@@ -128,6 +124,7 @@ class OnlineVoice:
         failure_threshold: int = 5,
         retry_delay: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
+        recognize_recording: Optional[Callable[[Path, float], str]] = None,
     ) -> None:
         """保存实际变化的 provider/设备 Adapters，校验外部运行参数。"""
         for value in (silence_timeout, speech_timeout):
@@ -139,6 +136,7 @@ class OnlineVoice:
             raise ValueError("重试间隔必须为非负有限秒数")
         self._interaction = interaction
         self._input = speech_input
+        self._recognize_recording = recognize_recording
         self._output = speech_output
         self._directory = Path(output_dir).expanduser().resolve()
         self._directory.mkdir(parents=True, exist_ok=True)
@@ -174,9 +172,14 @@ class OnlineVoice:
                 self._awake = False
 
     def submit_recording(self, path: Path, direct: bool = True) -> Dict:
-        """真实识别录音后提交；direct 为单回合免唤醒入口。"""
+        """独立WAV输入使用注入的单次识别函数，持续麦克风不开放此入口。"""
+        recognize = self._recognize_recording
+        if recognize is None:
+            return make_result(
+                uuid.uuid4().hex, "rejected", "此输入不支持WAV识别。"
+            )
         return self._run_turn(
-            lambda turn: self._process_recording(turn, path, direct)
+            lambda turn: self._process_recording(turn, path, direct, recognize)
         )
 
     def submit_transcript(self, text: str, direct: bool = False) -> Dict:
@@ -226,11 +229,15 @@ class OnlineVoice:
                 self._processing = False
 
     def _process_recording(
-        self, turn: _VoiceTurn, path: Path, direct: bool
+        self,
+        turn: _VoiceTurn,
+        path: Path,
+        direct: bool,
+        recognize: Callable[[Path, float], str],
     ) -> Dict:
         """只处理录音识别及其I/O失败，成功后进入共同文本流程。"""
         try:
-            text = self._input.recognize(Path(path), self._speech_timeout)
+            text = recognize(Path(path), self._speech_timeout)
         except (OSError, TimeoutError):
             turn.result.update(
                 reply="在线识别不可用，本轮未发出动作。", asr_status="failed"

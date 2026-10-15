@@ -3,11 +3,11 @@
 正常 `online_voice_agent` 只有麦克风输入，自动逐轮运行：
 
 ```text
-录音 → 在线ASR完整句 → 唤醒/休眠/音乐规则
-     → LLM/动作 → 可信回复 → 在线TTS/可选播放 → 下一轮录音
+持续PCM → 在线ASR完整句 → 暂停真实音频、静音保活
+       → 唤醒/休眠/音乐规则 → LLM/动作 → TTS/可选播放 → 清理并恢复
 ```
 
-ROS主executor处理设备回执，唯一麦克风线程组织业务。没有输入话题订阅、
+ROS主executor处理设备回执，唯一业务线程组织交互；采集与ASR接收I/O线程持续保活。没有输入话题订阅、
 临时回合worker、接入busy调度、队列或会话锁。OnlineVoice与
 OnlineInteraction的公共Interface要求同一调用者顺序调用；处理阶段状态
 用于观测和静音计时，不作为并发输入锁。
@@ -15,7 +15,8 @@ OnlineInteraction的公共Interface要求同一调用者顺序调用；处理阶
 OnlineVoice内部按入口和职责组织：
 
 ```text
-submit_recording → _process_recording（ASR） → _process_text
+正常：LiveSpeechInput.listen → submit_transcript → _process_text
+独立WAV：submit_recording → _process_recording（ASR） → _process_text
 submit_transcript → _process_text
     _decide_session → 必要时interaction.submit → _finish_turn
 reconcile → _reconcile_turn（核对原动作并关联原文本）
@@ -40,7 +41,6 @@ busy不合成，识别失败及空文本只记录。核对分支不发起新模�
   "output_dir": "/absolute/external/online-results",
   "memory_file": "/absolute/external/conversation-summary.json",
   "record_device": "plughw:2,0",
-  "record_seconds": 8,
   "asr_model": "paraformer-realtime-v2",
   "tts_model": "cosyvoice-v2",
   "tts_voice": "longfeifei_v2",
@@ -58,8 +58,9 @@ busy不合成，识别失败及空文本只记录。核对分支不发起新模�
 ```
 
 `arecord -l` 查询实际麦克风；上例为当前板端USB麦克风。默认record_device
-为default，record_seconds为8。录音后才在线识别，处理期间不录制下一段，
-并非连续VAD。日志“开始麦克风录音”表示新采集窗口。
+为default。正常入口连续读取PCM，不再按record_seconds切片；ASR最终句
+决定回合。record_executable须持续输出原始单声道PCM16/16kHz，命令由
+PcmMicrophone组装。连接建立前与重连中不缓存音频，准备完成后再说话。
 Agent不再定义dry_run或microphone_enabled配置和运行参数。
 缺失设备由明确的模拟实现承担；ObjectTrack自身输出模式由其配置负责，
 当前板端继续dry_run=true。感知服务负责TF、同步数据和近期扫描前提。
@@ -75,19 +76,20 @@ ros2 topic echo /online_agent/result std_msgs/msg/String
 
 凭证仅环境读取，不写配置明文api_key。默认真实在线ASR/LLM/TTS使用
 DashScope；端点与地域说明见[模型与文本测试说明](online-agent-text.md)。
-`record_executable`、`record_device`、`record_seconds`控制已有录音Adapter；
+`record_executable`、`record_device`控制持续PCM录音Adapter；
 `playback_enabled=true`时，play_executable/play_device控制回复播放。
-所有录音副本为临时文件；回复JSON/WAV及记忆放在源码外。
+独立WAV录音副本为临时文件；正常持续PCM不落盘。回复JSON/WAV及记忆放在源码外。
 
 ## 会话与执行生命周期
 
 小沫、小莫、小墨、小末、小陌、小默各重复两次唤醒；唤醒后持续交互。
 明确整句休眠或静音120秒回待机，子串不误触发。空识别和音乐过滤不刷新
 静音期限。模型、动作、TTS或播放期间不因静音改变会话状态。
-音乐状态来自同一动作注册表，只接受原音乐控制关键词。
+音乐状态来自同一注入能力，只接受原音乐控制关键词。
 
 ASR仅最终句进入交互，支持有限重连；暂停时有效音频停止，活跃连接发送
-静音保活。单轮结束关闭连接，下一轮重建。TTS保留流式音频、有限重试与
+静音保活。正常ASR跨回合保持任务，暂停期间读取并丢弃麦克风数据，恢复前清理积压
+并过滤迟到旧句。独立WAV仍在单次识别结束后关闭其连接。TTS保留流式音频、有限重试与
 连续失败文本降级；不重复模型或动作。显式enable_tts供单调用者在轮间恢复；
 正常入口也可退出后重启恢复。动作回复只依据确认结果。
 
@@ -102,6 +104,8 @@ Ctrl+C关闭语音连接、取消并回收录制/播放子进程，等待唯一�
 随后销毁ROS节点。ASR、模型、TTS、文件或播放失败保留已有动作事实，
 异常不会被替换为成功。语音连接关闭使用的传输锁只协调socket生命周期，
 不承担会话或输入调度。
+
+持续输入的线程、资源、失败与恢复规则见[设计说明](online-agent-streaming-input.md)。
 
 ## 独立测试入口
 

@@ -74,3 +74,11 @@ not establish whether an action occurred.
 A supported robot behavior together with the observable state associated with
 that behavior. Music playback and whether music is playing belong to the same
 capability.
+
+## Voice input
+
+**ASR input pause**:
+Temporarily withholding real microphone audio from speech recognition while
+keeping its connection alive with silence. Audio captured during the pause is
+discarded, rather than submitted after listening resumes.
+_Avoid_: ASR shutdown, conversation sleep

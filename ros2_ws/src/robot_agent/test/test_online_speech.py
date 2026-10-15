@@ -133,12 +133,14 @@ def test_reconnect_final_sentences_and_streaming_audio(tmp_path, monkeypatch):
     """识别断线重连；仅最终句进入模型；TTS流式音频保存成有效WAV。"""
     sockets = [SpeechSocket(fail=True), SpeechSocket(), SpeechSocket()]
     transport(monkeypatch, sockets)
+    asr = DashScopeASR({})
     voice = OnlineVoice(
         OnlineInteraction(FixedModel(), create_default_actions().registry),
-        DashScopeASR({}),
+        asr,
         DashScopeTTS({}),
         tmp_path,
         music_playing=lambda: False,
+        recognize_recording=asr.recognize,
         retry_delay=0,
     )
     result = voice.submit_recording(fixture_wav(tmp_path))
@@ -179,12 +181,14 @@ def test_partial_tts_failure_has_no_success_audio(tmp_path, monkeypatch):
     """合成返回部分音频后失败，回合仍返回文本且删除临时音频。"""
     sockets = [SpeechSocket(), SpeechSocket(tts_fail=True)]
     transport(monkeypatch, sockets)
+    asr = DashScopeASR({})
     voice = OnlineVoice(
         OnlineInteraction(FixedModel(), create_default_actions().registry),
-        DashScopeASR({}),
+        asr,
         DashScopeTTS({}),
         tmp_path,
         music_playing=lambda: False,
+        recognize_recording=asr.recognize,
         tts_attempts=1,
     )
     result = voice.submit_recording(fixture_wav(tmp_path))

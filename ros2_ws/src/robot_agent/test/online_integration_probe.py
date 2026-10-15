@@ -92,7 +92,7 @@ class OnlineIntegrationProbe(Node):
         """真实输入等待完整在线回复，失败不重试，不替换模型选择。"""
         operations = {
             "text": lambda: voice.submit_transcript(text, direct=True),
-            "wav": lambda: capture_turn(voice, self._config, text),
+            "wav": lambda: capture_turn(voice, text),
             "clear_memory": voice.clear_memory,
         }
         result = operations[kind]()

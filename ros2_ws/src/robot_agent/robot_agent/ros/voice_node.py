@@ -2,6 +2,7 @@
 
 import json
 import threading
+import uuid
 from typing import Dict, List, Optional
 
 import rclpy
@@ -14,13 +15,18 @@ from robot_agent.actions.perception import (
     perception_actions,
 )
 from robot_agent.actions.simulation import simulate_cue
+from robot_agent.results import make_result
 from robot_agent.ros.perception import RosPerception
 from robot_agent.runtime import DEFAULT_ACTION_TIMEOUT, load_config
-from robot_agent.voice.runtime import capture_turn, create_voice
-from robot_agent.voice.session import OnlineVoice
+from robot_agent.voice.live_input import LiveSpeechInput
+from robot_agent.voice.runtime import create_voice
+from robot_agent.voice.session import OnlineVoice, SpeechInput
+from robot_audio.pcm_input import PcmMicrophone
 
 
-def create_ros_voice(node: Node, config: Dict) -> OnlineVoice:
+def create_ros_voice(
+    node: Node, config: Dict, speech_input: Optional[SpeechInput] = None
+) -> OnlineVoice:
     """组装同一语音Implementation与ROS感知Adapter，供运行和独立验收。"""
     capabilities = create_default_actions()
     actions = capabilities.registry
@@ -29,7 +35,9 @@ def create_ros_voice(node: Node, config: Dict) -> OnlineVoice:
         float(config.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
     )
     actions.register_many(perception_actions(perception))
-    return create_voice(config, capabilities=capabilities)
+    return create_voice(
+        config, capabilities=capabilities, speech_input=speech_input
+    )
 
 
 class OnlineVoiceRosNode(Node):
@@ -44,7 +52,14 @@ class OnlineVoiceRosNode(Node):
             raise ValueError("必须指定外部 config_file 路径")
         config = load_config(filename)
         self._config = config
-        self._voice = create_ros_voice(self, config)
+        self._input = LiveSpeechInput(
+            config,
+            PcmMicrophone(
+                config.get("record_executable", "arecord"),
+                config.get("record_device", "default"),
+            ),
+        )
+        self._voice = create_ros_voice(self, config, self._input)
         self._stop = threading.Event()
         self._publisher = self.create_publisher(
             String, "/online_agent/result", 10
@@ -54,22 +69,40 @@ class OnlineVoiceRosNode(Node):
         )
         # 2. 正常入口只有麦克风；文本和WAV由独立验收进程提交。
         self.get_logger().info(simulate_cue("startup")["detail"])
-        self.get_logger().info("Online voice ready; microphone input")
+        self.get_logger().info("Online voice starting; continuous ASR input")
         self._microphone.start()
 
     def _microphone_loop(self) -> None:
-        """上一轮识别、动作、合成/播放结束后才开始下一轮录音。"""
-        while not self._stop.is_set():
-            self.get_logger().info("开始麦克风录音")
-            result = capture_turn(self._voice, self._config)
-            if self._stop.is_set():
-                return
-            if result["status"] == "failed":
-                self.get_logger().info(simulate_cue("error")["detail"])
-            message = String()
-            message.data = json.dumps(result, ensure_ascii=False)
-            self._publisher.publish(message)
-            self._stop.wait(0.2)
+        """持续ASR交付完整句，业务顺序处理；传输线程保活并丢弃暂停音频。"""
+        try:
+            while not self._stop.is_set():
+                try:
+                    text = self._input.listen()
+                except OSError:
+                    result = make_result(
+                        uuid.uuid4().hex,
+                        "failed",
+                        "持续ASR不可用，监听已停止。",
+                    )
+                    result["asr_status"] = "failed"
+                    self._publish(result)
+                    return
+                if text is None:
+                    self._voice.tick()
+                    continue
+                result = self._voice.submit_transcript(text)
+                if not self._stop.is_set():
+                    self._publish(result)
+        finally:
+            self._input.close()
+
+    def _publish(self, result: Dict) -> None:
+        """只发布执行事实；输入重连耗尽明确报告，不重复提交模型。"""
+        if result["status"] == "failed":
+            self.get_logger().info(simulate_cue("error")["detail"])
+        message = String()
+        message.data = json.dumps(result, ensure_ascii=False)
+        self._publisher.publish(message)
 
     def stop(self) -> None:
         """关闭语音连接并取消录制/播放，回收业务线程后才销毁节点。"""

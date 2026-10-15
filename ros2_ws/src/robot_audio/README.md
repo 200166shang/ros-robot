@@ -27,3 +27,9 @@ their owned subprocess on cancellation or timeout and report I/O failures.
 Playback process success does not prove audible output. Install `alsa-utils`
 for the default `arecord` and `aplay` commands. Tests supply external commands
 and temporary WAV files; no hardware or model is needed.
+
+The normal online microphone uses `robot_audio.pcm_input.PcmMicrophone` to
+read continuous raw PCM16 mono audio at 16kHz. Its `start/read/discard/close`
+Interface owns the recording process and pipe; it contains no ASR behavior.
+The online ASR consumes and drops audio while paused, then calls `discard`
+before resuming. File-based diagnostics still use `create_audio_source`.

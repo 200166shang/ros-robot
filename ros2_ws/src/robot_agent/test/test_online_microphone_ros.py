@@ -22,13 +22,13 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
     recorder = tmp_path / "record-fixture"
     recorder.write_text(
         "#!/usr/bin/python3\n"
-        "import sys, time, wave\n"
+        "import sys, time\n"
         "from pathlib import Path\n"
         f"while not Path({str(gate)!r}).exists(): time.sleep(0.01)\n"
-        "time.sleep(0.1)\n"
-        "with wave.open(sys.argv[-1], 'wb') as wav:\n"
-        "    wav.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))\n"
-        "    wav.writeframes(bytes(3200))\n",
+        "while True:\n"
+        "    sys.stdout.buffer.write(b'\\x01\\x00' * 1600)\n"
+        "    sys.stdout.buffer.flush()\n"
+        "    time.sleep(0.02)\n",
         encoding="utf-8",
     )
     recorder.chmod(0o755)
@@ -36,32 +36,57 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
     model_inputs = []
     sockets = []
 
+    ready = True
+    asr_sockets = []
+    pause_frames = []
+
     class MicrophoneSocket(SpeechSocket):
-        """替换WSS外部事件，保留ASR/TTS真实协议及回合交接。"""
+        """替换WSS事件，保留持续PCM、ASR保活与TTS真实协议。"""
 
         def send(self, raw):
-            """为每轮录音提供一个最终句，TTS沿用原音频事件。"""
+            """ASR任务跨三轮；TTS期间必须继续发送静音。"""
+            nonlocal ready
+            super().send(raw)
             command = json.loads(raw)
             if (
-                command["header"]["action"] == "finish-task"
+                command["header"]["action"] == "run-task"
                 and self.kind == "asr"
             ):
+                asr_sockets.append(self)
+            if (
+                command["header"]["action"] == "finish-task"
+                and self.kind == "tts"
+            ):
+                count = len(asr_sockets[0].frames)
+                deadline = time.monotonic() + 1
+                while len(asr_sockets[0].frames) < count + 2:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.005)
+                pause_frames.extend(asr_sockets[0].frames[-2:])
+                ready = True
+
+        def send_binary(self, frame):
+            """只有恢复后的真实音频才产生下一句，不依赖finish-task。"""
+            nonlocal ready
+            super().send_binary(frame)
+            if self.kind == "asr" and frame != bytes(3200) and ready:
                 text = next(texts, "")
+                if not text:
+                    return
+                ready = False
                 self.event(
                     "result-generated",
                     {
                         "output": {
                             "sentence": {
                                 "text": text,
+                                "begin_time": (len(self.frames) - 1) * 100,
                                 "sentence_end": True,
                                 "heartbeat": False,
                             }
                         }
                     },
                 )
-                self.event("task-finished")
-            else:
-                super().send(raw)
 
     def connect(endpoint, header, timeout):
         """在线传输在外部Seam替换，生产组装与会话不替换。"""
@@ -136,6 +161,9 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
         assert results[1]["actions"][0]["status"] == "simulated_success"
         assert all(r["tts_status"] == "completed" for r in results[:3])
         assert results[2]["session_state"] == "standby"
+        assert len(asr_sockets) == 1
+        assert len(asr_sockets[0].commands) == 1
+        assert pause_frames == [bytes(3200)] * 6
     finally:
         # 3. 生产退出Interface取消录音并回收唯一业务线程。
         agent.stop()

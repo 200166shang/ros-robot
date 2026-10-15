@@ -13,14 +13,16 @@ from robot_agent.actions.capabilities import (
 )
 from robot_agent.results import make_result
 from robot_agent.runtime import create_interaction, load_config
-from robot_agent.voice.session import OnlineVoice
+from robot_agent.voice.session import OnlineVoice, SpeechInput
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 from robot_audio.audio_io import play_wav
 from robot_audio.audio_sources import create_audio_source
 
 
 def create_voice(
-    config: Dict, capabilities: Optional[ActionCapabilities] = None
+    config: Dict,
+    capabilities: Optional[ActionCapabilities] = None,
+    speech_input: Optional[SpeechInput] = None,
 ) -> OnlineVoice:
     """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
     directory = Path(config["output_dir"]).expanduser().resolve()
@@ -43,9 +45,15 @@ def create_voice(
 
         playback = play_reply
 
+    recognize = None
+    if speech_input is None:
+        recording_input = DashScopeASR(config)
+        speech_input = recording_input
+        recognize = recording_input.recognize
+
     voice = OnlineVoice(
         create_interaction(config, capabilities.registry),
-        DashScopeASR(config),
+        speech_input,
         DashScopeTTS(config),
         directory,
         music_playing=capabilities.music_playing,
@@ -55,23 +63,15 @@ def create_voice(
         tts_attempts=int(config.get("tts_attempts", 3)),
         failure_threshold=int(config.get("tts_failure_threshold", 5)),
         retry_delay=float(config.get("tts_retry_delay", 1)),
+        recognize_recording=recognize,
     )
 
     return voice
 
 
-def capture_turn(
-    voice: OnlineVoice, config: Dict, wav_path: Optional[str] = None
-) -> Dict:
-    """麦克风逐轮运行或独立WAV验收，共用既有capture Interface。"""
-    source = create_audio_source(
-        "wav_file" if wav_path is not None else "microphone",
-        input_wav_path=wav_path or "",
-        record_executable=config.get("record_executable", "arecord"),
-        record_device=config.get("record_device", "default"),
-        record_seconds=config.get("record_seconds", 8),
-        cancelled=lambda: voice.state == "closed",
-    )
+def capture_turn(voice: OnlineVoice, wav_path: str) -> Dict:
+    """独立WAV验收使用文件Adapter，不进入正常持续麦克风链路。"""
+    source = create_audio_source("wav_file", input_wav_path=wav_path)
     # 临时目录属于外部运行数据，capture 和在线识别完成后立即删除副本。
     with tempfile.TemporaryDirectory(prefix="online-voice-") as directory:
         path = Path(directory) / "input.wav"
@@ -83,7 +83,7 @@ def capture_turn(
             )
             result["input_status"] = "failed"
             return result
-        return voice.submit_recording(path, direct=wav_path is not None)
+        return voice.submit_recording(path, direct=True)
 
 
 def main() -> None:
@@ -97,7 +97,7 @@ def main() -> None:
     voice = create_voice(config)
     try:
         # 2. 真实输入与动作确认后输出，单回合无需唤醒词。
-        result = capture_turn(voice, config, args.wav)
+        result = capture_turn(voice, args.wav)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if (
             result["status"] != "completed"

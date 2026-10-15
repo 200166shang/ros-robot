@@ -85,6 +85,9 @@ def make_voice(tmp_path, **settings):
         tts,
         tmp_path,
         music_playing=capabilities.music_playing,
+        recognize_recording=lambda path, timeout: speech.recognize(
+            path, timeout
+        ),
         retry_delay=0,
         **settings,
     )
@@ -259,6 +262,7 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
         tts,
         tmp_path,
         music_playing=lambda: False,
+        recognize_recording=speech.recognize,
     )
     result = voice.submit_recording(tmp_path / "input.wav")
     assert result["actions"][0]["status"] == "unknown"

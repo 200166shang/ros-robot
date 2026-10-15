@@ -34,7 +34,8 @@ robot_agent/
 │   └── demo.py                # 固定输入演示
 ├── voice/
 │   ├── session.py             # 唤醒、休眠、回复与语音回合
-│   ├── speech.py              # 在线 ASR/TTS Adapter
+│   ├── live_input.py          # 持续ASR、暂停丢弃与静音保活
+│   ├── speech.py              # WAV单次ASR/TTS Adapter
 │   └── runtime.py             # 语音组装、采集与独立 WAV 命令
 └── ros/
     ├── voice_node.py          # 正常麦克风节点与生命周期
@@ -124,7 +125,6 @@ actions/execution.py中的ActionExecution集中持有动作Future、全表执行
   "memory_recent_turns": 6,
   "memory_summary_trigger": 6,
   "record_device": "plughw:2,0",
-  "record_seconds": 8,
   "playback_enabled": false
 }
 ```
@@ -159,15 +159,15 @@ ros2 launch robot_bringup online_agent.launch.py \
 安装 Foxglove Bridge 后可加 `with_foxglove:=true`。全部进程由正常 ROS
 Launch 生命周期管理，没有第二进程管理器或自动重启策略。
 
-正常入口自动录制麦克风，不能向它发布text/WAV/transcript或文本控制命令。
+正常入口持续读取麦克风PCM并保持ASR任务，不能向它发布text/WAV/transcript或文本控制命令。
 另一终端仅观察结果：
 
 ```bash
 ros2 topic echo /online_agent/result std_msgs/msg/String
 ```
 
-说“小沫小沫”后连续请求，明确“晚安”或静音120秒回待机。每轮录音默认
-8秒，识别、动作和合成/播放结束后才开始下一轮；日志提示采集窗口。
+说“小沫小沫”后连续请求，明确“晚安”或静音120秒回待机。正常ASR持续监听；完整句交付后暂停真实音频并静音保活，回复结束后清理
+暂停音频并恢复。
 音频/ASR/模型规则见[麦克风说明](online-agent-voice.md)。
 
 每轮JSON/WAV在output_dir，以turn_id关联，回复只依据动作确认。
@@ -187,8 +187,8 @@ ros2 run robot_agent online_voice_wav \
 ### 麦克风与可选播放
 
 需安装arecord/aplay（alsa-utils）；麦克风始终是正常入口唯一输入。
-arecord -l核对record_device，配置record_executable、record_device与
-record_seconds。playback_enabled=true及play_executable/play_device
+arecord -l核对record_device，配置record_executable、record_device；
+正常入口持续采集，不使用record_seconds。playback_enabled=true及play_executable/play_device
 可开启回复播放。缺失LCD、导航、舵机等仍保持明确模拟实现。
 
 ### 记忆、恢复与退出
@@ -240,3 +240,5 @@ python3 ros2_ws/src/robot_agent/test/online_integration_probe.py \
 ```
 
 文件名不参与识别或动作选择；只有服务端ASR/模型/设备结果满足条件才通过。
+
+持续ASR的职责、保活与恢复规则见[设计说明](online-agent-streaming-input.md)。
