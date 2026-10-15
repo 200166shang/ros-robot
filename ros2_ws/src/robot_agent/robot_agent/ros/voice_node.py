@@ -8,13 +8,16 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from .online_actions import ActionRegistry
-from .online_perception import PerceptionActions, perception_actions
-from .online_perception_ros import RosPerception
-from .online_runtime import DEFAULT_ACTION_TIMEOUT, load_config
-from .online_simulation import simulate_cue
-from .online_voice import OnlineVoice
-from .online_voice_runtime import capture_turn, create_voice
+from robot_agent.actions.perception import (
+    PerceptionActions,
+    perception_actions,
+)
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.actions.simulation import simulate_cue
+from robot_agent.ros.perception import RosPerception
+from robot_agent.runtime import DEFAULT_ACTION_TIMEOUT, load_config
+from robot_agent.voice.runtime import capture_turn, create_voice
+from robot_agent.voice.session import OnlineVoice
 
 
 def create_ros_voice(node: Node, config: Dict) -> OnlineVoice:

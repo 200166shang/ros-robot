@@ -6,7 +6,11 @@ from concurrent.futures import Future, wait
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from .online_actions import CONFIRMED_SUCCESS, ActionCommand, ActionRegistry
+from robot_agent.actions.registry import (
+    CONFIRMED_SUCCESS,
+    ActionCommand,
+    ActionRegistry,
+)
 
 
 @dataclass(frozen=True)

@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Union
 
-from .online_actions import ActionRegistry
-from .online_interaction import OnlineInteraction
-from .online_memory import ConversationMemory
-from .online_provider import DashScopeProvider
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.memory import ConversationMemory
+from robot_agent.conversation.provider import DashScopeProvider
 
 DEFAULT_ACTION_TIMEOUT = 5.0
 

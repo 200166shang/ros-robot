@@ -38,7 +38,9 @@ class DashScopeProvider:
         prompt_file = config.get("system_prompt_file")
         if prompt_file is None:
             self._system_prompt = resources.read_text(
-                "robot_agent", "online_system_prompt.txt", encoding="utf-8"
+                "robot_agent.conversation",
+                "online_system_prompt.txt",
+                encoding="utf-8",
             )
         else:
             self._system_prompt = (

@@ -5,9 +5,9 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
-from .online_action_contracts import ACTION_DEADLINE, ActionHandler
-from .online_head_simulation import HeadSimulation, head_actions
-from .online_simulation import (
+from robot_agent.actions.contracts import ACTION_DEADLINE, ActionHandler
+from robot_agent.actions.head_simulation import HeadSimulation, head_actions
+from robot_agent.actions.simulation import (
     MusicSimulation,
     NavigationSimulation,
     VolumeSimulation,

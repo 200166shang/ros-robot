@@ -7,7 +7,7 @@
 Python 3.8 起，不依赖 ROS 或云端 Key：
 
 ```bash
-PYTHONPATH=ros2_ws/src/robot_agent python3 -m robot_agent.online_simulation_demo
+PYTHONPATH=ros2_ws/src/robot_agent python3 -m robot_agent.actions.demo
 ```
 
 安装 `robot_agent` 后也可在源码目录外运行相同模块，无需设置源码 PYTHONPATH。演示采用固定模型响应，提交 `OnlineInteraction.submit(text)`，输出输入、回合标识、可信回复、绑定参数和每步动作结果。顺序展示头部、重复呼吸、位置注册/导航/取消、音乐队列/推荐/停止、音量/静音/WiFi及未知导航目标失败停止。启动/错误提示音只记录模拟回执。
@@ -55,6 +55,6 @@ self.register_many(volume_actions(self.volume))
 self.register_many(wifi_actions(self.head.expression))
 ```
 
-`register_many`统一合并能力表，同名覆盖沿用`register`的配置阶段语义。已有`register/validate/execute`和默认52项动作保持兼容。共享`ActionHandler`放在`online_action_contracts.py`，能力定义不依赖注册表实现；原`online_actions.ActionHandler`导入路径仍可用。
+`register_many`统一合并能力表，同名覆盖沿用`register`的配置阶段语义。已有`register/validate/execute`和默认52项动作保持兼容。共享`ActionHandler`放在`actions/contracts.py`，能力定义不依赖注册表实现；`ActionHandler`从`robot_agent.actions.contracts`导入。
 
 本次先完成能力定义与注册机制的分离。尚未新增外部配置、动态导入或自动发现，全部能力默认可用；部署能力选择与别名配置可在确有需求时基于同一能力表接入。

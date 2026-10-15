@@ -3,8 +3,8 @@
 from functools import partial
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
-from .online_action_contracts import ActionHandler
-from .online_simulation import simulated, validate_number
+from robot_agent.actions.contracts import ActionHandler
+from robot_agent.actions.simulation import simulated, validate_number
 
 # 旧注册函数仅改变 LCD，不能把这些表情宣称为真实舵机点头或跳舞。
 EXPRESSIONS = {

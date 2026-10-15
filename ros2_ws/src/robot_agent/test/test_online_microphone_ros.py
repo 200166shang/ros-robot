@@ -11,7 +11,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from test_online_speech import SpeechSocket
 
-from robot_agent.online_voice_ros_node import OnlineVoiceRosNode
+from robot_agent.ros.voice_node import OnlineVoiceRosNode
 
 
 def test_microphone_is_only_input_and_turns_resume_in_order(

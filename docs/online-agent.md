@@ -11,6 +11,41 @@ Agent不配置dry_run；ObjectTrack自身仍dry_run=true，服务保留数据/TF
 在线Agent和现有离线前端各自导入录音、WAV输入、播放工具。
 robot_audio没有ROS节点或模型，在线Agent不再依赖robot_voice。
 
+## 代码目录与阅读入口
+
+```text
+robot_agent/
+├── runtime.py                 # 配置读取与共同交互组装
+├── conversation/
+│   ├── interaction.py         # 模型→整表校验→动作→记忆
+│   ├── memory.py              # 近期上下文与持久摘要
+│   ├── provider.py            # 在线文本模型 Adapter
+│   └── online_system_prompt.txt
+├── actions/
+│   ├── registry.py            # 动作解析、整表校验与注册
+│   ├── contracts.py           # 动作契约与共享期限
+│   ├── execution.py           # 顺序执行、未知状态与显式核对
+│   ├── perception.py          # 感知动作与启停顺序
+│   ├── simulation.py          # 导航、音乐、音量等模拟行为
+│   ├── head_simulation.py     # 头部与表情模拟行为
+│   └── demo.py                # 固定输入演示
+├── voice/
+│   ├── session.py             # 唤醒、休眠、回复与语音回合
+│   ├── speech.py              # 在线 ASR/TTS Adapter
+│   └── runtime.py             # 语音组装、采集与独立 WAV 命令
+└── ros/
+    ├── voice_node.py          # 正常麦克风节点与生命周期
+    └── perception.py          # ROS 感知接口 Adapter
+```
+
+建议从[正常节点](../ros2_ws/src/robot_agent/robot_agent/ros/voice_node.py)
+进入，再看[采集与语音组装](../ros2_ws/src/robot_agent/robot_agent/voice/runtime.py)、
+[语音回合](../ros2_ws/src/robot_agent/robot_agent/voice/session.py)、
+[文本交互](../ros2_ws/src/robot_agent/robot_agent/conversation/interaction.py)
+与[动作执行](../ros2_ws/src/robot_agent/robot_agent/actions/execution.py)。
+目录内的__init__.py只声明Python包，不转发旧导入；测试与探针使用新路径。
+ROS可执行命令、参数与话题保持不变。测试文件仍放在独立test目录。
+
 ## 准备依赖与外部资源
 
 硬件准备按[跟踪操作指南](../ros2_ws/src/robot_bringup/README.md)，包括
@@ -45,15 +80,14 @@ source "$ONLINE_BUILD_ROOT/install/setup.bash"
 
 ## 外部配置与凭证
 
-配置文件统一由online_runtime.load_config读取；模型、记忆与共同期限
+配置文件统一由runtime.load_config读取；模型、记忆与共同期限
 默认值集中在create_interaction。语音专属配置仍由create_voice解释。
 
-交互主线位于online_interaction：模型调用→整表校验→动作执行→记忆。
-online_execution中的ActionExecution集中持有动作Future、全表执行记录、
+交互主线位于conversation/interaction.py：模型调用→整表校验→动作执行→记忆。
+actions/execution.py中的ActionExecution集中持有动作Future、全表执行记录、
 超时未知状态与迟到回执；交互层只读取blocked并调用execute/reconcile。
 设备Adapter及其期限契约不变。动作未知时仍阻止下一轮，显式核对仅更新
 原回合，不自动重试、不补执行余项，已返回的结果快照保持原状。
-
 
 创建 `$HOME/.config/ros-robot/online.json`（源码外），将下面两个数据路径
 替换为自己的绝对路径。自定义 prompt 可用 `system_prompt_file`，默认

@@ -5,9 +5,12 @@ import threading
 import pytest
 from test_online_interaction import FixedProvider, await_reconciliation
 
-from robot_agent.online_actions import ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_perception import PerceptionActions, perception_actions
+from robot_agent.actions.perception import (
+    PerceptionActions,
+    perception_actions,
+)
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.conversation.interaction import OnlineInteraction
 
 
 class PerceptionInterface:

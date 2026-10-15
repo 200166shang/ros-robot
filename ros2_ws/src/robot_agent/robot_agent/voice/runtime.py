@@ -7,14 +7,13 @@ import uuid
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.conversation.interaction import make_result
+from robot_agent.runtime import create_interaction, load_config
+from robot_agent.voice.session import OnlineVoice
+from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 from robot_audio.audio_io import play_wav
 from robot_audio.audio_sources import create_audio_source
-
-from .online_actions import ActionRegistry
-from .online_interaction import make_result
-from .online_runtime import create_interaction, load_config
-from .online_speech import DashScopeASR, DashScopeTTS
-from .online_voice import OnlineVoice
 
 
 def create_voice(
@@ -22,7 +21,7 @@ def create_voice(
 ) -> OnlineVoice:
     """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
     directory = Path(config["output_dir"]).expanduser().resolve()
-    checkout = Path(__file__).resolve().parents[4]
+    checkout = Path(__file__).resolve().parents[5]
     if directory == checkout or checkout in directory.parents:
         raise ValueError("output_dir 必须在源码目录外")
     if actions is None:

@@ -7,9 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from robot_agent.online_actions import ActionHandler, ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_voice import OnlineVoice
+from robot_agent.actions.registry import ActionHandler, ActionRegistry
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.voice.session import OnlineVoice
 
 
 class FixedSpeech:

@@ -4,10 +4,10 @@ import json
 import threading
 import time
 
-import robot_agent.online_execution as execution
-from robot_agent.online_actions import ActionHandler, ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_memory import ConversationMemory
+import robot_agent.actions.execution as execution
+from robot_agent.actions.registry import ActionHandler, ActionRegistry
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.memory import ConversationMemory
 
 
 class FixedProvider:

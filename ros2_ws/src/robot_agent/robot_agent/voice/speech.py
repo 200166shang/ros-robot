@@ -12,7 +12,7 @@ from typing import Dict, Optional, Union
 
 import websocket
 
-from .online_interaction import start_call
+from robot_agent.conversation.interaction import start_call
 
 DEFAULT_SPEECH_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 FRAME_SECONDS = 0.1

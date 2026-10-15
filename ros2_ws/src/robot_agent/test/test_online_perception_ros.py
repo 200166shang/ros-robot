@@ -13,13 +13,13 @@ from rclpy.parameter import Parameter  # noqa: E402
 from std_msgs.msg import Bool  # noqa: E402
 from std_srvs.srv import SetBool  # noqa: E402
 
-from robot_agent.online_actions import ActionRegistry  # noqa: E402
-from robot_agent.online_interaction import OnlineInteraction  # noqa: E402
-from robot_agent.online_perception import (  # noqa: E402
+from robot_agent.actions.perception import (  # noqa: E402
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.online_perception_ros import RosPerception  # noqa: E402
+from robot_agent.actions.registry import ActionRegistry  # noqa: E402
+from robot_agent.conversation.interaction import OnlineInteraction  # noqa: E402
+from robot_agent.ros.perception import RosPerception  # noqa: E402
 
 
 @pytest.fixture

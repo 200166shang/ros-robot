@@ -1,14 +1,16 @@
 """robot_agent 包安装配置与在线入口声明。"""
 
-from setuptools import setup
+from setuptools import find_packages, setup
 
 package_name = "robot_agent"
 
 setup(
     name=package_name,
     version="0.1.0",
-    packages=[package_name],
-    package_data={package_name: ["online_system_prompt.txt"]},
+    packages=find_packages(include=[package_name, package_name + ".*"]),
+    package_data={
+        package_name + ".conversation": ["online_system_prompt.txt"]
+    },
     data_files=[
         (
             "share/ament_index/resource_index/packages",
@@ -24,8 +26,8 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
-            "online_voice_agent = robot_agent.online_voice_ros_node:main",
-            "online_voice_wav = robot_agent.online_voice_runtime:main",
+            "online_voice_agent = robot_agent.ros.voice_node:main",
+            "online_voice_wav = robot_agent.voice.runtime:main",
         ]
     },
 )

@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from robot_agent.online_actions import ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.conversation.interaction import OnlineInteraction
 
 
 class FixedProvider:

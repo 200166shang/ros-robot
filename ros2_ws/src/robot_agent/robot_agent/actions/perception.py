@@ -4,7 +4,7 @@ import json
 import time
 from typing import Dict, Optional, Protocol
 
-from .online_action_contracts import ActionHandler, action_deadline
+from robot_agent.actions.contracts import ActionHandler, action_deadline
 
 
 class PerceptionInterface(Protocol):

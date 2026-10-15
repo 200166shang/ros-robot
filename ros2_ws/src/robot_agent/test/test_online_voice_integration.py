@@ -2,11 +2,14 @@
 
 import json
 
-from robot_agent.online_actions import ActionRegistry
-from robot_agent.online_perception import PerceptionActions, perception_actions
-from robot_agent.online_provider import DashScopeProvider
-from robot_agent.online_speech import DashScopeASR, DashScopeTTS
-from robot_agent.online_voice_runtime import create_voice
+from robot_agent.actions.perception import (
+    PerceptionActions,
+    perception_actions,
+)
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.conversation.provider import DashScopeProvider
+from robot_agent.voice.runtime import create_voice
+from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 
 
 class FixedPerception:

@@ -5,8 +5,8 @@ import multiprocessing
 import uuid
 from pathlib import Path
 
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_runtime import create_interaction, load_config
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.runtime import create_interaction, load_config
 
 
 def verify_restart(config: dict, marker: str, cleared: bool) -> None:

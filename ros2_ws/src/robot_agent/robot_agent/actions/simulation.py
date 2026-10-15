@@ -6,7 +6,7 @@ from copy import deepcopy
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional
 
-from .online_action_contracts import ActionHandler
+from robot_agent.actions.contracts import ActionHandler
 
 LOGGER = logging.getLogger(__name__)
 

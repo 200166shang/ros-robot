@@ -3,9 +3,9 @@
 import json
 from typing import List
 
-from .online_actions import ActionRegistry
-from .online_interaction import OnlineInteraction
-from .online_simulation import simulate_cue
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.actions.simulation import simulate_cue
+from robot_agent.conversation.interaction import OnlineInteraction
 
 
 class FixedDemoProvider:

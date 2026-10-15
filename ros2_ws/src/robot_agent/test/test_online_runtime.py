@@ -5,8 +5,8 @@ import json
 
 import pytest
 
-from robot_agent.online_actions import ActionRegistry
-from robot_agent.online_runtime import create_interaction, load_config
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.runtime import create_interaction, load_config
 
 
 def install_model_transport(monkeypatch):

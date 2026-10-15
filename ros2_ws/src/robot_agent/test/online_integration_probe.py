@@ -17,10 +17,10 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, LaserScan
 
-from robot_agent.online_runtime import load_config
-from robot_agent.online_voice import OnlineVoice
-from robot_agent.online_voice_ros_node import create_ros_voice
-from robot_agent.online_voice_runtime import capture_turn
+from robot_agent.ros.voice_node import create_ros_voice
+from robot_agent.runtime import load_config
+from robot_agent.voice.runtime import capture_turn
+from robot_agent.voice.session import OnlineVoice
 
 
 class OnlineIntegrationProbe(Node):

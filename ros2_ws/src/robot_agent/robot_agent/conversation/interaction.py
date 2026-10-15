@@ -7,15 +7,15 @@ from concurrent.futures import Future, wait
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from .online_actions import ActionRegistry
-from .online_execution import (
+from robot_agent.actions.execution import (
     ActionExecution,
     ActionExecutionError,
     make_result,
     start_call,
 )
-from .online_memory import ConversationMemory
-from .online_provider import TextProvider
+from robot_agent.actions.registry import ActionRegistry
+from robot_agent.conversation.memory import ConversationMemory
+from robot_agent.conversation.provider import TextProvider
 
 MAX_INPUT_LENGTH = 8192
 MAX_MODEL_OUTPUT_BYTES = 64 * 1024
