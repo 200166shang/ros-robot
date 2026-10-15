@@ -366,3 +366,69 @@ actions/capabilities中的create_default_actions持有默认导航、头部、
 capabilities-{build,pyright,pytest,installed,demo}.log。
 本轮未重新调用云端或验证实体音频设备。默认运行行为与ROS命令保持；
 直接构造注册表的外部调用者需显式选择默认能力或注册自定义动作。
+
+## 持续ASR、暂停丢弃与静音保活（2026-10-15）
+
+用户确认旧robot的ASR保活是业务需求，撤回删除pause/resume的建议。
+设计与职责见[持续输入设计](online-agent-streaming-input.md)。正常入口
+从固定WAV切片改为持续PCM与持久ASR任务，最终句交接前自动暂停真实
+音频；LLM/动作/TTS/播放期间持续消费并丢弃麦克风数据、发送静音。
+恢复时清理积压，按已发送PCM时轴与begin_time过滤迟到句，不补发旧
+录音。WAV仅独立单次识别，识别函数显式注入，不要求持续输入实现它。
+
+正常ROS节点顺序listen→submit_transcript；采集、接收线程仅做持续I/O，
+无业务请求队列、临时回合线程或多入口调度锁。设备EOF及连续ASR失败
+明确停止监听；关闭取消并回收PCM进程、连接与两个I/O线程。原会话、
+模型/动作在途与未知回执约束保持，ObjectTrack安全模式未修改。
+
+### 真实在线环境音验证
+
+使用此前真实TTS生成的wake/request/sleep WAV，由源码外PCM采集程序
+按16kHz实时输出，进入正常PcmMicrophone/LiveSpeechInput/ROS节点。
+生成源等待真实ASR task-started后才开始播入，下一句等待上一轮落盘。
+没有固定识别文本或替换在线ASR/LLM/TTS结果，所有录音与凭证均在源码外。
+
+| 阶段 | 实际ASR最终句 | 回合结果 | TTS |
+| --- | --- | --- | --- |
+| 唤醒 | 小莫小莫。 | woken | completed |
+| 请求 | 请点头两次。 | completed；两次head_nod均simulated_success | completed |
+| 休眠 | 晚安。 | sleeping | completed |
+
+记录真实WSS连接创建共4次：持续ASR一个、三次独立TTS各一个；ASR跨
+三轮保持任务。核验3份新回复WAV均非空、单声道PCM16/16kHz。
+实体麦克风与可闻播放仍未证明；真实在线验证playback_enabled=false，
+播放期间暂停由固定外部播放器及正常ROS集成回归单独验证。
+
+正式命令为加载Foxy并将本worktree两个源码包与既有工具依赖加入
+PYTHONPATH，ROS_DOMAIN_ID=196，运行源码外live-cloud-probe.py。
+仅该进程NO_PROXY/no_proxy追加dashscope.aliyuncs.com，未改全局代理。
+之前代理环境下两次握手超时的失败日志保留；未用固定测试代替此失败。
+云端验证在关闭异常补强前运行，补强后以完整源码及安装回归验证退出。
+
+### 最终检查与审查
+
+- 新持续输入检查覆盖最终句/中间句/心跳、暂停持续读与静音、恢复清理、
+  迟到旧句、有界重连、设备失败、空闲取消、关闭时迟到socket及关闭
+  异常仍释放其余资源。正常ROS测试三轮复用一个任务，实际假播放器
+  运行期间也禁止发送真实音频；三轮playback_status均completed。
+- 修复前完整117项通过；审查发现某关闭步骤抛错会跳过后续资源，已用
+  finally保证连接、设备、通知、两个Future与ROS退出步骤继续执行，
+  编程错误仍显露。补充两项资源关闭异常检查；核心10项通过，2.62秒。
+- 最终完整源码119项通过，12.22秒。范围与前述完整pytest命令相同，
+  加载本轮install并将robot_audio/robot_agent/robot_voice源码和工具
+  依赖加入PYTHONPATH，ROS_DOMAIN_ID=195。
+- 全新目录两包构建成功，20.3秒；关闭补强后重建成功，21.3秒。
+- 从/tmp加载最终install，不加入源码路径，确认live_input与pcm_input
+  均来自安装目录；Agent与robot_audio全部106项通过，8.29秒。
+- Ruff格式/静态检查57文件通过；完整robot_agent及新增PCM模块Pyright
+  0错误、0警告；git diff --check通过。
+- 双轴最终范围805c73e...5294fc6：Standards 0项、Spec 0项剩余发现。
+
+源码外证据根目录：
+`/home/orangepi/local-data/ros-robot/issue-68-microphone-refactor/`。
+live-cloud-results.json包含结果与连接次数；live-cloud-audio.json为回复
+音频清单，live-cloud-turns为三轮JSON/WAV，live-cloud.log为成功日志，
+live-cloud-proxy.log及live-cloud-before-ready.log保留早期尝试。
+固定验证日志为live-{build-final,pyright-final,pytest-final,installed}.log，
+构建输出在同级issue-68-live-build/{build,install,log}。全部探针与外部
+PCM子进程已结束，未输出真实运动命令。
