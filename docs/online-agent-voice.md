@@ -7,25 +7,19 @@
        → 唤醒/休眠/音乐规则 → LLM/动作 → TTS/可选播放 → 清理并恢复
 ```
 
-ROS主executor处理设备回执，唯一业务线程组织交互；采集与ASR接收I/O线程持续保活。没有输入话题订阅、
-临时回合worker、接入busy调度、队列或会话锁。OnlineVoice与
-OnlineInteraction的公共Interface要求同一调用者顺序调用；处理阶段状态
-用于观测和静音计时，不作为并发输入锁。
+ROS executor处理设备回执；ROS边缘暂时在受管理业务线程运行asyncio循环。
+AgentApplication.run负责唯一listen→submit_transcript循环，ROS节点只接线
+与发布结果。应用拒绝忙碌或关闭后的新回合，没有输入话题或请求队列。
 
-OnlineVoice内部按入口和职责组织：
+完整回合可从AgentApplication.submit_transcript顺序阅读：接纳检查→暂停
+输入→纯VoiceSession决定→必要时await Agent.submit→输出与记录→finally恢复。
+应用独自持有processing/closed；VoiceSession只持有唤醒状态和活动时间，
+不调用Agent、不执行I/O。空闲监听推进静音期限，处理期间不休眠。
 
-```text
-正常：LiveSpeechInput.listen → submit_transcript → _process_text
-独立WAV：submit_recording → _process_recording（ASR） → _process_text
-submit_transcript → _process_text
-    _decide_session → 必要时interaction.submit → _finish_turn
-reconcile → _reconcile_turn（核对原动作并关联原文本）
-```
-
-三个入口均由_run_turn统一协调处理状态、暂停后恢复和活动时间。
-临时回合记录只保存结果、文本和生命周期状态，不承担并发调度。
-会话决策返回固定回执，或以None明确表示继续模型交互；忽略、过滤、
-busy不合成，识别失败及空文本只记录。核对分支不发起新模型或动作。
+独立WAV先await文件识别，再复用submit_transcript(direct=True)。
+reconcile只核对原动作并关联原文本，不发起新模型或动作。忽略、过滤、
+busy不合成；识别失败和空文本只记录。旧阻塞I/O由明确持有调用句柄和
+语音资源的临时Adapter适配；业务调用者只await公开入口。
 
 ## 外部配置与启动
 
@@ -93,7 +87,7 @@ ASR仅最终句进入交互，支持有限重连；暂停时有效音频停止�
 连续失败文本降级；不重复模型或动作。显式enable_tts供单调用者在轮间恢复；
 正常入口也可退出后重启恢复。动作回复只依据确认结果。
 
-删除会话锁后仍保留实际执行约束：模型/摘要Future仍在途时，新提交返回
+删除会话锁后仍保留实际执行约束：模型/摘要调用仍在途时，新提交返回
 busy，不重叠外部调用；动作unknown保持待核对，线程结束不等于设备确认。
 单调用者可通过reconcile(turn_id)核对迟到回执，不补执行剩余动作。
 正常入口不开放文本控制话题；未知设备状态需操作者核实后停止/重启，不能
@@ -109,7 +103,7 @@ Ctrl+C关闭语音连接、取消并回收录制/播放子进程，等待唯一�
 
 ## 独立测试入口
 
-文本测试直接调用create_interaction(config).submit(text)，不启动ROS文本
+文本测试直接await build_agent(config).submit(text)，不启动ROS文本
 节点，详情见[模型与文本测试说明](online-agent-text.md)。
 
 WAV单回合CLI仅处理文件，必须提供--wav；免唤醒，不启动麦克风：
@@ -121,7 +115,7 @@ ros2 run robot_agent online_voice_wav \
 
 WAV须为非空单声道PCM16、16kHz。该CLI默认模拟设备；需要真实感知时，
 先启动tracking.launch.py，再单独运行[综合探针](online-agent.md)。
-探针复用create_ros_voice，与正常入口同一Implementation和感知Adapter，
+探针复用create_ros_application，与正常入口同一Implementation和感知Adapter，
 在自身进程顺序提交文本/WAV；不向正常麦克风节点发布输入。
 
 固定回归、生成环境音与实际麦克风证据分别报告，不能相互冒充；新增验证

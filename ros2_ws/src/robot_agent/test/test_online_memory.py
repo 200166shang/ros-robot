@@ -1,11 +1,12 @@
 """通过交互输入验证近期上下文、摘要重启和清空。"""
 
+import asyncio
 import json
 import threading
 import time
 
 from robot_agent.actions.capabilities import create_default_actions
-from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
 
 
@@ -31,27 +32,29 @@ def test_context_summary_restart_and_clear(tmp_path):
     """跨回合使用上下文，重启恢复摘要，清空覆盖两种记忆。"""
     path = tmp_path / "memory.json"
     provider = MemoryProvider()
-    agent = OnlineInteraction(
+    agent = Agent(
         provider,
         create_default_actions().registry,
         memory=ConversationMemory(path, recent_turns=2, summary_trigger=2),
     )
-    assert agent.submit("我喜欢蓝色")["status"] == "completed"
-    assert agent.submit("我喜欢什么颜色？")["reply"] == "蓝色"
-    restarted = OnlineInteraction(
+    assert asyncio.run(agent.submit("我喜欢蓝色"))["status"] == "completed"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
+    restarted = Agent(
         provider,
         create_default_actions().registry,
         memory=ConversationMemory(path),
     )
-    assert restarted.submit("我喜欢什么颜色？")["reply"] == "蓝色"
-    assert restarted.clear_memory()["status"] == "completed"
-    assert restarted.submit("我喜欢什么颜色？")["reply"] == "记住了"
-    again = OnlineInteraction(
+    assert asyncio.run(restarted.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
+    assert asyncio.run(restarted.clear_memory())["status"] == "completed"
+    assert (
+        asyncio.run(restarted.submit("我喜欢什么颜色？"))["reply"] == "记住了"
+    )
+    again = Agent(
         provider,
         create_default_actions().registry,
         memory=ConversationMemory(path),
     )
-    assert again.submit("我喜欢什么颜色？")["reply"] == "记住了"
+    assert asyncio.run(again.submit("我喜欢什么颜色？"))["reply"] == "记住了"
 
 
 def test_summary_failure_keeps_context_bounded(tmp_path):
@@ -67,17 +70,17 @@ def test_summary_failure_keeps_context_bounded(tmp_path):
             return super().complete(text, timeout)
 
     provider = FailingProvider()
-    agent = OnlineInteraction(
+    agent = Agent(
         provider,
         create_default_actions().registry,
         memory=ConversationMemory(tmp_path / "memory", 2, 2),
     )
-    agent.submit("old-marker")
-    result = agent.submit("second-marker")
+    asyncio.run(agent.submit("old-marker"))
+    result = asyncio.run(agent.submit("second-marker"))
     assert result["status"] == "completed"
     assert result["memory_warnings"] == ["summary_failed"]
-    agent.submit("third-marker")
-    agent.submit("fourth-marker")
+    asyncio.run(agent.submit("third-marker"))
+    asyncio.run(agent.submit("fourth-marker"))
     assert "old-marker" not in provider.inputs[-1]
     assert "second-marker" in provider.inputs[-1]
     assert "third-marker" in provider.inputs[-1]
@@ -87,33 +90,33 @@ def test_save_failure_and_clear_failure_are_observable(tmp_path):
     """磁盘路径故障不丢失回复和内存摘要，清空失败不伪报持久成功。"""
     parent = tmp_path / "blocked"
     parent.write_text("not a directory", encoding="utf-8")
-    agent = OnlineInteraction(
+    agent = Agent(
         MemoryProvider(),
         create_default_actions().registry,
         memory=ConversationMemory(parent / "memory", 1, 1),
     )
-    result = agent.submit("我喜欢蓝色")
+    result = asyncio.run(agent.submit("我喜欢蓝色"))
     assert result["status"] == "completed"
     assert result["memory_warnings"] == ["load_failed", "save_failed"]
-    assert agent.submit("我喜欢什么颜色？")["reply"] == "蓝色"
-    cleared = agent.clear_memory()
+    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
+    cleared = asyncio.run(agent.clear_memory())
     assert cleared["status"] == "failed"
     assert cleared["memory_warnings"] == ["clear_save_failed"]
-    assert agent.submit("我喜欢什么颜色？")["reply"] == "记住了"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "记住了"
 
 
 def test_clear_also_removes_recent_context(tmp_path):
     """尚未生成摘要时，clear 同样移除近期输入。"""
     provider = MemoryProvider()
-    agent = OnlineInteraction(
+    agent = Agent(
         provider,
         create_default_actions().registry,
         memory=ConversationMemory(tmp_path / "memory"),
     )
-    agent.submit("我喜欢蓝色")
-    assert agent.submit("我喜欢什么颜色？")["reply"] == "蓝色"
-    assert agent.clear_memory()["status"] == "completed"
-    assert agent.submit("我喜欢什么颜色？")["reply"] == "记住了"
+    asyncio.run(agent.submit("我喜欢蓝色"))
+    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
+    assert asyncio.run(agent.clear_memory())["status"] == "completed"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "记住了"
 
 
 def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
@@ -131,25 +134,25 @@ def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
                 finished.set()
             return super().complete(text, timeout)
 
-    agent = OnlineInteraction(
+    agent = Agent(
         SlowProvider(),
         create_default_actions().registry,
         provider_timeout=0.05,
         memory=ConversationMemory(tmp_path / "memory", 1, 1),
     )
     try:
-        result = agent.submit("我喜欢蓝色")
+        result = asyncio.run(agent.submit("我喜欢蓝色"))
         assert result["status"] == "completed"
         assert result["memory_warnings"] == ["summary_timeout"]
-        assert agent.clear_memory()["status"] == "busy"
-        assert agent.submit("下一轮")["status"] == "busy"
+        assert asyncio.run(agent.clear_memory())["status"] == "busy"
+        assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
     finally:
         released.set()
     assert finished.wait(1)
     # 使用公开入口等待保存结束，而非依赖线程退出时刻。
     deadline = time.monotonic() + 1
     while time.monotonic() < deadline:
-        result = agent.clear_memory()
+        result = asyncio.run(agent.clear_memory())
         if result["status"] != "busy":
             break
         time.sleep(0.005)
@@ -160,12 +163,12 @@ def test_invalid_memory_file_is_reported_without_content(tmp_path):
     """损坏的外部文件不阻断启动，反馈不会泄露文件内容。"""
     path = tmp_path / "memory"
     path.write_text("private-invalid-data", encoding="utf-8")
-    agent = OnlineInteraction(
+    agent = Agent(
         MemoryProvider(),
         create_default_actions().registry,
         memory=ConversationMemory(path),
     )
-    result = agent.submit("你好")
+    result = asyncio.run(agent.submit("你好"))
     assert result["status"] == "completed"
     assert result["memory_warnings"] == ["load_failed"]
     assert "private-invalid-data" not in json.dumps(result)
@@ -194,13 +197,13 @@ def test_summary_actions_are_rejected_without_execution(tmp_path):
 
     registry = create_default_actions().registry
     registry.register("head_nod", nod)
-    agent = OnlineInteraction(
+    agent = Agent(
         ActionSummaryProvider(),
         registry,
         memory=ConversationMemory(tmp_path / "memory", 1, 1),
     )
-    result = agent.submit("我喜欢蓝色")
+    result = asyncio.run(agent.submit("我喜欢蓝色"))
     assert result["status"] == "completed"
     assert result["memory_warnings"] == ["summary_failed"]
     assert not events
-    assert agent.submit("我喜欢什么颜色？")["reply"] == "蓝色"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"

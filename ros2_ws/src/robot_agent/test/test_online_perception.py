@@ -1,5 +1,6 @@
 """从交互输入验证感知动作、真实回执与后续动作停止。"""
 
+import asyncio
 import threading
 
 import pytest
@@ -10,7 +11,7 @@ from robot_agent.actions.perception import (
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.agent import Agent
 
 
 class PerceptionInterface:
@@ -43,8 +44,8 @@ def test_follow_fusion_and_toggle_through_interaction():
     provider = FixedProvider(
         ["start_following", "following_status", "toggle_following"]
     )
-    result = OnlineInteraction(provider, registry).submit(
-        "启动跟随，查询，然后停止"
+    result = asyncio.run(
+        Agent(provider, registry).submit("启动跟随，查询，然后停止")
     )
     assert result["status"] == "completed"
     assert interface.events == [
@@ -61,7 +62,7 @@ def test_follow_fusion_and_toggle_through_interaction():
     }
     provider.functions = ["start_following", "head_nod"]
     interface.events.clear()
-    result = OnlineInteraction(provider, registry).submit("启动然后点头")
+    result = asyncio.run(Agent(provider, registry).submit("启动然后点头"))
     assert interface.events == [("camera", True), ("fusion", True)]
     assert [a["status"] for a in result["actions"]] == [
         "failed",
@@ -88,18 +89,18 @@ def test_late_fusion_does_not_start_follow_or_retry():
     registry.register_many(
         perception_actions(PerceptionActions(interface, action_timeout=1.0))
     )
-    agent = OnlineInteraction(
+    agent = Agent(
         FixedProvider(["start_following", "head_nod"]),
         registry,
         action_timeout=0.02,
     )
     try:
-        result = agent.submit("跟随然后点头")
+        result = asyncio.run(agent.submit("跟随然后点头"))
         assert [a["status"] for a in result["actions"]] == [
             "unknown",
             "not_executed",
         ]
-        assert agent.submit("再次跟随")["status"] == "busy"
+        assert asyncio.run(agent.submit("再次跟随"))["status"] == "busy"
         release.set()
         reconciled = await_reconciliation(
             agent,
@@ -127,9 +128,11 @@ def test_device_rejection_is_in_reply_and_stops_actions(reason):
     interface.failure = {"status": "failed", "detail": reason}
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
-    result = OnlineInteraction(
-        FixedProvider(["enable_lidar", "start_following"]), registry
-    ).submit("开启融合并跟随")
+    result = asyncio.run(
+        Agent(
+            FixedProvider(["enable_lidar", "start_following"]), registry
+        ).submit("开启融合并跟随")
+    )
     assert [a["status"] for a in result["actions"]] == [
         "failed",
         "not_executed",
@@ -144,8 +147,8 @@ def test_follow_aliases_preserve_the_same_sequence(action):
     interface = PerceptionInterface()
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
-    result = OnlineInteraction(FixedProvider([action]), registry).submit(
-        "启动"
+    result = asyncio.run(
+        Agent(FixedProvider([action]), registry).submit("启动")
     )
     assert result["status"] == "completed"
     assert interface.events == [
@@ -171,7 +174,7 @@ def test_camera_aliases_standby_and_unknown_status():
             "following_status",
         ]
     )
-    result = OnlineInteraction(provider, registry).submit("操作并查询")
+    result = asyncio.run(Agent(provider, registry).submit("操作并查询"))
     assert result["status"] == "completed"
     assert interface.events == [
         ("camera", True),
@@ -192,10 +195,12 @@ def test_unknown_toggle_and_invalid_parameters_send_nothing():
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(["toggle_following"])
-    agent = OnlineInteraction(provider, registry)
-    assert agent.submit("切换")["actions"][0]["status"] == "failed"
+    agent = Agent(provider, registry)
+    assert (
+        asyncio.run(agent.submit("切换"))["actions"][0]["status"] == "failed"
+    )
     provider.functions = ["enable_lidar", "start_following(True)"]
-    assert agent.submit("启动")["status"] == "rejected"
+    assert asyncio.run(agent.submit("启动"))["status"] == "rejected"
     assert interface.events == []
 
 
@@ -204,12 +209,14 @@ def test_tracking_only_and_full_stop_preserve_source_semantics():
     interface = PerceptionInterface()
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
-    result = OnlineInteraction(
-        FixedProvider(
-            ["enable_tracking", "disable_tracking", "stop_following"]
-        ),
-        registry,
-    ).submit("单独切换然后完整停止")
+    result = asyncio.run(
+        Agent(
+            FixedProvider(
+                ["enable_tracking", "disable_tracking", "stop_following"]
+            ),
+            registry,
+        ).submit("单独切换然后完整停止")
+    )
     assert result["status"] == "completed"
     assert interface.events == [
         ("follow", True),
@@ -225,9 +232,9 @@ def test_partial_perception_facts_survive_later_failure():
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     interface.failure = {"status": "failed", "detail": "fusion refused"}
-    result = OnlineInteraction(
-        FixedProvider(["start_following"]), registry
-    ).submit("启动")
+    result = asyncio.run(
+        Agent(FixedProvider(["start_following"]), registry).submit("启动")
+    )
     assert "采集请求已发布" in result["reply"]
     assert "fusion refused" in result["reply"]
 
@@ -242,9 +249,11 @@ def test_partial_perception_facts_survive_later_failure():
     registry.register_many(
         perception_actions(PerceptionActions(MissingCamera()))
     )
-    result = OnlineInteraction(
-        FixedProvider(["stop_camera_collection"]), registry
-    ).submit("暂停采集")
+    result = asyncio.run(
+        Agent(FixedProvider(["stop_camera_collection"]), registry).submit(
+            "暂停采集"
+        )
+    )
     assert "Follow 已确认待机" in result["reply"]
     assert "相机无订阅端" in result["reply"]
 
@@ -263,8 +272,8 @@ def test_simulation_and_perception_share_one_turn_after_main_merge():
             "stop_following",
         ]
     )
-    result = OnlineInteraction(provider, registry).submit(
-        "设置音量并开启跟随，查询后停止"
+    result = asyncio.run(
+        Agent(provider, registry).submit("设置音量并开启跟随，查询后停止")
     )
     assert result["status"] == "completed"
     assert [action["status"] for action in result["actions"]] == [

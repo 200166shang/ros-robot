@@ -1,16 +1,32 @@
 """验证完整在线入口沿用固定跟踪组合与安全启动参数。"""
 
+import asyncio
 import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from launch import LaunchContext
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def test_online_launch_composes_one_complete_agent_with_tracking() -> None:
+@pytest.fixture
+def ros_launch_loop():
+    """Foxy LaunchContext要求当前事件循环，由测试明确创建并释放。"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        yield loop
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
+def test_online_launch_composes_one_complete_agent_with_tracking(
+    ros_launch_loop,
+) -> None:
     """统一启动仅有一个在线入口，默认关闭可视化，Agent无需运行模式参数。"""
     source = Path(__file__).parents[1]
     spec = importlib.util.spec_from_file_location(

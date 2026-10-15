@@ -118,9 +118,9 @@ head_servo_controller、emoji/lcd、cloud_music、navigation_controller 和
 robot_following_controller，业务覆盖如下：
 
 - 配置/初始化/退出：统一 Launch 与薄 ROS 入口，外部配置/数据，有限退出。
-- ASR/唤醒/连续会话/音乐过滤：OnlineVoice + DashScopeASR，WAV/麦克风
+- ASR/唤醒/连续会话/音乐过滤：AgentApplication + VoiceSession + DashScopeASR，WAV/麦克风
   共用既有 capture Interface；重连与总期限、半双工恢复均保留。
-- LLM/执行/可信回复：OnlineInteraction 集中全表校验、按序重复、失败停止、
+- LLM/执行/可信回复：Agent 集中全表校验、按序重复、失败停止、
   busy/未知核对；所有回复和记忆保留确认事实，不播报提前成功。
 - TTS/播放：DashScopeTTS，流式合成、有限重试/文本降级/显式恢复、保留音频。
 - 摘要/近期上下文：ConversationMemory，有限近期上下文、跨重启摘要和清空。

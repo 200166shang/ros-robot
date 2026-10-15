@@ -1,5 +1,6 @@
 """通过语音输入验证真实协议 Adapter，固定传输事件不代替云端验收。"""
 
+import asyncio
 import json
 import queue
 import threading
@@ -11,8 +12,8 @@ import pytest
 import websocket
 
 from robot_agent.actions.capabilities import create_default_actions
-from robot_agent.conversation.interaction import OnlineInteraction
-from robot_agent.voice.session import OnlineVoice
+from robot_agent.application import AgentApplication
+from robot_agent.conversation.agent import Agent
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 
 
@@ -135,8 +136,8 @@ def test_reconnect_final_sentences_and_streaming_audio(tmp_path, monkeypatch):
     sockets = [SpeechSocket(fail=True), SpeechSocket(), SpeechSocket()]
     transport(monkeypatch, sockets)
     asr = DashScopeASR({})
-    voice = OnlineVoice(
-        OnlineInteraction(FixedModel(), create_default_actions().registry),
+    voice = AgentApplication(
+        Agent(FixedModel(), create_default_actions().registry),
         asr,
         DashScopeTTS({}),
         tmp_path,
@@ -144,7 +145,7 @@ def test_reconnect_final_sentences_and_streaming_audio(tmp_path, monkeypatch):
         recognize_recording=asr.recognize,
         retry_delay=0,
     )
-    result = voice.submit_recording(fixture_wav(tmp_path))
+    result = asyncio.run(voice.submit_recording(fixture_wav(tmp_path)))
     assert result["transcript"] == "真实句一。真实句二。"
     assert result["reply"] == result["transcript"]
     assert result["tts_status"] == "completed"
@@ -156,7 +157,7 @@ def test_reconnect_final_sentences_and_streaming_audio(tmp_path, monkeypatch):
     assert (
         sockets[2].commands[1]["payload"]["input"]["text"] == result["reply"]
     )
-    voice.close()
+    asyncio.run(voice.aclose())
 
 
 def test_pause_keepalive_resume_preserves_audio(tmp_path, monkeypatch):
@@ -183,8 +184,8 @@ def test_partial_tts_failure_has_no_success_audio(tmp_path, monkeypatch):
     sockets = [SpeechSocket(), SpeechSocket(tts_fail=True)]
     transport(monkeypatch, sockets)
     asr = DashScopeASR({})
-    voice = OnlineVoice(
-        OnlineInteraction(FixedModel(), create_default_actions().registry),
+    voice = AgentApplication(
+        Agent(FixedModel(), create_default_actions().registry),
         asr,
         DashScopeTTS({}),
         tmp_path,
@@ -192,7 +193,7 @@ def test_partial_tts_failure_has_no_success_audio(tmp_path, monkeypatch):
         recognize_recording=asr.recognize,
         tts_attempts=1,
     )
-    result = voice.submit_recording(fixture_wav(tmp_path))
+    result = asyncio.run(voice.submit_recording(fixture_wav(tmp_path)))
     assert result["tts_status"] == "failed"
     assert "audio_path" not in result
     assert list(tmp_path.glob("*.tmp")) == []

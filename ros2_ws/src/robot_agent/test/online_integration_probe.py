@@ -1,6 +1,7 @@
 """独立文本/WAV验收：复用正常交互与真实ROS感知，不接入麦克风节点。"""
 
 import argparse
+import asyncio
 import json
 import sys
 import threading
@@ -17,10 +18,10 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, LaserScan
 
-from robot_agent.ros.voice_node import create_ros_voice
+from robot_agent.application import AgentApplication
+from robot_agent.ros.voice_node import create_ros_application
 from robot_agent.runtime import load_config
 from robot_agent.voice.runtime import capture_turn
-from robot_agent.voice.session import OnlineVoice
 
 
 class OnlineIntegrationProbe(Node):
@@ -84,7 +85,7 @@ class OnlineIntegrationProbe(Node):
 
     def submit(
         self,
-        voice: OnlineVoice,
+        voice: AgentApplication,
         kind: str,
         text: str,
         expected: Optional[List[str]] = None,
@@ -95,7 +96,7 @@ class OnlineIntegrationProbe(Node):
             "wav": lambda: capture_turn(voice, text),
             "clear_memory": voice.clear_memory,
         }
-        result = operations[kind]()
+        result = asyncio.run(operations[kind]())
         self.results.append(result)
         print(json.dumps(result, ensure_ascii=False), flush=True)
         assert result["status"] == "completed", result
@@ -139,7 +140,7 @@ def main() -> None:
     passed = False
     try:
         # 1. 独立组装同一交互Implementation，确认实际tracker及数据。
-        voice = create_ros_voice(probe, config)
+        voice = create_ros_application(probe, config)
         probe.confirm_dry_run("/object_track")
         probe.wait(
             lambda: probe.scans > 1 and probe.images > 1,
@@ -278,7 +279,7 @@ def main() -> None:
         finally:
             try:
                 if voice is not None:
-                    voice.close()
+                    asyncio.run(voice.aclose())
             finally:
                 executor.shutdown()
                 ros_worker.join()

@@ -1,11 +1,12 @@
 """无需 ROS、云端凭证或硬件的完整模拟演示，输入固定模型响应。"""
 
+import asyncio
 import json
 from typing import List
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.simulation import simulate_cue
-from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.agent import Agent
 
 
 class FixedDemoProvider:
@@ -20,11 +21,11 @@ class FixedDemoProvider:
         return json.dumps({"function": self.functions, "response": "模拟建议"})
 
 
-def main() -> None:
+async def _run_demo() -> None:
     """逐轮展示动作、状态、查询、重复及失败停止，始终保持模拟。"""
     # 1. 固定 provider 只用于演示；缺失设备使用默认模拟注册表。
     provider = FixedDemoProvider()
-    agent = OnlineInteraction(provider, create_default_actions().registry)
+    agent = Agent(provider, create_default_actions().registry)
     print(json.dumps(simulate_cue("startup"), ensure_ascii=False))
     scenarios = [
         (
@@ -84,12 +85,17 @@ def main() -> None:
     # 2. 始终从交互输入提交，观察可信回执，不调用私有执行器。
     for text, functions in scenarios:
         provider.functions = functions
-        result = agent.submit(text)
+        result = await agent.submit(text)
         print(
             json.dumps({"input": text, "result": result}, ensure_ascii=False)
         )
         if result["status"] == "failed":
             print(json.dumps(simulate_cue("error"), ensure_ascii=False))
+
+
+def main() -> None:
+    """命令入口统一启动异步演示回合。"""
+    asyncio.run(_run_demo())
 
 
 if __name__ == "__main__":
