@@ -4,16 +4,24 @@ import asyncio
 import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Dict, List
 
 import pytest
 from test_online_interaction import FixedProvider
 from test_online_voice import FixedSpeech, FixedTTS
 
+from robot_agent.actions.contracts import ActionInput
 from robot_agent.actions.registry import ActionRegistry
 from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.results import result_to_json
+
+
+class DeviceInput(ActionInput):
+    """设备自定义嵌套参数。"""
+
+    options: Dict[str, List[str]]
 
 
 def test_agent_returns_named_nested_snapshot():
@@ -26,8 +34,13 @@ def test_agent_returns_named_nested_snapshot():
         return {"status": "real_success", "data": data}
 
     registry = ActionRegistry()
-    registry.register("device", device)
-    agent = Agent(FixedProvider(["device({'colors': ['red']})"]), registry)
+    registry.register("device", device, inputs=DeviceInput)
+    agent = Agent(
+        FixedProvider(
+            [{"name": "device", "arguments": {"options": {"colors": ["red"]}}}]
+        ),
+        registry,
+    )
     result = asyncio.run(agent.submit("执行"))
     assert result.status == "completed"
     assert result.actions[0].parameters["options"]["colors"] == ("red",)
@@ -47,11 +60,11 @@ def test_voice_failures_keep_execution_and_flat_json(tmp_path, monkeypatch):
     class SummaryFailure(FixedProvider):
         """正常请求可用，外部摘要模型报告连接故障。"""
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """摘要失败不能改写此前的动作事实。"""
             if "【摘要任务】" in text:
                 raise OSError("summary unavailable")
-            return super().complete(text, timeout)
+            return super().complete(text, timeout, tools=tools)
 
     registry = ActionRegistry()
     registry.register("confirmed", lambda: {"status": "real_success"})
@@ -59,7 +72,13 @@ def test_voice_failures_keep_execution_and_flat_json(tmp_path, monkeypatch):
         "failure", lambda: {"status": "failed", "detail": "refused"}
     )
     agent = Agent(
-        SummaryFailure(["confirmed", "failure", "confirmed"]),
+        SummaryFailure(
+            [
+                {"name": "confirmed", "arguments": {}},
+                {"name": "failure", "arguments": {}},
+                {"name": "confirmed", "arguments": {}},
+            ]
+        ),
         registry,
         memory=ConversationMemory(tmp_path / "memory", 1, 1),
     )

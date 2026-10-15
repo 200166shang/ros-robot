@@ -2,12 +2,12 @@
 
 import asyncio
 import json
-from typing import List
+from typing import Any, Dict, List
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.simulation import simulate_cue
 from robot_agent.conversation.agent import Agent
-from robot_agent.results import result_to_json
+from robot_agent.results import ModelReply, ToolCall, result_to_json
 
 
 class FixedDemoProvider:
@@ -15,11 +15,18 @@ class FixedDemoProvider:
 
     def __init__(self) -> None:
         """初始化本轮动作建议。"""
-        self.functions: List[str] = []
+        self.actions: List[Dict[str, Any]] = []
 
-    def complete(self, text: str, timeout: float) -> str:
+    def complete(self, text: str, timeout: float, *, tools=None) -> ModelReply:
         """按在线契约返回固定动作列表。"""
-        return json.dumps({"function": self.functions, "response": "模拟建议"})
+        return ModelReply(
+            "模拟建议",
+            ToolCall(
+                "fixture_call", "execute_actions", {"actions": self.actions}
+            )
+            if self.actions
+            else None,
+        )
 
 
 async def _run_demo() -> None:
@@ -32,60 +39,66 @@ async def _run_demo() -> None:
         (
             "设置头部并两次呼吸后苏醒",
             [
-                "head_position(pitch=80, yaw=100)",
-                "head_breathing(2)",
-                "head_breathing(2)",
-                "wake_up",
+                {
+                    "name": "head_position",
+                    "arguments": {"pitch": 80, "yaw": 100},
+                },
+                {"name": "head_breathing", "arguments": {"cycles": 2}},
+                {"name": "head_breathing", "arguments": {"cycles": 2}},
+                {"name": "wake_up", "arguments": {}},
             ],
         ),
         (
             "注册书房并导航、查询、取消",
             [
-                "add_location('书房', 1, 2)",
-                "list_locations",
-                "go_to('书房')",
-                "navigation_status",
-                "cancel_navigation",
-                "navigation_status",
+                {
+                    "name": "add_location",
+                    "arguments": {"name": "书房", "x": 1, "y": 2},
+                },
+                {"name": "list_locations", "arguments": {}},
+                {"name": "go_to", "arguments": {"location": "书房"}},
+                {"name": "navigation_status", "arguments": {}},
+                {"name": "cancel_navigation", "arguments": {}},
+                {"name": "navigation_status", "arguments": {}},
             ],
         ),
         (
             "播放音乐、队列切歌、推荐与停止",
             [
-                "play_song('小幸运')",
-                "add_to_queue('夜曲')",
-                "next_song",
-                "recommend_songs",
-                "music_status",
-                "stop_music",
-                "music_status",
+                {"name": "play_song", "arguments": {"song_name": "小幸运"}},
+                {"name": "add_to_queue", "arguments": {"song_name": "夜曲"}},
+                {"name": "next_song", "arguments": {}},
+                {"name": "recommend_songs", "arguments": {}},
+                {"name": "music_status", "arguments": {}},
+                {"name": "stop_music", "arguments": {}},
+                {"name": "music_status", "arguments": {}},
             ],
         ),
         (
             "音量、静音与模拟WiFi显示",
             [
-                "volume_set(80)",
-                "volume_down",
-                "volume_mute",
-                "volume_status",
-                "volume_unmute",
-                "show_wifi_info",
-                "get_wifi_ip",
-                "wifi_status",
+                {"name": "volume_set", "arguments": {"level": 80}},
+                {"name": "volume_down", "arguments": {}},
+                {"name": "volume_mute", "arguments": {}},
+                {"name": "volume_status", "arguments": {}},
+                {"name": "volume_unmute", "arguments": {}},
+                {"name": "show_wifi_info", "arguments": {}},
+                {"name": "get_wifi_ip", "arguments": {}},
+                {"name": "wifi_status", "arguments": {}},
             ],
         ),
         (
             "未知目标失败后不能继续动作",
             [
-                "navigate_to('不存在')",
-                "head_smile",
+                {"name": "navigate_to", "arguments": {"location": "不存在"}},
+                {"name": "head_smile", "arguments": {}},
             ],
         ),
     ]
 
     # 2. 始终从交互输入提交，观察可信回执，不调用私有执行器。
     for text, functions in scenarios:
-        provider.functions = functions
+        provider.actions = functions
         result = await agent.submit(text)
         print(
             json.dumps(

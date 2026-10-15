@@ -43,11 +43,11 @@ def test_busy_application_keeps_session_awake_until_turn_finishes(tmp_path):
         original = model.complete
         entered, release = threading.Event(), threading.Event()
 
-        def complete(text, timeout):
+        def complete(text, timeout, *, tools=None):
             """模拟在途模型请求。"""
             entered.set()
             release.wait(2)
-            return original(text, timeout)
+            return original(text, timeout, tools=tools)
 
         model.complete = complete
         turn = asyncio.create_task(application.submit_transcript("请点头"))

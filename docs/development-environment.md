@@ -131,3 +131,9 @@ Source packages under `ros2_ws/src` remain colcon-owned even when Python wheels
 with similar names exist. Model files, SDK headers, credentials, `.venv`, and
 `ros2_ws/{build,install,log}` stay outside source commits. Tracking remains in
 its existing dry-run configuration.
+
+Action input validation uses pinned Pydantic 2.10.6 and pydantic-core 2.27.2.
+The CPython 3.8 manylinux ARM64 wheel was installed and executed on the board;
+Schema generation, JSON roundtrip, defaults and strict numeric validation run
+through the native registry tests. These checks do not claim cloud endpoint
+acceptance of every JSON Schema keyword.

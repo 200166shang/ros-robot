@@ -1,29 +1,57 @@
 """从文本交互 Interface 验证在线回合行为。"""
 
 import asyncio
-import json
 import threading
 import time
+from typing import Any, Dict, Optional
 
 import robot_agent.actions.execution as execution
 from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.actions.contracts import ActionInput, Number
 from robot_agent.actions.registry import ActionHandler
 from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
+from robot_agent.results import ModelReply, ToolCall
+
+
+class PitchInput(ActionInput):
+    """外部设备的显式角度参数。"""
+
+    pitch: Number = 90
+
+
+class DisplayInput(ActionInput):
+    """外部显示设备的显式参数。"""
+
+    message: str = "默认"
+    options: Optional[Dict[str, Any]] = None
+
+
+class CustomLevelInput(ActionInput):
+    """测试能力目录的默认值和别名。"""
+
+    level: Number = 5
 
 
 class FixedProvider:
     """替代外部模型，提供固定的完整输出或流式片段。"""
 
-    def __init__(self, functions=(), response="你好"):
+    def __init__(self, actions=(), response="你好"):
         """保存本轮模型输出。"""
-        self.functions = functions
+        self.actions = actions
         self.response = response
 
-    def complete(self, text, timeout):
-        """返回旧在线契约的 JSON。"""
-        return json.dumps(
-            {"function": list(self.functions), "response": self.response}
+    def complete(self, text, timeout, *, tools=None):
+        """返回完整的原生模型记录。"""
+        return ModelReply(
+            self.response,
+            ToolCall(
+                "fixture_call",
+                "execute_actions",
+                {"actions": list(self.actions)},
+            )
+            if self.actions
+            else None,
         )
 
 
@@ -43,7 +71,11 @@ def test_chat_and_repeated_actions_across_turns():
     provider = FixedProvider()
     agent = Agent(provider, create_default_actions().registry)
     assert asyncio.run(agent.submit("你好")).reply == "你好"
-    provider.functions = ["head_nod", "head_smile", "head_nod"]
+    provider.actions = [
+        {"name": "head_nod", "arguments": {}},
+        {"name": "head_smile", "arguments": {}},
+        {"name": "head_nod", "arguments": {}},
+    ]
     first = asyncio.run(agent.submit("点头微笑点头"))
     second = asyncio.run(agent.submit("再做一次"))
     assert [a.name for a in first.actions] == [
@@ -73,7 +105,10 @@ def test_invalid_list_executes_nothing():
         "head_nod(x=1)",
         "head_nod(__import__('os'))",
     ):
-        agent = Agent(FixedProvider(["device", invalid]), registry)
+        agent = Agent(
+            FixedProvider([{"name": "device", "arguments": {}}, invalid]),
+            registry,
+        )
         assert asyncio.run(agent.submit("执行")).status == "rejected"
     assert events == []
 
@@ -88,7 +123,14 @@ def test_failure_stops_and_reports_remaining():
 
     registry.register("failure", fail)
     agent = Agent(
-        FixedProvider(["head_nod", "failure", "head_smile"], "已经全成功"),
+        FixedProvider(
+            [
+                {"name": "head_nod", "arguments": {}},
+                {"name": "failure", "arguments": {}},
+                {"name": "head_smile", "arguments": {}},
+            ],
+            "已经全成功",
+        ),
         registry,
     )
     result = asyncio.run(agent.submit("执行"))
@@ -100,15 +142,22 @@ def test_failure_stops_and_reports_remaining():
     assert "已经全成功" not in result.reply
 
 
-def test_stream_fragments_execute_list_once():
-    """增量片段组装完毕后列表只执行一次，兼容本地契约。"""
+def test_complete_model_reply_executes_plan_once():
+    """完整模型记录保留计划中的重复动作。"""
 
     class StreamProvider:
         """代表增量在线模型输出。"""
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """按字符提供 JSON 片段。"""
-            return iter('{"fc":["head_nod","head_nod"],"res":"已完成"}')
+            return ModelReply(
+                "已完成",
+                ToolCall(
+                    "fixture_call",
+                    "execute_actions",
+                    {"actions": [{"name": "head_nod", "arguments": {}}] * 2},
+                ),
+            )
 
     result = asyncio.run(
         Agent(StreamProvider(), create_default_actions().registry).submit(
@@ -134,7 +183,14 @@ def test_action_timeout_is_unknown_and_busy_until_return():
     registry = create_default_actions().registry
     registry.register("slow", slow)
     agent = Agent(
-        FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
+        FixedProvider(
+            [
+                {"name": "slow", "arguments": {}},
+                {"name": "head_nod", "arguments": {}},
+            ]
+        ),
+        registry,
+        action_timeout=0.02,
     )
     try:
         result = asyncio.run(agent.submit("执行"))
@@ -155,10 +211,17 @@ def test_provider_timeout_blocks_next_turn_until_call_finishes():
     class SlowProvider:
         """代表超出主链等待期限的模型连接。"""
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """外部释放前保持真实调用在途。"""
             released.wait(2)
-            return '{"function":["head_nod"],"response":"好了"}'
+            return ModelReply(
+                "好了",
+                ToolCall(
+                    "fixture_call",
+                    "execute_actions",
+                    {"actions": [{"name": "head_nod", "arguments": {}}]},
+                ),
+            )
 
     agent = Agent(
         SlowProvider(),
@@ -184,7 +247,15 @@ def test_exception_and_invalid_receipt_cannot_be_success():
 
     registry.register("error", error)
     result = asyncio.run(
-        Agent(FixedProvider(["error", "head_nod"]), registry).submit("执行")
+        Agent(
+            FixedProvider(
+                [
+                    {"name": "error", "arguments": {}},
+                    {"name": "head_nod", "arguments": {}},
+                ]
+            ),
+            registry,
+        ).submit("执行")
     )
     assert result.actions[0].status == "unknown"
     assert "internal secret" not in str(result)
@@ -205,12 +276,20 @@ def test_parameter_validation_precedes_all_execution():
             raise ValueError("pitch 越界")
 
     registry = create_default_actions().registry
-    registry.register("head_position", position, validate)
-    provider = FixedProvider(["head_position(70)", "head_position(pitch=200)"])
+    registry.register("head_position", position, validate, PitchInput)
+    provider = FixedProvider(
+        [
+            {"name": "head_position", "arguments": {"pitch": 70}},
+            {"name": "head_position", "arguments": {"pitch": 200}},
+        ]
+    )
     agent = Agent(provider, registry)
     assert asyncio.run(agent.submit("执行")).status == "rejected"
     assert events == []
-    provider.functions = ["head_position(70)", "head_position(pitch=80)"]
+    provider.actions = [
+        {"name": "head_position", "arguments": {"pitch": 70}},
+        {"name": "head_position", "arguments": {"pitch": 80}},
+    ]
     result = asyncio.run(agent.submit("执行"))
     assert events == [70, 80]
     assert [a.parameters for a in result.actions] == [
@@ -223,13 +302,13 @@ def test_parameter_validation_precedes_all_execution():
     ]
 
 
-def test_duplicate_json_and_unconfirmed_receipt_rejected():
-    """歧义 JSON 整表拒绝，无效设备回执报告未知。"""
+def test_standalone_protocol_mismatch_and_unconfirmed_receipt_rejected():
+    """旧协议对象不能进入动作绑定，无效设备回执报告未知。"""
 
     class DuplicateProvider:
         """提供有歧义的外部输出。"""
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """返回重复字段。"""
             return '{"function":[],"function":["head_nod"],"response":"好了"}'
 
@@ -249,7 +328,15 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
 
     registry.register("invalid", invalid)
     result = asyncio.run(
-        Agent(FixedProvider(["invalid", "head_nod"]), registry).submit("执行")
+        Agent(
+            FixedProvider(
+                [
+                    {"name": "invalid", "arguments": {}},
+                    {"name": "head_nod", "arguments": {}},
+                ]
+            ),
+            registry,
+        ).submit("执行")
     )
     assert [a.status for a in result.actions] == [
         "unknown",
@@ -257,22 +344,31 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
     ]
 
 
-def test_call_syntax_defaults_and_literal_arguments_remain_compatible():
-    """文本入口仍接受裸函数、空调用、位置/关键字参数与默认值。"""
+def test_native_parameter_defaults_and_nested_values():
+    """原生对象参数应用默认值并保留嵌套输入快照。"""
     registry = create_default_actions().registry
 
     def display(message="默认", options=None):
         """设备回执携带收到的业务参数，供交互结果观察。"""
         return {"status": "simulated_success", "detail": message}
 
-    registry.register("display", display)
+    registry.register("display", display, inputs=DisplayInput)
     provider = FixedProvider(
         [
-            "head_nod()",
-            "display",
-            "display()",
-            "display('你好', {'colors': ['red'], 'enabled': True})",
-            "display(options=None, message='关键字')",
+            {"name": "head_nod", "arguments": {}},
+            {"name": "display", "arguments": {}},
+            {"name": "display", "arguments": {}},
+            {
+                "name": "display",
+                "arguments": {
+                    "message": "你好",
+                    "options": {"colors": ["red"], "enabled": True},
+                },
+            },
+            {
+                "name": "display",
+                "arguments": {"options": None, "message": "关键字"},
+            },
         ]
     )
     result = asyncio.run(Agent(provider, registry).submit("按顺序显示"))
@@ -298,7 +394,7 @@ def test_unsupported_call_forms_reject_the_whole_list():
         "device.head_nod()",
         "head_nod(1+2)",
     ):
-        provider.functions = ["head_smile", source]
+        provider.actions = [{"name": "head_smile", "arguments": {}}, source]
         result = asyncio.run(agent.submit("执行"))
         assert result.status == "rejected"
         assert result.actions == ()
@@ -318,7 +414,13 @@ def test_late_action_requires_explicit_reconciliation():
 
     registry = create_default_actions().registry
     registry.register("slow", slow)
-    provider = FixedProvider(["head_nod", "slow", "head_smile"])
+    provider = FixedProvider(
+        [
+            {"name": "head_nod", "arguments": {}},
+            {"name": "slow", "arguments": {}},
+            {"name": "head_smile", "arguments": {}},
+        ]
+    )
     agent = Agent(provider, registry, action_timeout=0.02)
     try:
         result = asyncio.run(agent.submit("执行"))
@@ -335,7 +437,7 @@ def test_late_action_requires_explicit_reconciliation():
             "real_success",
             "not_executed",
         ]
-        provider.functions = []
+        provider.actions = []
         assert asyncio.run(agent.submit("你好")).status == "completed"
         assert result.actions[1].status == "unknown"
     finally:
@@ -352,7 +454,8 @@ def test_reporting_failure_preserves_completed_action(monkeypatch):
     monkeypatch.setattr(execution, "confirmed_action_reply", broken_reply)
     result = asyncio.run(
         Agent(
-            FixedProvider(["head_nod"]), create_default_actions().registry
+            FixedProvider([{"name": "head_nod", "arguments": {}}]),
+            create_default_actions().registry,
         ).submit("执行")
     )
     assert result.status == "failed"
@@ -380,7 +483,14 @@ def test_uncertain_late_receipt_does_not_restore_service():
         registry = create_default_actions().registry
         registry.register("slow", slow)
         agent = Agent(
-            FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
+            FixedProvider(
+                [
+                    {"name": "slow", "arguments": {}},
+                    {"name": "head_nod", "arguments": {}},
+                ]
+            ),
+            registry,
+            action_timeout=0.02,
         )
         try:
             result = asyncio.run(agent.submit("执行"))
@@ -416,7 +526,12 @@ def test_late_failure_reconciles_without_executing_remaining_actions():
 
     registry = create_default_actions().registry
     registry.register("slow_failure", slow_failure)
-    provider = FixedProvider(["slow_failure", "head_nod"])
+    provider = FixedProvider(
+        [
+            {"name": "slow_failure", "arguments": {}},
+            {"name": "head_nod", "arguments": {}},
+        ]
+    )
     agent = Agent(provider, registry, action_timeout=0.02)
     try:
         result = asyncio.run(agent.submit("执行"))
@@ -430,7 +545,7 @@ def test_late_failure_reconciles_without_executing_remaining_actions():
             "failed",
             "not_executed",
         ]
-        provider.functions = []
+        provider.actions = []
         assert asyncio.run(agent.submit("聊天")).status == "completed"
     finally:
         release.set()
@@ -452,7 +567,15 @@ def test_validation_exception_reports_its_stage_and_executes_nothing():
     registry = create_default_actions().registry
     registry.register("device", execute, validate)
     result = asyncio.run(
-        Agent(FixedProvider(["head_nod", "device"]), registry).submit("执行")
+        Agent(
+            FixedProvider(
+                [
+                    {"name": "head_nod", "arguments": {}},
+                    {"name": "device", "arguments": {}},
+                ]
+            ),
+            registry,
+        ).submit("执行")
     )
     assert result.status == "failed"
     assert result.actions == ()
@@ -473,13 +596,20 @@ def test_late_model_output_is_discarded_without_executing_actions():
             """保存外部请求次数。"""
             self.calls = 0
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """第一次返回迟到动作列表，后续返回普通聊天。"""
             self.calls += 1
             if self.calls == 1:
                 release.wait(2)
-                return '{"function":["device"],"response":"动作建议"}'
-            return '{"function":[],"response":"新的聊天"}'
+                return ModelReply(
+                    "动作建议",
+                    ToolCall(
+                        "fixture_call",
+                        "execute_actions",
+                        {"actions": [{"name": "device", "arguments": {}}]},
+                    ),
+                )
+            return ModelReply("新的聊天")
 
     def execute():
         """记录设备调用，迟到模型输出不得触发它。"""
@@ -520,15 +650,24 @@ def test_bulk_capability_loading_preserves_validation_and_replacement():
         if level < 0:
             raise ValueError("level 必须非负")
 
-    handler = ActionHandler(execute, validate)
+    handler = ActionHandler(execute, validate, CustomLevelInput)
     registry = create_default_actions().registry
     registry.register_many({"custom": handler, "alias": handler})
     registry.register_many({"head_smile": handler})
-    provider = FixedProvider(["custom(2)", "alias(level=-1)"])
+    provider = FixedProvider(
+        [
+            {"name": "custom", "arguments": {"level": 2}},
+            {"name": "alias", "arguments": {"level": -1}},
+        ]
+    )
     agent = Agent(provider, registry)
     assert asyncio.run(agent.submit("执行")).status == "rejected"
     assert calls == []
-    provider.functions = ["custom(2)", "alias(level=3)", "head_smile"]
+    provider.actions = [
+        {"name": "custom", "arguments": {"level": 2}},
+        {"name": "alias", "arguments": {"level": 3}},
+        {"name": "head_smile", "arguments": {}},
+    ]
     assert asyncio.run(agent.submit("执行")).status == "completed"
     assert calls == [2, 3, 5]
 
@@ -554,7 +693,12 @@ def test_execution_flow_failure_preserves_pending_and_skips_memory(
     registry = create_default_actions().registry
     registry.register("action", action)
     memory = ConversationMemory(tmp_path / "memory.json")
-    provider = FixedProvider(["action", "head_nod"])
+    provider = FixedProvider(
+        [
+            {"name": "action", "arguments": {}},
+            {"name": "head_nod", "arguments": {}},
+        ]
+    )
     agent = Agent(provider, registry, memory=memory)
     with monkeypatch.context() as patch:
         patch.setattr(execution, "wait", broken_wait)
@@ -571,7 +715,7 @@ def test_execution_flow_failure_preserves_pending_and_skips_memory(
     assert reconciled.actions[0].data == {"enabled": True}
     assert result.actions[0].status == "unknown"
     assert calls == ["sent"]
-    provider.functions = []
+    provider.actions = []
     assert asyncio.run(agent.submit("下一轮")).status == "completed"
 
 
@@ -589,7 +733,14 @@ def test_reconciled_turn_cannot_clear_later_pending_turn():
     registry = create_default_actions().registry
     registry.register("slow", slow)
     agent = Agent(
-        FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
+        FixedProvider(
+            [
+                {"name": "slow", "arguments": {}},
+                {"name": "head_nod", "arguments": {}},
+            ]
+        ),
+        registry,
+        action_timeout=0.02,
     )
     try:
         first = asyncio.run(agent.submit("第一轮"))

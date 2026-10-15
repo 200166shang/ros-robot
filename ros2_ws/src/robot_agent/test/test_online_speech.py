@@ -14,15 +14,19 @@ import websocket
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
+from robot_agent.results import ModelReply
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 
 
 class FixedModel:
     """从固定识别文本生成确定的普通聊天。"""
 
-    def complete(self, text, timeout):
+    def complete(self, text, timeout, *, tools=None):
         """输入原样出现在回复中，便于检测中间句或重复句。"""
-        return json.dumps({"function": [], "response": text})
+        return ModelReply(
+            text,
+            None,
+        )
 
 
 class SpeechSocket:

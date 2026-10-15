@@ -1,6 +1,6 @@
 # 在线会话记忆（#66）
 
-记忆职责集中在 `ConversationMemory`。交互先收齐回复并确认动作结果，再更新记忆；provider 仍使用 `complete(text, timeout)`，上下文作为带明确标记的 JSON 用户数据提供，不覆盖系统规则。摘要复用真实在线 provider 的 function/response 契约，只接受无动作的文字回复，不执行摘要里的动作。只收录交互实际回复，不收录模型的执行前成功承诺。
+记忆职责集中在 `ConversationMemory`。交互先收齐回复并确认动作结果，再更新记忆；provider 使用 `complete(text, timeout, tools=...)` 返回完整 `ModelReply`，上下文作为带明确标记的 JSON 用户数据提供，不覆盖系统规则。摘要请求显式设置 `tools=None`，在线请求发送 `tool_choice=none`，只接受无工具的文字回复，不执行摘要里的动作。只收录交互实际回复，不收录模型的执行前成功承诺。
 
 ## 配置及存储
 

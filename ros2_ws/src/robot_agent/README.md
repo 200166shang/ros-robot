@@ -14,8 +14,8 @@ music observation and performs no I/O. Idle input waits advance silence timing;
 processing time does not put an active session to sleep.
 
 Read a text turn in `Agent.submit` in `robot_agent/conversation/agent.py`: obtain
-memory context, await the model, validate the whole action list, execute in order,
-then update memory. The Agent has no audio dependency. `ActionExecution` owns
+memory context, await a complete `ModelReply`, bind the whole native plan,
+execute in order, then update memory. The Agent has no audio dependency. `ActionExecution` owns
 submitted device operations, unknown results, and explicit reconciliation. Model
 or summary calls still in flight block a new request; an unknown action blocks
 new actions until the original receipt is explicitly reconciled.
@@ -29,8 +29,18 @@ retains the existing result JSON and simulated device behavior.
 The temporary `legacy_io.py` Adapters own the still-blocking operations. Each
 Agent owns model, execution, and memory call handles; the application owns speech
 input and output Adapters. A wait ending does not cancel an underlying operation.
-The old model protocol and device receipt dictionaries remain only at temporary
-Adapters; execution, Agent, application, and output exchange named records.
+The model Adapter owns JSON/SSE assembly and returns a complete `ModelReply`.
+It exposes one native `execute_actions` tool; ordinary chat is plain model text.
+Summaries explicitly disable tools. `actions/contracts.py` declares small strict
+Pydantic input models; `ActionRegistry.tool_schema` and `bind_plan` share these
+models for Schema, validation and defaults. The catalog preserves aliases, order
+and repeats. An invalid final item prevents every action from executing. Internal
+`invoke(command, deadline)` passes a deadline to waiting device implementations;
+no execution deadline appears in model parameters. Device receipt dictionaries
+exist only at device Adapters; the registry returns an `ActionReceipt`.
+`ExecutionResult.tool_call_id` keeps the native call associated with execution
+and reconciliation without changing the external result JSON. The memory stores
+plain exchanges, so it does not persist unpaired native tool messages.
 Native network/audio I/O and a total shutdown budget are subsequent migration
 steps; the accepted `aclose(deadline)` shape does not yet impose that total
 budget. The ROS edge temporarily hosts the asyncio

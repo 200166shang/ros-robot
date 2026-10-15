@@ -1,13 +1,13 @@
 """通过交互输入验证近期上下文、摘要重启和清空。"""
 
 import asyncio
-import json
 import threading
 import time
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
+from robot_agent.results import ModelReply, ToolCall
 
 
 class MemoryProvider:
@@ -17,7 +17,7 @@ class MemoryProvider:
         """记录外部请求，提供可复现摘要。"""
         self.inputs = []
 
-    def complete(self, text, timeout):
+    def complete(self, text, timeout, *, tools=None):
         """按真实 JSON 契约回答或摘要，不执行动作。"""
         self.inputs.append(text)
         response = "记住了"
@@ -25,7 +25,10 @@ class MemoryProvider:
             response = "用户喜欢蓝色。"
         elif "用户喜欢蓝色。" in text or "我喜欢蓝色" in text:
             response = "蓝色"
-        return json.dumps({"function": [], "response": response})
+        return ModelReply(
+            response,
+            None,
+        )
 
 
 def test_context_summary_restart_and_clear(tmp_path):
@@ -61,11 +64,11 @@ def test_summary_failure_keeps_context_bounded(tmp_path):
     class FailingProvider(MemoryProvider):
         """代表摘要请求失败的外部在线模型。"""
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """正常对话可用，摘要发生明确外部故障。"""
             if "【摘要任务】" in text:
                 raise OSError("provider unavailable")
-            return super().complete(text, timeout)
+            return super().complete(text, timeout, tools=tools)
 
     provider = FailingProvider()
     agent = Agent(
@@ -125,12 +128,12 @@ def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
     class SlowProvider(MemoryProvider):
         """代表超过交互期限的在线摘要。"""
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """摘要等待外部释放，正常对话立即响应。"""
             if "【摘要任务】" in text:
                 released.wait(2)
                 finished.set()
-            return super().complete(text, timeout)
+            return super().complete(text, timeout, tools=tools)
 
     agent = Agent(
         SlowProvider(),
@@ -178,13 +181,18 @@ def test_summary_actions_are_rejected_without_execution(tmp_path):
     class ActionSummaryProvider(MemoryProvider):
         """代表摘要包含动作的无效在线回复。"""
 
-        def complete(self, text, timeout):
+        def complete(self, text, timeout, *, tools=None):
             """摘要提出动作，普通请求仍按固定聊天回复。"""
             if "【摘要任务】" in text:
-                return json.dumps(
-                    {"function": ["head_nod"], "response": "错误摘要"}
+                return ModelReply(
+                    "错误摘要",
+                    ToolCall(
+                        "fixture_call",
+                        "execute_actions",
+                        {"actions": [{"name": "head_nod", "arguments": {}}]},
+                    ),
                 )
-            return super().complete(text, timeout)
+            return super().complete(text, timeout, tools=tools)
 
     events = []
 

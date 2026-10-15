@@ -6,7 +6,15 @@ from copy import deepcopy
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional
 
-from robot_agent.actions.contracts import ActionHandler
+from robot_agent.actions.contracts import (
+    ActionHandler,
+    LevelInput,
+    LocationInput,
+    PoseInput,
+    RecommendationInput,
+    SongInput,
+    StepInput,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -122,11 +130,15 @@ def navigation_actions(
     navigation: NavigationSimulation,
 ) -> Dict[str, ActionHandler]:
     """导航动作与校验在本能力旁定义，别名共享同一个处理器。"""
-    navigate = ActionHandler(navigation.navigate_to, validate_location)
+    navigate = ActionHandler(
+        navigation.navigate_to, validate_location, LocationInput
+    )
     return {
         "navigate_to": navigate,
         "go_to": navigate,
-        "add_location": ActionHandler(navigation.add_location, validate_pose),
+        "add_location": ActionHandler(
+            navigation.add_location, validate_pose, PoseInput
+        ),
         "cancel_navigation": ActionHandler(navigation.cancel_navigation),
         "navigation_status": ActionHandler(navigation.navigation_status),
         "list_locations": ActionHandler(navigation.list_locations),
@@ -216,13 +228,15 @@ class MusicSimulation:
 
 def music_actions(music: MusicSimulation) -> Dict[str, ActionHandler]:
     """音乐能力集中声明播放、队列和查询的执行及参数契约。"""
-    play = ActionHandler(music.play_music, validate_song)
+    play = ActionHandler(music.play_music, validate_song, SongInput)
     return {
         "play_music": play,
         "play_song": play,
-        "add_to_queue": ActionHandler(music.add_to_queue, validate_song),
+        "add_to_queue": ActionHandler(
+            music.add_to_queue, validate_song, SongInput
+        ),
         "recommend_songs": ActionHandler(
-            music.recommend_songs, validate_recommendation
+            music.recommend_songs, validate_recommendation, RecommendationInput
         ),
         "stop_music": ActionHandler(music.stop_music),
         "next_song": ActionHandler(music.next_song),
@@ -287,9 +301,13 @@ class VolumeSimulation:
 def volume_actions(volume: VolumeSimulation) -> Dict[str, ActionHandler]:
     """音量能力声明修改与查询动作，校验与实现保持相邻。"""
     return {
-        "volume_up": ActionHandler(volume.volume_up, validate_step),
-        "volume_down": ActionHandler(volume.volume_down, validate_step),
-        "volume_set": ActionHandler(volume.volume_set, validate_level),
+        "volume_up": ActionHandler(volume.volume_up, validate_step, StepInput),
+        "volume_down": ActionHandler(
+            volume.volume_down, validate_step, StepInput
+        ),
+        "volume_set": ActionHandler(
+            volume.volume_set, validate_level, LevelInput
+        ),
         "volume_mute": ActionHandler(volume.volume_mute),
         "volume_unmute": ActionHandler(volume.volume_unmute),
         "volume_status": ActionHandler(volume.volume_status),

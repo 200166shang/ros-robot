@@ -62,8 +62,11 @@ transcript、音频与会话状态后，由正常节点发布/online_agent/resul
 交互状态为completed/failed/rejected/busy；动作保持原顺序和绑定参数，
 状态为simulated_success/real_success/failed/unknown/not_executed。
 
-模型接受function/response或fc/res；动作字符串只解析字面量参数，
-不使用eval。完整动作列表先校验，全部有效后才顺序执行；失败停止余项，
+模型使用原生 tools/tool_calls，一次 execute_actions 携带完整有序计划。
+参数形式为 actions 数组，每项包含 name 和 arguments 对象；不再解析 Python
+调用字符串。小型输入模型统一生成 Schema、校验严格类型并绑定默认值，
+内部 deadline 不对模型开放。完整动作列表先校验，全部有效后才顺序执行；
+失败停止余项，
 有意重复不去重。动作回复只依据确认回执，不采用模型提前成功承诺。
 完整动作与模拟范围见[业务清单](online-agent-inventory.md)。
 

@@ -1,10 +1,10 @@
 """通过共同组装Interface验证配置、文本交互与持久记忆。"""
 
 import asyncio
-import io
 import json
 
 import pytest
+from native_protocol_fixture import native_response
 
 from robot_agent.actions.registry import ActionRegistry
 from robot_agent.runtime import build_agent, load_config
@@ -19,11 +19,7 @@ def install_model_transport(monkeypatch):
         body = json.loads(request.data)
         text = body["messages"][-1]["content"]
         requests.append((text, timeout))
-        reply = json.dumps({"function": [], "response": "记住 recent-marker"})
-        event = {"choices": [{"delta": {"content": reply}}]}
-        return io.BytesIO(
-            ("data: " + json.dumps(event) + "\n\ndata: [DONE]\n").encode()
-        )
+        return native_response(response="记住 recent-marker")
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixed-test-key")
     monkeypatch.setattr("urllib.request.urlopen", send)
@@ -99,12 +95,8 @@ def test_custom_actions_are_used_by_common_assembly(tmp_path, monkeypatch):
 
     def send(request, timeout):
         """提供两次相同动作，验证顺序与有意重复均保留。"""
-        reply = json.dumps(
-            {"function": ["head_nod", "head_nod"], "response": "模型承诺"}
-        )
-        event = {"choices": [{"delta": {"content": reply}}]}
-        return io.BytesIO(
-            ("data: " + json.dumps(event) + "\n\ndata: [DONE]\n").encode()
+        return native_response(
+            [{"name": "head_nod", "arguments": {}}] * 2, "模型承诺"
         )
 
     monkeypatch.setattr("urllib.request.urlopen", send)

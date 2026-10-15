@@ -207,8 +207,8 @@ def main() -> None:
             mixed = probe.submit(
                 voice,
                 "text",
-                "请严格依次调用 volume_set(35)、start_following、"
-                "head_nod、head_nod、volume_status、stop_following。",
+                "请一次提交原生 execute_actions 完整有序计划，音量设为35，"
+                "启动跟随，连续两次点头，查询音量，停止跟随。",
                 [
                     "volume_set",
                     "start_following",

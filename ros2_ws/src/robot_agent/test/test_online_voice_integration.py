@@ -13,7 +13,7 @@ from robot_agent.actions.perception import (
     perception_actions,
 )
 from robot_agent.conversation.provider import DashScopeProvider
-from robot_agent.results import result_to_json
+from robot_agent.results import ModelReply, ToolCall, result_to_json
 from robot_agent.runtime import build_application
 from robot_agent.voice.runtime import capture_turn
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
@@ -40,16 +40,26 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
         """以固定最终事件替换在线传输。"""
         return "我叫小明，请查询相机状态并点头"
 
-    def complete(self, text, timeout):
+    def complete(self, text, timeout, *, tools=None):
         """从公开 provider Interface 观察上下文与摘要请求。"""
         inputs.append(text)
         if "【摘要任务】" in text:
-            return json.dumps({"function": [], "response": "用户叫小明"})
-        return json.dumps(
-            {
-                "function": ["query_camera_status", "head_nod"],
-                "response": "模型的提前承诺",
-            }
+            return ModelReply(
+                "用户叫小明",
+                None,
+            )
+        return ModelReply(
+            "模型的提前承诺",
+            ToolCall(
+                "fixture_call",
+                "execute_actions",
+                {
+                    "actions": [
+                        {"name": "query_camera_status", "arguments": {}},
+                        {"name": "head_nod", "arguments": {}},
+                    ]
+                },
+            ),
         )
 
     def synthesize(self, text, path, timeout):
@@ -108,14 +118,16 @@ def test_wav_runtime_preserves_actions_reply_audio_and_record(
     transport(monkeypatch, sockets)
     model_inputs = []
 
-    def complete(self, text, timeout):
+    def complete(self, text, timeout, *, tools=None):
         """固定模型外部结果，保留动作解析、执行和确认回复主线。"""
         model_inputs.append(text)
-        return json.dumps(
-            {
-                "function": ["head_nod"],
-                "response": "模型的提前承诺",
-            }
+        return ModelReply(
+            "模型的提前承诺",
+            ToolCall(
+                "fixture_call",
+                "execute_actions",
+                {"actions": [{"name": "head_nod", "arguments": {}}]},
+            ),
         )
 
     monkeypatch.setattr(DashScopeProvider, "complete", complete)

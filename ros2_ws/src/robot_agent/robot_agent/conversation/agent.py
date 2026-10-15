@@ -1,7 +1,6 @@
 """在线文本交互主链路：单回合、先校验后执行、结果确认后回复。"""
 
 import asyncio
-import json
 import math
 import uuid
 from dataclasses import replace
@@ -18,35 +17,6 @@ from robot_agent.conversation.provider import TextProvider
 from robot_agent.results import ModelReply, TurnResult, make_result
 
 MAX_INPUT_LENGTH = 8192
-MAX_MODEL_OUTPUT_BYTES = 64 * 1024
-
-
-def _unique_object(pairs):
-    """拒绝重复 JSON 键，避免模型输出存在歧义。"""
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("重复 JSON 键")
-        result[key] = value
-    return result
-
-
-def parse_model_reply(raw: str) -> ModelReply:
-    """收齐后解析两种既有 JSON 契约，拒绝歧义字段与空回复。"""
-    payload = json.loads(raw, object_pairs_hook=_unique_object)
-    if not isinstance(payload, dict):
-        raise ValueError("模型输出必须为对象")
-    if set(payload) == {"function", "response"}:
-        functions, response = payload["function"], payload["response"]
-    elif set(payload) == {"fc", "res"}:
-        functions, response = payload["fc"], payload["res"]
-    else:
-        raise ValueError("模型输出字段不兼容")
-    if not isinstance(response, str) or not response.strip():
-        raise ValueError("模型回复无效")
-    if not isinstance(functions, list):
-        raise ValueError("动作列表无效")
-    return ModelReply(tuple(functions), response)
 
 
 class Agent:
@@ -68,6 +38,7 @@ class Agent:
         self._memory = memory
         self._provider = provider
         self._actions = actions
+        self._tools = actions.tool_schema
         self._provider_timeout = provider_timeout
         self._model_io = LegacyCall()
         self._execution_io = LegacyCall()
@@ -104,13 +75,16 @@ class Agent:
         try:
             # 1. 模型调用与解析失败均发生在提交任何动作之前。
             try:
-                raw = await self._model_io.run(
-                    lambda: self._collect_model_output(
-                        self._memory.context(text) if self._memory else text
+                model_reply = await self._model_io.run(
+                    lambda: self._provider.complete(
+                        self._memory.context(text) if self._memory else text,
+                        self._provider_timeout,
+                        tools=self._tools,
                     ),
                     self._provider_timeout,
                 )
-                model_reply = parse_model_reply(raw)
+                if not isinstance(model_reply, ModelReply):
+                    raise ValueError("模型必须返回完整 ModelReply")
             except asyncio.TimeoutError:
                 return make_result(
                     turn_id, "failed", "在线模型超时，本轮未发出动作。"
@@ -124,9 +98,17 @@ class Agent:
                     turn_id, "failed", "在线模型不可用，本轮未发出动作。"
                 )
 
-            # 2. 整表校验无副作用，任一失败都保证零执行。
+            # 2. 普通聊天使用模型文字；动作整表校验后才可提交。
+            tool_call = model_reply.tool_call
+            if tool_call is None:
+                return await self._remember(
+                    text,
+                    make_result(turn_id, "completed", model_reply.response),
+                )
             try:
-                commands = self._actions.validate(list(model_reply.functions))
+                if tool_call.name != "execute_actions":
+                    raise ValueError("未知工具")
+                plan = self._actions.bind_plan(tool_call.arguments)
             except (ValueError, TypeError, SyntaxError):
                 return make_result(
                     turn_id, "rejected", "动作参数无效，全部动作未执行。"
@@ -135,16 +117,13 @@ class Agent:
                 return make_result(
                     turn_id, "failed", "动作校验异常，全部动作未执行。"
                 )
-            if not commands:
-                return await self._remember(
-                    text,
-                    make_result(turn_id, "completed", model_reply.response),
-                )
 
             # 3. 动作模块维护执行事实，Agent 更新记忆。
             try:
                 result = await self._execution_io.run(
-                    lambda: self._execution.execute(commands, turn_id)
+                    lambda: self._execution.execute(
+                        plan.commands, turn_id, tool_call.call_id
+                    )
                 )
             except ActionExecutionError as error:
                 return TurnResult.from_execution(error.result)
@@ -192,9 +171,11 @@ class Agent:
         return replace(result, memory_warnings=tuple(notices))
 
     def _summarize(self, prompt: str) -> str:
-        """复用在线输出契约，摘要只取文字且禁止动作。"""
-        reply = parse_model_reply(self._collect_model_output(prompt))
-        if reply.functions:
+        """摘要请求禁用工具，只消费模型普通文字。"""
+        reply = self._provider.complete(
+            prompt, self._provider_timeout, tools=None
+        )
+        if not isinstance(reply, ModelReply) or reply.tool_call is not None:
             raise ValueError("摘要不能包含动作")
         return reply.response
 
@@ -206,16 +187,3 @@ class Agent:
             lambda: self._execution.reconcile(turn_id)
         )
         return TurnResult.from_execution(result)
-
-    def _collect_model_output(self, text: str) -> str:
-        """接受完整字符串或增量字符串流，并限制总输出大小。"""
-        output = self._provider.complete(text, self._provider_timeout)
-        chunks = [output] if isinstance(output, str) else output
-        raw = ""
-        for chunk in chunks:
-            if not isinstance(chunk, str):
-                raise ValueError("流式片段不是字符串")
-            raw += chunk
-            if len(raw.encode("utf-8")) > MAX_MODEL_OUTPUT_BYTES:
-                raise ValueError("模型输出过长")
-        return raw
