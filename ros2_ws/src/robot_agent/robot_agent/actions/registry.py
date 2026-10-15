@@ -1,114 +1,174 @@
-"""动作字符串在输入处解析，注册表负责整表校验与设备调用。"""
+"""单一目录导出原生工具 Schema，整表绑定后才允许调用设备。"""
 
-import ast
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Type
 
-from robot_agent.actions.contracts import ACTION_DEADLINE, ActionHandler
+from pydantic import Field
+from typing_extensions import Annotated
+
+from robot_agent.actions.contracts import (
+    ActionHandler,
+    ActionInput,
+    NoArguments,
+)
+from robot_agent.actions.perception import (
+    PerceptionActions,
+    perception_actions,
+)
+from robot_agent.results import ActionReceipt, _freeze, _json_value
 
 CONFIRMED_SUCCESS = frozenset({"simulated_success", "real_success"})
 DEVICE_OUTCOMES = CONFIRMED_SUCCESS | {"failed", "unknown"}
 MAX_ACTIONS = 64
-MAX_ACTION_SOURCE_LENGTH = 2048
+
+
+class RequestedAction(ActionInput):
+    """尚未绑定的单项名称和对象参数。"""
+
+    name: str
+    arguments: Dict[str, Any]
+
+
+class RequestedPlan(ActionInput):
+    """原生工具必须携带完整且有界的有序动作列表。"""
+
+    actions: Annotated[
+        List[RequestedAction], Field(min_length=1, max_length=MAX_ACTIONS)
+    ]
 
 
 @dataclass(frozen=True)
-class ActionCall:
-    """保留输入中的位置参数与关键字参数，尚未绑定设备契约。"""
+class ActionCommand:
+    """输入校验完成后的动作与不可变参数快照。"""
 
     name: str
-    args: List[Any]
-    kwargs: Dict[str, Any]
+    parameters: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        """复制参数，调用者不能在执行前改写计划。"""
+        object.__setattr__(self, "parameters", _freeze(self.parameters))
 
 
-class ActionCommand(NamedTuple):
-    """已校验的动作及绑定参数；保留 validate 原有的元组解包兼容性。"""
+@dataclass(frozen=True)
+class ActionPlan:
+    """已完整绑定的计划，保留原顺序和有意重复。"""
 
-    name: str
-    parameters: Dict[str, Any]
-
-
-def parse_action(source: str) -> ActionCall:
-    """只接受函数名称和字面量参数，不执行输入中的 Python 表达式。"""
-    if not isinstance(source, str) or len(source) > MAX_ACTION_SOURCE_LENGTH:
-        raise ValueError("动作必须是有限长度字符串")
-
-    expression = ast.parse(source, mode="eval").body
-    if isinstance(expression, ast.Name):
-        return ActionCall(expression.id, [], {})
-    if not isinstance(expression, ast.Call) or not isinstance(
-        expression.func, ast.Name
-    ):
-        raise ValueError("动作只能是函数名称或字面量参数调用")
-
-    args = [ast.literal_eval(arg) for arg in expression.args]
-    kwargs = {}
-    for keyword in expression.keywords:
-        if keyword.arg is None or keyword.arg in kwargs:
-            raise ValueError("不支持展开或重复参数")
-        kwargs[keyword.arg] = ast.literal_eval(keyword.value)
-    return ActionCall(expression.func.id, args, kwargs)
+    commands: Tuple[ActionCommand, ...]
 
 
 class ActionRegistry:
-    """集中管理动作契约；校验完整列表之后才允许交互模块执行。"""
+    """Schema、默认值绑定、业务校验和实现查找共享同一目录。"""
 
     def __init__(self) -> None:
-        """创建空注册表；能力与共享设备关系由组装处配置。"""
+        """创建空目录，能力在组装时注册。"""
         self._handlers: Dict[str, ActionHandler] = {}
+        self._perception: Optional[PerceptionActions] = None
 
     def register(
-        self, name: str, execute: Callable, validate: Optional[Callable] = None
+        self,
+        name: str,
+        execute: Callable,
+        validate: Optional[Callable] = None,
+        inputs: Type[ActionInput] = NoArguments,
+        *,
+        timed: bool = False,
     ) -> None:
-        """配置或替换设备契约；不要在回合处理中修改注册表。"""
-        self._handlers[name] = ActionHandler(
-            execute=execute, validate=validate
-        )
+        """配置明确输入模型；不从带内部参数的执行签名推导 Schema。"""
+        self._handlers[name] = ActionHandler(execute, validate, inputs, timed)
 
     def register_many(self, handlers: Mapping[str, ActionHandler]) -> None:
-        """批量加载能力表；同名覆盖沿用单项注册的配置阶段语义。"""
+        """配置阶段批量加载或替换能力。"""
         self._handlers.update(handlers)
 
-    def validate(self, functions: List[str]) -> List[ActionCommand]:
-        """全表校验无副作用，任一动作无效则不返回可执行列表。"""
-        if not isinstance(functions, list) or len(functions) > MAX_ACTIONS:
-            raise ValueError("动作列表无效或超过64项")
+    def register_perception(self, perception: PerceptionActions) -> None:
+        """注册感知能力并接管其设备准入和回执桥接生命周期。"""
+        self._perception = perception
+        self.register_many(perception_actions(perception))
 
+    def stop(self) -> None:
+        """关闭时阻止组合动作的新设备步骤。"""
+        if self._perception is not None:
+            self._perception.stop()
+
+    async def aclose(self, deadline: Optional[float]) -> None:
+        """执行已停止等待原回执之后，才释放感知Adapter。"""
+        if self._perception is not None:
+            await self._perception.aclose(deadline)
+
+    @property
+    def tool_schema(self) -> Dict[str, Any]:
+        """按目录顺序导出一个携带完整计划的原生工具。"""
+        branches = []
+        for name, handler in self._handlers.items():
+            branches.append(
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["name", "arguments"],
+                    "properties": {
+                        "name": {"type": "string", "const": name},
+                        "arguments": handler.inputs.model_json_schema(),
+                    },
+                }
+            )
+        return {
+            "type": "function",
+            "function": {
+                "name": "execute_actions",
+                "description": "完整有序计划；整表校验，失败或未知停止。",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["actions"],
+                    "properties": {
+                        "actions": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": MAX_ACTIONS,
+                            "items": {"oneOf": branches},
+                        }
+                    },
+                },
+            },
+        }
+
+    def bind_plan(self, request: Mapping[str, Any]) -> ActionPlan:
+        """整表参数和业务校验无副作用；任何失败都不返回可执行计划。"""
+        requested = RequestedPlan.model_validate(_json_value(request))
         commands = []
-        for source in functions:
-            call = parse_action(source)
-            commands.append(self._validate_action(call))
-        return commands
+        for item in requested.actions:
+            handler = self._handlers.get(item.name)
+            if handler is None:
+                raise ValueError("动作未实现：" + item.name)
+            parameters = handler.inputs.model_validate(
+                item.arguments
+            ).model_dump()
+            if handler.validate is not None:
+                handler.validate(**parameters)
+            commands.append(ActionCommand(item.name, parameters))
+        return ActionPlan(tuple(commands))
 
-    def _validate_action(self, call: ActionCall) -> ActionCommand:
-        """调用形式由设备签名约束，参数含义由设备校验器约束。"""
-        handler = self._handlers.get(call.name)
-        if handler is None:
-            raise ValueError("动作未实现：" + call.name)
-
-        parameters = inspect.signature(handler.execute).bind(
-            *call.args, **call.kwargs
-        )
-        parameters.apply_defaults()
-        if handler.validate is not None:
-            handler.validate(**parameters.arguments)
-        return ActionCommand(call.name, dict(parameters.arguments))
-
-    def execute(
-        self, name: str, parameters: Dict, deadline: Optional[float] = None
-    ) -> Dict:
-        """设备回执在 Adapter 出口确认，内部只消费统一的结果状态。"""
-        handler = self._handlers[name]
-        # 标准上下文按线程隔离，设备流程共享交互层期限，不改变动作参数。
-        token = ACTION_DEADLINE.set(deadline)
-        try:
-            receipt = handler.execute(**parameters)
-        finally:
-            ACTION_DEADLINE.reset(token)
+    async def invoke(
+        self, command: ActionCommand, deadline: float
+    ) -> ActionReceipt:
+        """直接等待异步设备；即时模拟在当前循环返回，不引入工作线程。"""
+        handler = self._handlers[command.name]
+        if handler.timed:
+            receipt = handler.execute(
+                **_json_value(command.parameters), deadline=deadline
+            )
+        else:
+            receipt = handler.execute(**_json_value(command.parameters))
+        if inspect.isawaitable(receipt):
+            receipt = await receipt
+        if isinstance(receipt, ActionReceipt):
+            return receipt
         if (
             not isinstance(receipt, dict)
             or receipt.get("status") not in DEVICE_OUTCOMES
         ):
-            return {"status": "unknown", "detail": "Adapter 未返回有效回执"}
-        return receipt
+            return ActionReceipt("unknown", "Adapter 未返回有效回执")
+        return ActionReceipt(
+            receipt["status"], receipt.get("detail", ""), receipt.get("data")
+        )

@@ -1,6 +1,6 @@
 # 在线会话记忆（#66）
 
-记忆职责集中在 `ConversationMemory`。交互先收齐回复并确认动作结果，再更新记忆；provider 仍使用 `complete(text, timeout)`，上下文作为带明确标记的 JSON 用户数据提供，不覆盖系统规则。摘要复用真实在线 provider 的 function/response 契约，只接受无动作的文字回复，不执行摘要里的动作。只收录交互实际回复，不收录模型的执行前成功承诺。
+记忆职责集中在 `ConversationMemory`。交互先收齐回复并确认动作结果，再更新记忆；Agent 显式 `await model.complete(text, deadline, tools=...)`，deadline 是阶段的绝对期限，模型 返回完整 `ModelReply`，上下文作为带明确标记的 JSON 用户数据提供，不覆盖系统规则。摘要请求显式设置 `tools=None`，在线请求发送 `tool_choice=none`，只接受无工具的文字回复，不执行摘要里的动作。只收录交互实际回复，不收录模型的执行前成功承诺。
 
 ## 配置及存储
 
@@ -18,17 +18,17 @@
 
 路径支持 `~`，不允许落在 Git 源码仓库内（包括 worktree）。摘要文件采用版本化 JSON、私有临时文件、原子替换，文件权限为 0600，新建末级目录为 0700；不包含凭证、录音或完整逐轮历史。只有成功生成摘要才保存，尚未达到阈值的近期回合不会跨重启恢复。重启时缺失文件正常启动；文件损坏、过大或读取失败不阻断启动，首个记忆更新回执报告 `load_failed`。
 
-`OnlineInteraction` 的非 ROS 调用方可注入 `memory=ConversationMemory(...)`；未注入时保留原有无记忆行为。
+`Agent` 的非 ROS 调用方可注入 `memory=ConversationMemory(...)`；未注入时保留原有无记忆行为。
 
 ## 清空与故障反馈
 
-`OnlineInteraction.clear_memory()`清空近期上下文及内存摘要，并原子保存空摘要。
+`await agent.clear_memory()`清空近期上下文及内存摘要，并原子保存空摘要。
 独立测试在同一调用者的两轮之间直接调用，返回关联turn_id、status、reply和
 memory_warnings；没有clear_memory文本话题。
 
-摘要请求仍在途时返回busy，请在其结束后重新请求清空。摘要超时不取消外部调用，其结束前新回合也返回 busy；迟到摘要可能保存，但不能与成功清空重叠。
+摘要请求仍在途时返回busy，请在其结束后重新请求清空。摘要超时会请求取消本地模型 I/O；取消清理完成前新回合也返回 busy。迟到摘要只丢弃，不保存，成功清空后没有旧摘要回写。
 
-已确定回复保持其状态和动作事实，记忆错误放在脱敏 `memory_warnings` 中：`summary_failed`、`summary_timeout`、`save_failed`、`load_failed`。不输出原始 provider 错误或记忆内容。摘要/保存的等待使用 provider_timeout；底层磁盘写入不支持取消，因此在途写入也保持 busy。
+已确定回复保持其状态和动作事实，记忆错误放在脱敏 `memory_warnings` 中：`summary_failed`、`summary_timeout`、`save_failed`、`load_failed`。不输出原始 provider 错误或记忆内容。摘要单次请求使用 provider_timeout 的独立总预算并禁用工具，不重试摘要。有限近期数据和原子磁盘保存由 ConversationMemory 同步持有；模型请求由 Agent 直接组织，不注入每回合回调。意外编程错误继续抛出，Agent.last_result 保留当前回复和动作事实。
 
 保存失败时内存摘要仍可供后续使用，但本次摘要不保证跨重启恢复；下一次成功摘要时再次保存。清空保存失败返回 failed 和 `clear_save_failed`，本进程内存已清空，磁盘旧摘要可能在重启后恢复，必须重新清空成功后再依赖重启效果。没有把失败清空伪报为持久成功。
 

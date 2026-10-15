@@ -1,26 +1,40 @@
 """真实在线记忆验收，只报告阶段结果，不输出记忆内容。"""
 
 import argparse
+import asyncio
 import multiprocessing
 import uuid
 from pathlib import Path
 
-from robot_agent.conversation.interaction import OnlineInteraction
-from robot_agent.runtime import create_interaction, load_config
+from robot_agent.conversation.agent import Agent
+from robot_agent.results import TurnResult
+from robot_agent.runtime import build_agent, load_config
 
 
 def verify_restart(config: dict, marker: str, cleared: bool) -> None:
     """在新进程重新构造 provider 和交互，仅从磁盘恢复记忆。"""
-    agent = create_interaction(config)
-    result = agent.submit("只聊天，我最喜欢的色号是什么？不知道则说明。")
-    assert result["status"] == "completed", "重启在线回合未完成"
-    assert not result["actions"], "验收不允许动作"
-    assert not result["memory_warnings"], "重启记忆存在故障"
-    if cleared:
-        assert marker not in result["reply"], "清空后仍召回旧记忆"
-    else:
-        assert marker in result["reply"], "重启摘要未召回"
-        assert agent.clear_memory()["status"] == "completed", "清空失败"
+
+    async def scenario():
+        """在线连接及清空共享同一循环，退出显式释放。"""
+        agent = build_agent(config)
+        try:
+            result = await agent.submit(
+                "只聊天，我最喜欢的色号是什么？不知道则说明。"
+            )
+            assert result.status == "completed", "重启在线回合未完成"
+            assert not result.actions, "验收不允许动作"
+            assert not result.memory_warnings, "重启记忆存在故障"
+            if cleared:
+                assert marker not in result.reply, "清空后仍召回旧记忆"
+            else:
+                assert marker in result.reply, "重启摘要未召回"
+                assert (await agent.clear_memory()).status == "completed", (
+                    "清空失败"
+                )
+        finally:
+            await agent.aclose()
+
+    asyncio.run(scenario())
 
 
 def main() -> None:
@@ -40,25 +54,29 @@ def main() -> None:
     # 色号只含随机标识，避免模型把中文字段标签当成可省略的说明。
     marker = uuid.uuid4().hex[:12]
 
-    def start() -> OnlineInteraction:
-        """通过公开交互 Interface 重新加载同一专用文件。"""
-        return create_interaction(config)
-
-    def submit(agent: OnlineInteraction, text: str) -> dict:
-        """检查真实在线回合，不在异常报告中输出用户输入或回复。"""
-        result = agent.submit(text)
-        assert result["status"] == "completed", "在线回合未完成"
-        assert not result["actions"], "验收不允许动作"
-        assert not result["memory_warnings"], "记忆阶段存在故障"
+    async def submit(agent: Agent, text: str) -> TurnResult:
+        """检查真实在线回合，不输出原始用户数据。"""
+        result = await agent.submit(text)
+        assert result.status == "completed", "在线回合未完成"
+        assert not result.actions, "验收不允许动作"
+        assert not result.memory_warnings, "记忆阶段存在故障"
         return result
 
-    # 1. 两轮达到摘要阈值，第二轮必须使用近期上下文。
-    agent = start()
-    submit(agent, "只聊天，请记住我最喜欢的色号是：" + marker)
-    result = submit(agent, "只聊天，我最喜欢的色号是什么？原样回答色号。")
-    assert marker in result["reply"], "近期上下文未召回"
-    assert args.memory_file.exists(), "持久摘要未生成"
-    print("recent_context_and_summary: passed")
+    async def recent_context() -> None:
+        """两轮和客户端关闭留在同一循环。"""
+        agent = build_agent(config)
+        try:
+            await submit(agent, "只聊天，请记住我最喜欢的色号是：" + marker)
+            result = await submit(
+                agent, "只聊天，我最喜欢的色号是什么？原样回答色号。"
+            )
+            assert marker in result.reply, "近期上下文未召回"
+            assert args.memory_file.exists(), "持久摘要未生成"
+            print("recent_context_and_summary: passed")
+        finally:
+            await agent.aclose()
+
+    asyncio.run(recent_context())
 
     # 2. spawn 独立进程，避免继承旧交互实例或内存上下文。
     context = multiprocessing.get_context("spawn")

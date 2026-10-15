@@ -25,7 +25,7 @@ planned in #67. It never publishes device commands or motion topics.
 
 ```bash
 VOICE_FIXTURE=/home/orangepi/local-data/ros-robot/voice-fixtures/your-test.wav
-ros2 run robot_voice voice_frontend --ros-args \
+./scripts/dev.sh ros run robot_voice voice_frontend --ros-args \
   -p audio_source:=wav_file \
   -p input_wav_path:="$VOICE_FIXTURE" \
   -p play_audio:=false
@@ -37,4 +37,4 @@ The tracking/web demo no longer auto-starts local speech fixtures or the
 retired voice-to-local-model acceptance probe. Run this frontend explicitly
 when local speech input/output is needed.
 
-On the Orange Pi, source ROS Foxy and the workspace, then run `ros2 run robot_voice voice_frontend`. Call `ros2 service call /voice/capture std_srvs/srv/Trigger {}` and speak immediately; the default recording window is 8 seconds. During the current prototype, connect wired headphones to the board's headphone jack or use an amplified speaker to hear TTS. Without an external transducer `aplay` can succeed while the room remains silent.
+On the Orange Pi, synchronize and build the [project environment](../../../docs/development-environment.md), then run `./scripts/dev.sh ros run robot_voice voice_frontend`. The default sherpa executables come from the same interpreter's `bin` directory; external model paths remain configurable. Call `ros2 service call /voice/capture std_srvs/srv/Trigger {}` and speak immediately; the default recording window is 8 seconds. During the current prototype, connect wired headphones to the board's headphone jack or use an amplified speaker to hear TTS. Without an external transducer `aplay` can succeed while the room remains silent.

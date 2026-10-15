@@ -1,16 +1,35 @@
 """在线交互共同组装：读取外部配置，集中解释依赖和默认值。"""
 
 import json
+import math
 from pathlib import Path
 from typing import Dict, Optional, Union
 
-from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.actions.capabilities import (
+    ActionCapabilities,
+    create_default_actions,
+)
 from robot_agent.actions.registry import ActionRegistry
-from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.application import AgentApplication
+from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import DashScopeProvider
+from robot_agent.voice.live_input import LiveSpeechInput, SpeechInput
+from robot_agent.voice.output import Playback
+from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
+from robot_audio.async_pcm_input import AsyncPcmMicrophone
+from robot_audio.async_playback import AsyncWavPlayer
 
 DEFAULT_ACTION_TIMEOUT = 5.0
+DEFAULT_SHUTDOWN_TIMEOUT = 5.0
+
+
+def shutdown_timeout(config: Dict) -> float:
+    """退出预算在外部配置边缘统一验证，后代只接收绝对期限。"""
+    timeout = float(config.get("shutdown_timeout", DEFAULT_SHUTDOWN_TIMEOUT))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("shutdown_timeout 必须为正有限秒数")
+    return timeout
 
 
 def load_config(filename: Union[str, Path]) -> Dict:
@@ -23,16 +42,17 @@ def load_config(filename: Union[str, Path]) -> Dict:
     return config
 
 
-def create_interaction(
+def build_agent(
     config: Dict, actions: Optional[ActionRegistry] = None
-) -> OnlineInteraction:
+) -> Agent:
     """组装同一交互Implementation；文本测试直接调用，无ROS文本入口。"""
     if actions is None:
         actions = create_default_actions().registry
-    return OnlineInteraction(
+    return Agent(
         DashScopeProvider(config),
         actions,
         provider_timeout=float(config.get("provider_timeout", 60)),
+        model_attempts=config.get("model_attempts", 3),
         action_timeout=float(
             config.get("action_timeout", DEFAULT_ACTION_TIMEOUT)
         ),
@@ -47,3 +67,59 @@ def create_interaction(
             summary_trigger=config.get("memory_summary_trigger", 6),
         ),
     )
+
+
+def build_application(
+    config: Dict,
+    capabilities: Optional[ActionCapabilities] = None,
+    speech_input: Optional[SpeechInput] = None,
+    *,
+    input_mode: str = "recording",
+) -> AgentApplication:
+    """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
+    close_timeout = shutdown_timeout(config)
+    directory = Path(config["output_dir"]).expanduser().resolve()
+    checkout = Path(__file__).resolve().parents[4]
+    if directory == checkout or checkout in directory.parents:
+        raise ValueError("output_dir 必须在源码目录外")
+    if capabilities is None:
+        capabilities = create_default_actions()
+    playback: Optional[Playback] = None
+    if config.get("playback_enabled", False):
+        playback = AsyncWavPlayer(
+            config.get("play_executable", "aplay"),
+            config.get("play_device", "default"),
+        )
+
+    recording_input = None
+    if speech_input is None:
+        if input_mode == "microphone":
+            speech_input = LiveSpeechInput(
+                config,
+                AsyncPcmMicrophone(
+                    config.get("record_executable", "arecord"),
+                    config.get("record_device", "default"),
+                ),
+            )
+        elif input_mode == "recording":
+            recording_input = DashScopeASR(config)
+        else:
+            raise ValueError("未知语音输入模式")
+
+    voice = AgentApplication(
+        build_agent(config, capabilities.registry),
+        speech_input,
+        DashScopeTTS(config),
+        directory,
+        music_playing=capabilities.music_playing,
+        playback=playback,
+        silence_timeout=float(config.get("silence_timeout", 120)),
+        speech_timeout=float(config.get("speech_timeout", 60)),
+        tts_attempts=int(config.get("tts_attempts", 3)),
+        failure_threshold=int(config.get("tts_failure_threshold", 5)),
+        retry_delay=float(config.get("tts_retry_delay", 1)),
+        recording_input=recording_input,
+        shutdown_timeout=close_timeout,
+    )
+
+    return voice

@@ -1,12 +1,14 @@
 """经真实 provider Interface 验证提示词加载与在线请求契约。"""
 
-import io
+import asyncio
 import json
 
 import pytest
+from native_protocol_fixture import install_async_transport, native_response
 
 from robot_agent.actions.capabilities import create_default_actions
-from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.agent import Agent
+from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import DashScopeProvider
 
 
@@ -17,42 +19,31 @@ def captured_requests(monkeypatch):
 
     def send(request, timeout):
         """替代外部 HTTPS 响应，记录真实请求并返回流式聊天。"""
-        requests.append(json.loads(request.data))
-        content = json.dumps({"function": [], "response": "你好"})
-        event = {"choices": [{"delta": {"content": content}}]}
-        return io.BytesIO(
-            ("data: " + json.dumps(event) + "\n\ndata: [DONE]\n").encode()
-        )
+        requests.append(json.loads(request.content))
+        return native_response(response="你好")
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    monkeypatch.setattr("urllib.request.urlopen", send)
+    install_async_transport(monkeypatch, send)
     return requests
 
 
-def test_default_prompt_preserves_legacy_contract(captured_requests):
-    """请求保留旧人设、格式、动作示例与目录，同时限定当前执行能力。"""
-    agent = OnlineInteraction(
-        DashScopeProvider({}), create_default_actions().registry
-    )
-    assert agent.submit("你好")["reply"] == "你好"
-    prompt = captured_requests[0]["messages"][0]["content"]
+def test_default_prompt_uses_native_plan_contract(captured_requests):
+    """提示词保留人设与部署语义，目录仅从工具 Schema 导出。"""
+    agent = Agent(DashScopeProvider({}), create_default_actions().registry)
+    assert asyncio.run(agent.submit("你好")).reply == "你好"
+    body = captured_requests[0]
+    prompt = body["messages"][0]["content"]
     for required in (
         "用户创造的科研AI",
         "技术精准与情感共鸣",
-        "【输出json格式】",
-        'play_music("小幸运")',
-        "head_position",
-        "head_listen",
-        "volume_set",
-        "start_following",
-        "go_to",
-        "show_wifi_info",
-        "【当前 ROS 2 部署约束】",
-        "volume_set(level=50)",
-        "真实感知动作：",
-        "stop_camera_collection",
+        "execute_actions",
+        "dry-run",
+        "【内部会话摘要】",
     ):
         assert required in prompt
+    assert body["tools"][0] == create_default_actions().registry.tool_schema
+    assert body["tool_choice"] == "auto"
+    assert "response_format" not in body
 
 
 def test_external_prompt_file_overrides_packaged_default(
@@ -61,12 +52,12 @@ def test_external_prompt_file_overrides_packaged_default(
 ):
     """源码外 UTF-8 提示词原样进入 system message，不回退到默认内容。"""
     prompt_file = tmp_path / "prompt.txt"
-    prompt_file.write_text("定制提示词，保留 JSON 契约。", encoding="utf-8")
+    prompt_file.write_text("定制提示词，遵循原生工具契约。", encoding="utf-8")
     provider = DashScopeProvider({"system_prompt_file": str(prompt_file)})
-    agent = OnlineInteraction(provider, create_default_actions().registry)
-    assert agent.submit("你好")["status"] == "completed"
+    agent = Agent(provider, create_default_actions().registry)
+    assert asyncio.run(agent.submit("你好")).status == "completed"
     assert captured_requests[0]["messages"][0]["content"] == (
-        "定制提示词，保留 JSON 契约。"
+        "定制提示词，遵循原生工具契约。"
     )
 
 
@@ -84,3 +75,36 @@ def test_invalid_external_prompt_fails_at_startup(
     with pytest.raises(error):
         DashScopeProvider({"system_prompt_file": str(prompt_file)})
     assert captured_requests == []
+
+
+def test_summary_request_disables_native_tools(tmp_path, monkeypatch):
+    """摘要使用真实请求构造禁用工具，不为动作回复额外请求模型措辞。"""
+
+    requests = []
+
+    def send(request, timeout):
+        """先返回原生动作，再返回纯文字摘要。"""
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            return native_response(
+                [{"name": "head_nod", "arguments": {}}], "我已完成"
+            )
+        return native_response(response="只记录模拟 LCD 已确认")
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-key")
+    install_async_transport(monkeypatch, send)
+    agent = Agent(
+        DashScopeProvider({}),
+        create_default_actions().registry,
+        memory=ConversationMemory(tmp_path / "memory.json", 1, 1),
+    )
+    result = asyncio.run(agent.submit("点头"))
+    assert result.status == "completed"
+    assert result.memory_warnings == ()
+    assert len(requests) == 2
+    summary = requests[1]
+    assert summary["tool_choice"] == "none"
+    assert "tools" not in summary
+    assert "【摘要任务】" in summary["messages"][-1]["content"]
+    assert result.reply.startswith("head_nod：模拟成功")

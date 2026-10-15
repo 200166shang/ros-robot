@@ -1,8 +1,33 @@
+[project]
+name = "ros-robot-environment"
+version = "0.1.0"
+requires-python = "==3.8.*"
+dependencies = [
+    "Flask==3.0.3",
+    "websockets==13.1",
+    "sherpa-onnx-bin==1.13.8",
+    "pydantic==2.10.6",
+    "typing-extensions==4.13.2",
+    "httpx==0.28.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==7.4.4",
+    "ruff==0.13.3",
+    "setuptools==68.2.2",
+]
+
+[tool.uv]
+package = false
+required-version = "==0.8.22"
+environments = ["sys_platform == 'linux' and platform_machine == 'aarch64'"]
+
 [tool.ruff]
 # ROS 2 Foxy uses Python 3.8; scope checks to migrated online/demo modules.
 target-version = "py38"
 line-length = 79
-include = ["pyproject.toml", "**/online_*.py", "**/robot_agent/**/*.py", "**/robot_agent/setup.py", "**/robot_audio/audio_io.py", "**/robot_audio/pcm_input.py", "**/test_pcm_input.py", "**/robot_audio/audio_sources.py", "**/test_audio_io.py", "**/test_audio_sources.py", "**/robot_audio/setup.py", "**/robot_audio/__init__.py", "**/voice_frontend_node.py", "**/test_online_*.py", "**/tracking_control_node.py", "**/person_tracking_demo.launch.py", "**/online_agent.launch.py", "**/tracking_control_acceptance_probe.py", "**/test_tracking_launch.py"]
+include = ["pyproject.toml", "tests/test_dev_commands.py", "scripts/verify_environment.py", "**/online_*.py", "**/robot_agent/**/*.py", "**/robot_agent/test/conftest.py", "**/robot_agent/test/_network_isolation.py", "**/robot_agent/setup.py", "**/robot_audio/audio_io.py", "**/robot_audio/pcm_input.py", "**/robot_audio/async_pcm_input.py", "**/robot_audio/async_playback.py", "**/test_async_playback.py", "**/test_async_pcm_input.py", "**/test_pcm_input.py", "**/robot_audio/audio_sources.py", "**/test_audio_io.py", "**/test_audio_sources.py", "**/robot_audio/setup.py", "**/robot_audio/__init__.py", "**/voice_frontend_node.py", "**/test_online_*.py", "**/tracking_control_node.py", "**/person_tracking_demo.launch.py", "**/online_agent.launch.py", "**/tracking_control_acceptance_probe.py", "**/test_tracking_launch.py"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I"]

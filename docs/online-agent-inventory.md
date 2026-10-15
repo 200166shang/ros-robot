@@ -118,9 +118,9 @@ head_servo_controller、emoji/lcd、cloud_music、navigation_controller 和
 robot_following_controller，业务覆盖如下：
 
 - 配置/初始化/退出：统一 Launch 与薄 ROS 入口，外部配置/数据，有限退出。
-- ASR/唤醒/连续会话/音乐过滤：OnlineVoice + DashScopeASR，WAV/麦克风
+- ASR/唤醒/连续会话/音乐过滤：AgentApplication + VoiceSession + DashScopeASR，WAV/麦克风
   共用既有 capture Interface；重连与总期限、半双工恢复均保留。
-- LLM/执行/可信回复：OnlineInteraction 集中全表校验、按序重复、失败停止、
+- LLM/执行/可信回复：Agent 集中全表校验、按序重复、失败停止、
   busy/未知核对；所有回复和记忆保留确认事实，不播报提前成功。
 - TTS/播放：DashScopeTTS，流式合成、有限重试/文本降级/显式恢复、保留音频。
 - 摘要/近期上下文：ConversationMemory，有限近期上下文、跨重启摘要和清空。
@@ -133,7 +133,7 @@ robot_following_controller，业务覆盖如下：
 摘要记忆、精确休眠、外部配置及设备模拟。`head_position()` 无指定轴被拒绝，
 无效方向/情感/非有限数/非法四元数等在动作输入处拒绝，详见 #64契约说明；
 不复制旧源静默忽略、队列接受即成功、默认方向替换或并发去重缺陷。
-普通聊天收齐 JSON 后回复，未增加逐字话题；这是 #63/#67 已记录限度。
+普通聊天由模型 Adapter 收齐文字后回复；动作改用单一原生 execute_actions 完整计划工具，未增加逐字话题。
 本票未引入未讨论的业务变更。统一操作见[完整入口](online-agent.md)，
 真实验收与未通过限度见[综合报告](online-agent-integration-validation.md)。
 

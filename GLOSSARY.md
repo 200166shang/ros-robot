@@ -1,6 +1,7 @@
 # ROS Robot
 
-This glossary defines shared terms for the robot's sensor and perception pipelines.
+This glossary defines shared terms for the robot's sensor and perception
+pipelines and Agent interactions.
 
 ## Camera benchmark
 
@@ -65,6 +66,11 @@ The association of LiDAR measurements with camera detections to estimate the tra
 
 ## Agent actions
 
+**Action plan**:
+An ordered sequence of requested robot actions whose names and parameters
+are validated together before execution. Execution can stop partway through
+the plan while retaining confirmed outcomes and the unexecuted remainder.
+
 **Action execution**:
 Carrying out a requested sequence of robot actions while retaining confirmed
 outcomes and the unexecuted remainder. A wait ending without confirmation does
@@ -74,6 +80,17 @@ not establish whether an action occurred.
 A supported robot behavior together with the observable state associated with
 that behavior. Music playback and whether music is playing belong to the same
 capability.
+
+**Action outcome**:
+The recorded state of one action in a requested sequence, including an action
+that was not executed or whose execution remains unconfirmed.
+
+## Agent interaction
+
+**Turn result**:
+A snapshot of a submitted interaction's reply and action outcomes as known
+when reported. Later reconciliation may produce a new result without changing
+the previously reported snapshot.
 
 ## Voice input
 

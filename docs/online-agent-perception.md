@@ -51,7 +51,7 @@ failed，保留原因。Agent直接消费设备服务回执，不再读取或校
 
 ## 验收
 
-固定模型事件从 `OnlineInteraction.submit` 观察回复、动作回执与顺序。
+固定模型事件从 `await Agent.submit` 观察回复、动作回执与顺序。
 `test_online_perception_ros.py` 在隔离 ROS domain 内通过真实 ROS 传输与固定
 设备响应测试设备回执、拒绝、超时与迟到回执；这不是实机或在线模型证据。
 

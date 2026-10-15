@@ -9,8 +9,8 @@ reconcile输入话题。文本只作为ASR输出或测试数据进入交互Inter
 
 runtime.load_config读取外部UTF-8 JSON对象，支持路径中的~；
 文件、JSON语法或顶层形状错误直接显露，不静默回退。
-create_interaction集中创建模型、动作注册表和记忆；语音组装也调用它。
-ROS参数声明、ASR/TTS、录音与播放仍由对应入口负责。
+build_agent集中创建模型、动作注册表和记忆；语音组装也调用它。
+build_application统一解释ASR/TTS、录音与播放配置；ROS入口只接线设备。
 
 非敏感模型配置示例，追加到[完整配置](online-agent.md)：
 
@@ -20,13 +20,14 @@ ROS参数声明、ASR/TTS、录音与播放仍由对应入口负责。
   "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
   "api_key_env": "DASHSCOPE_API_KEY",
   "provider_timeout": 60,
+  "model_attempts": 3,
   "action_timeout": 5
 }
 ```
 
 凭证仅从环境读取，不允许明文api_key。端点必须HTTPS，模型/端点
 须与Key地域授权匹配；不会输出Key或HTTP错误正文。
-provider_timeout/action_timeout单位秒，必须为正有限数。
+provider_timeout/action_timeout单位秒，必须为正有限数。model_attempts 是 1–5 的整数，默认3；仅已分类的临时模型故障可重试，所有尝试共用 provider_timeout 总预算。永久配置、协议、Schema、整个回合与设备动作不重试。
 语音识别与合成另用speech_timeout，配置见[语音说明](online-agent-voice.md)。
 
 默认system prompt为随包安装的online_system_prompt.txt，保留旧人设、
@@ -38,15 +39,23 @@ system_prompt_file；UTF-8文件为空或不存在时启动失败，不自动回
 加载ROS及源码外安装环境，导入共同组装；不启动额外文本节点：
 
 ```python
-from robot_agent.runtime import create_interaction, load_config
+import asyncio
 
-config = load_config("/absolute/external/test-config.json")
-agent = create_interaction(config)
-result = agent.submit("你好，请只聊天")
-print(result)
-# 独立测试可在每轮完整返回后调用：
-# agent.clear_memory()
-# agent.reconcile(result["turn_id"])
+from robot_agent.runtime import build_agent, load_config
+
+async def main():
+    config = load_config("/absolute/external/test-config.json")
+    agent = build_agent(config)
+    try:
+        result = await agent.submit("你好，请只聊天")
+        print(result)
+        # 独立测试在同一循环的回合之间显式调用：
+        # await agent.clear_memory()
+        # await agent.reconcile(result.turn_id)
+    finally:
+        await agent.aclose()
+
+asyncio.run(main())
 ```
 
 默认动作注册表为明确模拟；需要真实感知时运行[独立综合探针](online-agent.md)，
@@ -60,12 +69,15 @@ transcript、音频与会话状态后，由正常节点发布/online_agent/resul
 交互状态为completed/failed/rejected/busy；动作保持原顺序和绑定参数，
 状态为simulated_success/real_success/failed/unknown/not_executed。
 
-模型接受function/response或fc/res；动作字符串只解析字面量参数，
-不使用eval。完整动作列表先校验，全部有效后才顺序执行；失败停止余项，
+模型使用原生 tools/tool_calls，一次 execute_actions 携带完整有序计划。
+参数形式为 actions 数组，每项包含 name 和 arguments 对象；不再解析 Python
+调用字符串。小型输入模型统一生成 Schema、校验严格类型并绑定默认值，
+内部 deadline 不对模型开放。完整动作列表先校验，全部有效后才顺序执行；
+失败停止余项，
 有意重复不去重。动作回复只依据确认回执，不采用模型提前成功承诺。
 完整动作与模拟范围见[业务清单](online-agent-inventory.md)。
 
-模型等待超时不取消仍在途调用，其结束前拒绝新回合。动作unknown须用
+模型等待超时请求取消原生 HTTP/SSE，本地响应和连接清理完成前拒绝新回合。动作unknown须用
 原turn_id调用reconcile；迟到回执确认成功或失败后才能解除阻塞，不补执行
 后续动作。迟到回执仍未知或异常时继续阻塞，需操作者核实设备后恢复。
 正常麦克风没有文本控制入口，恢复规则见[语音说明](online-agent-voice.md)。

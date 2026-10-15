@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
+# 保留原入口，统一交给项目解释器执行 colcon。
+set -Eeuo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "$script_dir/.." && pwd)"
-
-cd "$repo_root/ros2_ws"
-exec colcon "$@"
+exec "$script_dir/dev.sh" colcon "$@"

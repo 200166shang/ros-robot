@@ -1,6 +1,7 @@
 """将单回合本地语音输入接到 Online Agent 文本 Interface。"""
 
 import json
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -22,7 +23,7 @@ ASR_MODEL_DIR = (
     "sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16"
 )
 TTS_MODEL_DIR = "/home/orangepi/models/voice/vits-piper-zh_CN-xiao_ya-medium"
-SHERPA_BIN_DIR = "/home/orangepi/venvs/sherpa-onnx/bin"
+SHERPA_BIN_DIR = str(Path(sys.executable).parent)
 
 
 class VoiceFrontendNode(Node):
