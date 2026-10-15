@@ -180,7 +180,10 @@ def test_collecting_pauses_before_model_and_resumes_after_failure(tmp_path):
     assert speech.events[-1] == "resume"
 
 
-def test_asr_and_storage_failure_release_turn(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failed_operation", ["write_text", "replace"])
+def test_asr_and_storage_failure_release_turn(
+    tmp_path, monkeypatch, failed_operation
+):
     """识别失败不执行动作，记录写入异常也不会永久忙碌。"""
     voice, speech, model, tts = make_voice(tmp_path)
     original = speech.recognize
@@ -196,13 +199,13 @@ def test_asr_and_storage_failure_release_turn(tmp_path, monkeypatch):
     )
     assert model.inputs == []
     speech.recognize = original
-    original_write = type(tmp_path).write_text
+    original_operation = getattr(type(tmp_path), failed_operation)
 
     def fail_write(path, *args, **kwargs):
         """模拟外部磁盘失败，回执仍保留已确认的执行事实。"""
         raise OSError("disk unavailable")
 
-    monkeypatch.setattr(type(tmp_path), "write_text", fail_write)
+    monkeypatch.setattr(type(tmp_path), failed_operation, fail_write)
     result = voice.submit_recording(tmp_path / "input.wav")
     assert result["record_status"] == "failed"
     assert result["actions"][0]["status"] == "simulated_success"
@@ -210,7 +213,7 @@ def test_asr_and_storage_failure_release_turn(tmp_path, monkeypatch):
     assert result["audio_path"].endswith(result["turn_id"] + ".wav")
     assert voice.state == "standby"
     assert speech.events[-1] == "resume"
-    monkeypatch.setattr(type(tmp_path), "write_text", original_write)
+    monkeypatch.setattr(type(tmp_path), failed_operation, original_operation)
     assert (
         voice.submit_recording(tmp_path / "input.wav")["status"] == "completed"
     )
@@ -264,7 +267,9 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
         music_playing=lambda: False,
         recognize_recording=speech.recognize,
     )
+    model.functions = ["head_nod", "head_nod"]
     result = voice.submit_recording(tmp_path / "input.wav")
+    snapshot = json.loads(json.dumps(result))
     assert result["actions"][0]["status"] == "unknown"
     release.set()
     assert finished.wait(1)
@@ -272,13 +277,20 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
     deadline = time.monotonic() + 1
     while True:
         reconciled = voice.reconcile(result["turn_id"])
-        if reconciled["status"] == "completed":
+        if reconciled["actions"][0]["status"] == "simulated_success":
             break
         assert time.monotonic() < deadline
         time.sleep(0.01)
     assert reconciled["transcript"] == "请点头"
     assert reconciled["tts_status"] == "completed"
     assert executions == ["nod"]
+    assert reconciled["actions"][1]["status"] == "not_executed"
+    assert result == snapshot
+    assert model.inputs == ["请点头"]
+    assert reconciled["audio_path"].endswith(result["turn_id"] + ".wav")
+    saved = json.loads((tmp_path / (result["turn_id"] + ".json")).read_text())
+    assert saved == reconciled
+    model.functions = ["head_nod"]
     assert (
         voice.submit_recording(tmp_path / "input.wav")["status"] == "completed"
     )
