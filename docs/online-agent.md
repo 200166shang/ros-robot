@@ -48,6 +48,13 @@ source "$ONLINE_BUILD_ROOT/install/setup.bash"
 配置文件统一由online_runtime.load_config读取；模型、记忆与共同期限
 默认值集中在create_interaction。语音专属配置仍由create_voice解释。
 
+交互主线位于online_interaction：模型调用→整表校验→动作执行→记忆。
+online_execution中的ActionExecution集中持有动作Future、全表执行记录、
+超时未知状态与迟到回执；交互层只读取blocked并调用execute/reconcile。
+设备Adapter及其期限契约不变。动作未知时仍阻止下一轮，显式核对仅更新
+原回合，不自动重试、不补执行余项，已返回的结果快照保持原状。
+
+
 创建 `$HOME/.config/ros-robot/online.json`（源码外），将下面两个数据路径
 替换为自己的绝对路径。自定义 prompt 可用 `system_prompt_file`，默认
 使用安装包内完整旧人设/动作目录及部署约束，不依赖运行目录。

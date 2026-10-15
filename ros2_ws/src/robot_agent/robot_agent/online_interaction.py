@@ -2,14 +2,18 @@
 
 import json
 import math
-import threading
-import time
 import uuid
 from concurrent.futures import Future, wait
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from .online_actions import CONFIRMED_SUCCESS, ActionCommand, ActionRegistry
+from .online_actions import ActionRegistry
+from .online_execution import (
+    ActionExecution,
+    ActionExecutionError,
+    make_result,
+    start_call,
+)
 from .online_memory import ConversationMemory
 from .online_provider import TextProvider
 
@@ -23,49 +27,6 @@ class ModelReply:
 
     functions: List[str]
     response: str
-
-
-@dataclass(frozen=True)
-class PendingAction:
-    """超时调用与原回合记录，必须核对设备最终回执才能恢复接入。"""
-
-    call: Future
-    turn_id: str
-    actions: List[Dict]
-
-
-def make_result(
-    turn_id: str,
-    status: str,
-    reply: str,
-    actions: Optional[List[Dict]] = None,
-) -> Dict:
-    """统一回合结构，返回记录快照，核对迟到回执不改写已发布结果。"""
-    return {
-        "turn_id": turn_id,
-        "status": status,
-        "reply": reply,
-        "actions": [dict(action) for action in actions]
-        if actions is not None
-        else [],
-    }
-
-
-def start_call(operation: Callable[[], Any]) -> Future:
-    """隔离阻塞 I/O；Future 传回结果，不取消已提交的调用。"""
-    call = Future()
-
-    def run() -> None:
-        """把 I/O 的结果或异常交给标准 Future，不操作回合业务状态。"""
-        try:
-            result = operation()
-        except Exception as error:
-            call.set_exception(error)
-        else:
-            call.set_result(result)
-
-    threading.Thread(target=run, daemon=True, name="online-agent-io").start()
-    return call
 
 
 def _unique_object(pairs):
@@ -94,27 +55,6 @@ def parse_model_reply(raw: str) -> ModelReply:
     return ModelReply(functions, response)
 
 
-def confirmed_action_reply(actions: List[Dict]) -> str:
-    """仅根据已确认回执回复，不采用模型执行前的成功承诺。"""
-    labels = {
-        "simulated_success": "模拟成功",
-        "real_success": "真实接口确认成功",
-        "failed": "失败",
-        "unknown": "结果未知",
-        "not_executed": "未执行",
-    }
-    return (
-        "；".join(
-            action["name"]
-            + "："
-            + labels[action["status"]]
-            + ("，" + action["detail"] if action.get("detail") else "")
-            for action in actions
-        )
-        + "。"
-    )
-
-
 class OnlineInteraction:
     """单一调用者组织交互与动作核对；线程结束不等于设备确认。"""
 
@@ -134,14 +74,13 @@ class OnlineInteraction:
         self._provider = provider
         self._actions = actions
         self._provider_timeout = provider_timeout
-        self._action_timeout = action_timeout
         self._provider_call: Optional[Future] = None
-        self._pending_action: Optional[PendingAction] = None
+        self._execution = ActionExecution(actions, action_timeout)
 
     def submit(self, text: str) -> Dict:
         """单一调用者按序提交；模型仍在途或动作未知时不重叠执行。"""
         turn_id = uuid.uuid4().hex
-        if self._pending_action is not None:
+        if self._execution.blocked:
             return make_result(
                 turn_id,
                 "busy",
@@ -199,27 +138,12 @@ class OnlineInteraction:
                 make_result(turn_id, "completed", model_reply.response),
             )
 
-        # 3. 先建立全表记录，执行后的异常不能丢弃已提交动作。
-        outcomes = [
-            {
-                "name": command.name,
-                "parameters": command.parameters,
-                "status": "not_executed",
-            }
-            for command in commands
-        ]
+        # 3. 动作 Implementation 负责执行与核对事实，交互层更新记忆。
         try:
-            self._execute_actions(commands, outcomes, turn_id)
-        except Exception:
-            return make_result(
-                turn_id,
-                "failed",
-                "动作执行流程异常，请核对执行记录。",
-                outcomes,
-            )
-
-        # 4. 回复异常保留执行记录，不能归类为模型失败。
-        return self._remember(text, self._report_actions(turn_id, outcomes))
+            result = self._execution.execute(commands, turn_id)
+        except ActionExecutionError as error:
+            return error.result
+        return self._remember(text, result)
 
     def clear_memory(self) -> Dict:
         """由同一调用者清空；模型仍在途时拒绝，避免旧摘要回写。"""
@@ -261,115 +185,8 @@ class OnlineInteraction:
         return reply.response
 
     def reconcile(self, turn_id: str) -> Dict:
-        """只核对原调用的迟到回执，不重新执行；未知或异常回执不能解除阻塞。"""
-        pending = self._pending_action
-        if pending is None or pending.turn_id != turn_id:
-            return make_result(
-                turn_id, "rejected", "没有匹配的待核对动作回合。"
-            )
-        if not pending.call.done():
-            return make_result(
-                turn_id,
-                "failed",
-                "调用仍在执行，结果未知。",
-                pending.actions,
-            )
-
-        try:
-            receipt = pending.call.result()
-        except Exception:
-            receipt = {"status": "unknown"}
-        confirmed = (
-            receipt["status"] in CONFIRMED_SUCCESS
-            or receipt["status"] == "failed"
-        )
-        if not confirmed:
-            return make_result(
-                turn_id,
-                "failed",
-                "设备最终状态仍未知，请核实设备状态后重新启动入口。",
-                pending.actions,
-            )
-
-        # 仅替换超时项，未执行的后续动作保持原状，绝不补执行。
-        action = next(
-            action
-            for action in pending.actions
-            if action["status"] == "unknown"
-        )
-        action.update(
-            status=receipt["status"], detail=receipt.get("detail", "")
-        )
-        if "data" in receipt:
-            action["data"] = receipt["data"]
-        self._pending_action = None
-        return self._report_actions(turn_id, pending.actions)
-
-    def _execute_actions(
-        self,
-        commands: List[ActionCommand],
-        outcomes: List[Dict],
-        turn_id: str,
-    ) -> None:
-        """按序提交调用；超时或未知回执保留 Future 供核对。"""
-        for command, outcome in zip(commands, outcomes):
-            # 提交前先保守记为未知，任何后续异常都不会伪报未执行。
-            outcome.update(status="unknown", detail="已提交调用，等待设备回执")
-            deadline = time.monotonic() + self._action_timeout
-            try:
-                call = start_call(
-                    lambda: self._actions.execute(
-                        command.name, command.parameters, deadline
-                    )
-                )
-            except Exception:
-                outcome.update(
-                    status="failed", detail="调用提交失败，未发出设备动作"
-                )
-                break
-            self._pending_action = PendingAction(call, turn_id, outcomes)
-            if not wait(
-                [call], timeout=max(0.0, deadline - time.monotonic())
-            ).done:
-                outcome["detail"] = "已发出调用超时，执行结果未知"
-                break
-
-            try:
-                receipt = call.result()
-            except Exception:
-                outcome["detail"] = "执行异常，无法确认设备结果"
-                break
-
-            outcome.update(
-                status=receipt["status"], detail=receipt.get("detail", "")
-            )
-            if "data" in receipt:
-                outcome["data"] = receipt["data"]
-            if outcome["status"] == "unknown":
-                break
-            self._pending_action = None
-            if outcome["status"] not in CONFIRMED_SUCCESS:
-                break
-
-    def _report_actions(self, turn_id: str, outcomes: List[Dict]) -> Dict:
-        """只在报告阶段捕获格式异常，始终保留完整执行记录。"""
-        try:
-            completed = all(
-                action["status"] in CONFIRMED_SUCCESS for action in outcomes
-            )
-            return make_result(
-                turn_id,
-                "completed" if completed else "failed",
-                confirmed_action_reply(outcomes),
-                outcomes,
-            )
-        except Exception:
-            return make_result(
-                turn_id,
-                "failed",
-                "执行结果回复生成失败，请查看动作记录。",
-                outcomes,
-            )
+        """核对原调用的迟到回执，执行状态由动作模块维护。"""
+        return self._execution.reconcile(turn_id)
 
     def _collect_model_output(self, text: str) -> str:
         """接受完整字符串或增量字符串流，并限制总输出大小。"""
