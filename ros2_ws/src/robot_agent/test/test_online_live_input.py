@@ -430,6 +430,10 @@ def test_programming_errors_surface_after_resource_cleanup(
             """本机语音服务器提供可控事件并等待连接释放。"""
             await acknowledge(socket)
             sockets.append(socket)
+            if operation == "close":
+                # 实际音频已抵达才验证关闭错误，不能用固定启动延迟代替。
+                await socket.recv()
+                error_ready.set()
             await socket.wait_closed()
 
         monkeypatch.setattr(ClientConnection, "send", send)
@@ -439,6 +443,7 @@ def test_programming_errors_surface_after_resource_cleanup(
             live = LiveSpeechInput({}, source)
             if operation == "close":
                 assert await live.listen(0.03) is None
+                await asyncio.wait_for(error_ready.wait(), 2)
             else:
                 assert await live.listen(0.03) is None
                 await asyncio.wait_for(error_ready.wait(), 2)
@@ -556,5 +561,55 @@ def test_duplicate_final_cannot_be_delivered_again_after_immediate_resume(
                 assert await live.listen(0.03) is None
             finally:
                 await live.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_error_cleanup_stops_capture_when_pcm_completion_wins_cancellation(
+    monkeypatch,
+):
+    """PCM读取完成赢过一次取消时，输入关闭状态仍须停止后续采集。"""
+
+    async def scenario():
+        """复现Python3.8等待完成与取消相撞后的真实采集状态。"""
+        reading = asyncio.Event()
+        received = []
+
+        class PcmCompletionRace(PcmFixture):
+            """首次读取在取消时完成，模拟wait_for已完成分支返回结果。"""
+
+            def __init__(self):
+                """只允许一次完成赢过取消，失败测试仍能正常退出。"""
+                super().__init__()
+                self.completed_on_cancel = False
+
+            async def read(self, size, timeout=0.2):
+                """取消竞争只完成当前读取，之后的取消仍正常传播。"""
+                reading.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    if self.completed_on_cancel:
+                        raise
+                    self.completed_on_cancel = True
+                    return b"\x42\x00" * (size // 2)
+
+        async def handler(socket):
+            """真实本机协议失败必须在清理采集后从listen显露。"""
+            command = await acknowledge(socket)
+            await reading.wait()
+            await event(socket, command, "task-failed")
+            async for frame in socket:
+                received.append(frame)
+
+        async with speech_server(monkeypatch, handler):
+            source = PcmCompletionRace()
+            live = LiveSpeechInput({}, source)
+            with pytest.raises(OSError):
+                await live.listen(0.3)
+            await live.aclose()
+            assert source.completed_on_cancel
+            assert source.closed
+            assert received == []
 
     asyncio.run(scenario())

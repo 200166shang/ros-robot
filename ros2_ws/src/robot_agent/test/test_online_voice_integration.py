@@ -5,7 +5,9 @@ import json
 import wave
 from pathlib import Path
 
-from test_online_speech import SpeechSocket, fixture_wav, transport
+import pytest
+from async_speech_fixture import acknowledge, event, final, speech_server
+from test_online_speech import fixture_wav
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.perception import (
@@ -39,7 +41,7 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
         monkeypatch.setenv("DASHSCOPE_API_KEY", "fixed-test-key")
         inputs = []
 
-        def recognize(self, path, timeout):
+        async def recognize(self, path, timeout):
             """以固定最终事件替换在线传输。"""
             return "我叫小明，请查询相机状态并点头"
 
@@ -65,7 +67,7 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
                 ),
             )
 
-        def synthesize(self, text, path, timeout):
+        async def synthesize(self, text, path, timeout):
             """仅保存行为测试音频替身。"""
             path.write_bytes(b"fixed speech")
 
@@ -114,15 +116,40 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("output_failure", [None, "playback", "save"])
 def test_wav_runtime_preserves_actions_reply_audio_and_record(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, output_failure
 ):
     """独立 WAV 通过真实语音任务协议进入模型和动作主线并关联产物。"""
 
     async def scenario():
         """同一循环持有回合、连接与迟到回执。"""
-        sockets = [SpeechSocket(), SpeechSocket()]
-        transport(monkeypatch, sockets)
+        synthesized = []
+        closed = []
+
+        async def handler(socket):
+            """真实本机协议确认整文件识别与流式TTS。"""
+            command = await acknowledge(socket)
+            if command["payload"]["task"] == "asr":
+                async for message in socket:
+                    if isinstance(message, str):
+                        assert (
+                            json.loads(message)["header"]["action"]
+                            == "finish-task"
+                        )
+                        await final(socket, command, "真实句一。真实句二。")
+                        await event(socket, command, "task-finished")
+                        break
+            else:
+                synthesized.append(
+                    json.loads(await socket.recv())["payload"]["input"]["text"]
+                )
+                await socket.recv()
+                await socket.send(bytes(4800))
+                await event(socket, command, "task-finished")
+            await socket.wait_closed()
+            closed.append(True)
+
         model_inputs = []
 
         async def complete(self, text, deadline, *, tools=None):
@@ -139,31 +166,51 @@ def test_wav_runtime_preserves_actions_reply_audio_and_record(
 
         monkeypatch.setattr(DashScopeProvider, "complete", complete)
         directory = tmp_path / "output"
-        voice = build_application({"output_dir": str(directory)})
-        try:
-            result = await capture_turn(voice, str(fixture_wav(tmp_path)))
-        finally:
-            (await voice.aclose())
+        config = {"output_dir": str(directory)}
+        if output_failure == "playback":
+            player = tmp_path / "failing-player"
+            player.write_text("#!/bin/sh\nexit 7\n")
+            player.chmod(0o755)
+            config.update(playback_enabled=True, play_executable=str(player))
+        if output_failure == "save":
+            replace = Path.replace
+
+            def failing_save(path, destination):
+                """仅JSON存储失败，完整音频仍应保留。"""
+                if path.suffixes == [".json", ".tmp"]:
+                    raise OSError("disk unavailable")
+                return replace(path, destination)
+
+            monkeypatch.setattr(Path, "replace", failing_save)
+        async with speech_server(monkeypatch, handler):
+            voice = build_application(config)
+            try:
+                result = await capture_turn(voice, str(fixture_wav(tmp_path)))
+            finally:
+                await voice.aclose()
 
         assert model_inputs == ["真实句一。真实句二。"]
         assert result.transcript == model_inputs[0]
         assert result.actions[0].status == "simulated_success"
         assert "模型的提前承诺" not in result.reply
         assert result.tts_status == "completed"
-        assert (
-            sockets[1].commands[1]["payload"]["input"]["text"] == result.reply
-        )
+        assert synthesized == [result.reply]
         audio_path = Path(result.audio_path)
         assert audio_path == directory / (result.turn_id + ".wav")
         with wave.open(str(audio_path)) as audio:
             assert audio.getnframes() == 2400
-        record = json.loads(
-            (directory / (result.turn_id + ".json")).read_text()
+        assert result.playback_status == (
+            "failed" if output_failure == "playback" else None
         )
-        assert record["transcript"] == result.transcript
-        assert record["reply"] == result.reply
-        assert record["actions"] == result_to_json(result)["actions"]
-        assert record["audio_path"] == result.audio_path
-        assert all(socket.closed for socket in sockets)
+        assert result.record_status == (
+            "failed" if output_failure == "save" else "completed"
+        )
+        if output_failure != "save":
+            record = json.loads(
+                (directory / (result.turn_id + ".json")).read_text()
+            )
+            assert record == result_to_json(result)
+        assert list(directory.glob("*.tmp")) == []
+        assert closed == [True, True]
 
     asyncio.run(scenario())

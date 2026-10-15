@@ -264,7 +264,6 @@ dependencies = [
     { name = "pydantic", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
     { name = "sherpa-onnx-bin", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
     { name = "typing-extensions", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
-    { name = "websocket-client", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
     { name = "websockets", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
 ]
 
@@ -282,7 +281,6 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.10.6" },
     { name = "sherpa-onnx-bin", specifier = "==1.13.8" },
     { name = "typing-extensions", specifier = "==4.13.2" },
-    { name = "websocket-client", specifier = "==1.8.0" },
     { name = "websockets", specifier = "==13.1" },
 ]
 
@@ -365,15 +363,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f6/37/23083fcd6e35492953e8d2aaaa68b860eb422b34627b13f2ce3eb6106061/typing_extensions-4.13.2.tar.gz", hash = "sha256:e6c81219bd689f51865d9e372991c540bda33a0379d5573cddb9a3a23f7caaef", size = 106967, upload-time = "2025-04-10T14:19:05.416Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/54/b1ae86c0973cc6f0210b53d508ca3641fb6d0c56823f288d108bc7ab3cc8/typing_extensions-4.13.2-py3-none-any.whl", hash = "sha256:a439e7c04b49fec3e5d3e2beaa21755cadbbdc391694e28ccdd36ca4a1408f8c", size = 45806, upload-time = "2025-04-10T14:19:03.967Z" },
-]
-
-[[package]]
-name = "websocket-client"
-version = "1.8.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e6/30/fba0d96b4b5fbf5948ed3f4681f7da2f9f64512e1d303f94b4cc174c24a5/websocket_client-1.8.0.tar.gz", hash = "sha256:3239df9f44da632f96012472805d40a23281a991027ce11d2f45a6f24ac4c3da", size = 54648, upload-time = "2024-04-23T22:16:16.976Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/84/44687a29792a70e111c5c477230a72c4b957d88d16141199bf9acb7537a3/websocket_client-1.8.0-py3-none-any.whl", hash = "sha256:17b44cc997f5c498e809b22cdf2d9c7a9e71c02c8cc2b6c56e7c2d1239bfa526", size = 58826, upload-time = "2024-04-23T22:16:14.422Z" },
 ]
 
 [[package]]

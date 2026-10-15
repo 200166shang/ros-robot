@@ -173,7 +173,7 @@ class LiveSpeechInput:
     async def _capture(self) -> None:
         """采集独立于socket背压；最多交接最新一帧，断线和暂停不积压。"""
         last_frame = time.monotonic()
-        while True:
+        while not self._closed:
             epoch = self._epoch
             frame = await self._source.read(
                 len(SILENCE_FRAME), min(0.2, self._timeout)
@@ -183,7 +183,8 @@ class LiveSpeechInput:
                     raise OSError("麦克风PCM采集超时")
                 continue
             last_frame = time.monotonic()
-            if epoch != self._epoch:
+            # 读取完成可能赢过取消；关闭和切换后的帧都不能交给发送者。
+            if self._closed or epoch != self._epoch:
                 continue
             self._frame = (epoch, SILENCE_FRAME if self._paused else frame)
             self._frame_ready.set()

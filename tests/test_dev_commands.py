@@ -44,7 +44,7 @@ def test_sync_creates_system_compatible_environment_from_lock(tmp_path):
         + [
             "python",
             "-c",
-            "import sys, cv2, rclpy, flask, websocket; "
+            "import sys, cv2, rclpy, flask, websockets; "
             "from importlib.metadata import version; "
             "print(sys.version_info[:2]); print(sys.prefix); "
             "print(sys.base_prefix); print(cv2.__version__); "

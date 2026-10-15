@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Awaitable, Callable, Dict, Optional, Union
 
 from robot_agent.actions.capabilities import (
     ActionCapabilities,
@@ -13,11 +13,10 @@ from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import DashScopeProvider
-from robot_agent.legacy_io import LegacySpeechInput
 from robot_agent.voice.live_input import LiveSpeechInput, SpeechInput
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 from robot_audio.async_pcm_input import AsyncPcmMicrophone
-from robot_audio.audio_io import play_wav
+from robot_audio.async_playback import AsyncWavPlayer
 
 DEFAULT_ACTION_TIMEOUT = 5.0
 
@@ -73,21 +72,14 @@ def build_application(
         raise ValueError("output_dir 必须在源码目录外")
     if capabilities is None:
         capabilities = create_default_actions()
-    playback: Optional[Callable[[Path], None]] = None
+    playback: Optional[Callable[[Path], Awaitable[None]]] = None
     if config.get("playback_enabled", False):
+        playback = AsyncWavPlayer(
+            config.get("play_executable", "aplay"),
+            config.get("play_device", "default"),
+        )
 
-        def play_reply(path: Path) -> None:
-            """播放已保存的完整回复音频，设备异常不影响回合释放。"""
-            play_wav(
-                config.get("play_executable", "aplay"),
-                config.get("play_device", "default"),
-                path,
-                cancelled=lambda: voice.state == "closed",
-            )
-
-        playback = play_reply
-
-    recognize = None
+    recording_input = None
     if speech_input is None:
         if input_mode == "microphone":
             speech_input = LiveSpeechInput(
@@ -99,8 +91,6 @@ def build_application(
             )
         elif input_mode == "recording":
             recording_input = DashScopeASR(config)
-            speech_input = LegacySpeechInput(recording_input)
-            recognize = recording_input.recognize
         else:
             raise ValueError("未知语音输入模式")
 
@@ -116,7 +106,7 @@ def build_application(
         tts_attempts=int(config.get("tts_attempts", 3)),
         failure_threshold=int(config.get("tts_failure_threshold", 5)),
         retry_delay=float(config.get("tts_retry_delay", 1)),
-        recognize_recording=recognize,
+        recording_input=recording_input,
     )
 
     return voice

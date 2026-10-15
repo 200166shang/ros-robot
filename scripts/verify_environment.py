@@ -31,7 +31,6 @@ def main() -> None:
         "cv2",
         "numpy",
         "flask",
-        "websocket",
         "pydantic",
         "httpx",
         "websockets",
@@ -40,7 +39,6 @@ def main() -> None:
         print(name, module.__file__)
     for name in (
         "Flask",
-        "websocket-client",
         "sherpa-onnx-bin",
         "pydantic",
         "pydantic-core",

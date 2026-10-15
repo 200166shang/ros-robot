@@ -96,7 +96,7 @@ def test_voice_filter_uses_injected_music_capability(tmp_path, monkeypatch):
             else None,
         )
 
-    def synthesize(self, text, path, timeout):
+    async def synthesize(self, text, path, timeout):
         """替换合成出口，不访问云端。"""
         path.write_bytes(b"audio fixture")
 

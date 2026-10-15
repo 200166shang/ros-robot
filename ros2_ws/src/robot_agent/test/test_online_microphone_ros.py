@@ -9,13 +9,11 @@ import time
 from contextlib import contextmanager
 
 import rclpy
-import websocket
-from async_speech_fixture import acknowledge, final, speech_server
+from async_speech_fixture import acknowledge, event, final, speech_server
 from native_protocol_fixture import install_async_transport, native_response
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool
-from test_online_speech import SpeechSocket
 
 from robot_agent.ros.voice_node import OnlineVoiceRosNode, RosExecutor, main
 
@@ -78,34 +76,36 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
     player.chmod(0o755)
     texts = iter(["小沫小沫", "跟随并点头", "晚安"])
     model_inputs = []
-    sockets = []
+    tts_commands = []
+    tts_closed = []
 
     ready = True
     asr_sockets = []
     asr_frames = []
     pause_frames = []
 
-    class MicrophoneSocket(SpeechSocket):
-        """临时 TTS 同步传输替身；ASR 始终使用原生 WebSocket。"""
-
-        def send(self, raw):
-            """TTS 完成前观察持续 ASR 静音保活。"""
-            nonlocal ready
-            super().send(raw)
-            command = json.loads(raw)
-            if command["header"]["action"] == "finish-task":
-                count = len(asr_frames)
-                deadline = time.monotonic() + 1
-                while len(asr_frames) < count + 2:
-                    assert time.monotonic() < deadline
-                    time.sleep(0.005)
-                pause_frames.extend(asr_frames[-2:])
-                ready = True
-
     async def recognize(socket):
         """真实原生 socket 接收 PCM，只有恢复后的新音频触发下一句。"""
         nonlocal ready
         command = await acknowledge(socket)
+        if command["payload"]["task"] == "tts":
+            tts_commands.append(command)
+            text = json.loads(await socket.recv())
+            assert text["header"]["action"] == "continue-task"
+            finish = json.loads(await socket.recv())
+            assert finish["header"]["action"] == "finish-task"
+            count = len(asr_frames)
+            deadline = time.monotonic() + 1
+            while len(asr_frames) < count + 2:
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.005)
+            pause_frames.extend(asr_frames[-2:])
+            await socket.send(bytes(4800))
+            await event(socket, command, "task-finished")
+            ready = True
+            await socket.wait_closed()
+            tts_closed.append(True)
+            return
         asr_sockets.append(command)
         async for frame in socket:
             asr_frames.append(frame)
@@ -118,12 +118,6 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
                     await final(
                         socket, command, text, (len(asr_frames) - 1) * 100
                     )
-
-    def connect(endpoint, header, timeout):
-        """在线传输在外部Seam替换，生产组装与会话不替换。"""
-        socket = MicrophoneSocket()
-        sockets.append(socket)
-        return socket
 
     def complete(request, timeout):
         """固定模型建议感知与模拟动作，只处理有效麦克风请求。"""
@@ -138,7 +132,6 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
         )
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
-    monkeypatch.setattr(websocket, "create_connection", connect)
     install_async_transport(monkeypatch, complete)
     config = tmp_path / "config.json"
     config.write_text(
@@ -191,7 +184,7 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
 
         probe.create_subscription(String, "/online_agent/result", receive, 10)
         agent = OnlineVoiceRosNode()
-        assert sockets == []
+        assert tts_commands == [] and asr_sockets == []
         executor = RosExecutor(probe, agent)
         executor.start()
         application = asyncio.create_task(agent.run())
@@ -249,7 +242,8 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
             agent.destroy_node()
             probe.destroy_node()
             rclpy.shutdown()
-        assert all(socket.closed for socket in sockets)
+        assert len(tts_commands) == 3
+        assert tts_closed == [True] * 3
 
     with native_asr_server(monkeypatch, recognize):
         asyncio.run(run())
@@ -289,15 +283,6 @@ def test_main_sigint_closes_application_before_ros(tmp_path, monkeypatch):
             }
         )
     )
-    sockets = []
-
-    def connect(*args, **kwargs):
-        """只打开受控语音协议替身，不调用在线服务。"""
-        socket = SpeechSocket()
-        sockets.append(socket)
-        return socket
-
-    monkeypatch.setattr(websocket, "create_connection", connect)
     connected = threading.Event()
     disconnected = threading.Event()
 
@@ -329,7 +314,6 @@ def test_main_sigint_closes_application_before_ros(tmp_path, monkeypatch):
         assert connected.is_set()
         assert disconnected.wait(1)
     assert not rclpy.ok()
-    assert all(socket.closed for socket in sockets)
     assert not [
         thread
         for thread in set(threading.enumerate()) - before

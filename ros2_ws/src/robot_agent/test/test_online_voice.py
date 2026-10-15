@@ -12,6 +12,7 @@ from robot_agent.actions.registry import ActionHandler
 from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
 from robot_agent.results import ModelReply, ToolCall, result_to_json
+from robot_agent.voice._async_speech_task import SpeechTransportError
 
 
 class FixedSpeech:
@@ -22,7 +23,7 @@ class FixedSpeech:
         self.text = "请点头"
         self.events = []
 
-    def recognize(self, path, timeout):
+    async def recognize(self, path, timeout):
         """只在录音提交时返回固定识别文本。"""
         self.events.append("recognize")
         return self.text
@@ -37,7 +38,8 @@ class FixedSpeech:
 
     async def aclose(self):
         """记录连接关闭。"""
-        self.events.append("close")
+        if not self.events or self.events[-1] != "close":
+            self.events.append("close")
 
 
 class FixedModel:
@@ -74,15 +76,15 @@ class FixedTTS:
         self.replies = []
         self.failures = 0
 
-    def synthesize(self, text, destination, timeout):
+    async def synthesize(self, text, destination, timeout):
         """保存固定音频替身，仅用于行为测试。"""
         self.replies.append(text)
         if self.failures:
             self.failures -= 1
-            raise OSError("temporary provider failure")
+            raise SpeechTransportError("temporary provider failure")
         destination.write_bytes(b"audio fixture")
 
-    def close(self):
+    async def aclose(self):
         """固定合成器没有外部资源。"""
 
 
@@ -97,9 +99,7 @@ def make_voice(tmp_path, **settings):
         tts,
         tmp_path,
         music_playing=capabilities.music_playing,
-        recognize_recording=lambda path, timeout: speech.recognize(
-            path, timeout
-        ),
+        recording_input=speech,
         retry_delay=0,
         **settings,
     )
@@ -250,9 +250,9 @@ def test_asr_and_storage_failure_release_turn(
         voice, speech, model, tts = make_voice(tmp_path)
         original = speech.recognize
 
-        def fail(path, timeout):
+        async def fail(path, timeout):
             """模拟一次在线识别失败。"""
-            raise OSError("offline")
+            raise SpeechTransportError("offline")
 
         speech.recognize = fail
         assert (
@@ -342,7 +342,7 @@ def test_unknown_action_can_be_reconciled_without_reexecution(
             tts,
             tmp_path,
             music_playing=lambda: False,
-            recognize_recording=speech.recognize,
+            recording_input=speech,
         )
         model.actions = [
             {"name": "head_nod", "arguments": {}},
@@ -398,9 +398,9 @@ def test_filtered_input_does_not_extend_silence_and_playback_failure_recovers(
         """同一循环持有回合、连接与迟到回执。"""
         now = [0.0]
 
-        def fail_playback(path):
+        async def fail_playback(path):
             """模拟缺失播放设备。"""
-            raise RuntimeError("device absent")
+            raise OSError("device absent")
 
         voice, speech, model, tts = make_voice(
             tmp_path, clock=lambda: now[0], playback=fail_playback
@@ -449,7 +449,7 @@ def test_unexpected_synthesis_error_surfaces_and_restores_input(tmp_path):
         voice, speech, model, tts = make_voice(tmp_path)
         original = tts.synthesize
 
-        def broken_synthesis(text, destination, timeout):
+        async def broken_synthesis(text, destination, timeout):
             """模拟不属于I/O失败的合成器实现错误。"""
             raise ValueError("invalid synthesis implementation")
 
