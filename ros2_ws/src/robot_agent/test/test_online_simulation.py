@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from robot_agent.actions.registry import ActionRegistry
+from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.interaction import OnlineInteraction
 
 
@@ -29,7 +29,7 @@ def submit(agent, provider, *functions):
 def test_navigation_registration_goal_cancel_and_unknown_failure():
     """位置可在同轮注册后使用，取消可观察，未知目标不能伪报成功。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         agent,
         provider,
@@ -65,7 +65,7 @@ def test_navigation_registration_goal_cancel_and_unknown_failure():
 def test_music_queue_alias_recommendation_and_filter_state():
     """播放别名、队列重复、推荐切歌与停止状态可从回复观察。"""
     provider = FixedProvider()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     agent = OnlineInteraction(provider, registry)
     result = submit(
         agent,
@@ -92,19 +92,17 @@ def test_music_queue_alias_recommendation_and_filter_state():
         "夜曲",
         "东风破",
     ]
-    assert registry.music.is_playing is True
     fallback = submit(agent, provider, "next_song", "music_status")
     assert fallback["actions"][1]["data"]["current_song"] == "小幸运"
     stopped = submit(agent, provider, "stop_music", "music_status")
     assert stopped["actions"][1]["data"]["is_playing"] is False
-    assert registry.music.is_playing is False
     assert "夜曲" in result["reply"]
 
 
 def test_head_pose_expression_sequence_and_repetition():
     """头部参数保留未指定轴，组合姿态按序展开，LCD保留源映射。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         agent,
         provider,
@@ -136,7 +134,7 @@ def test_head_pose_expression_sequence_and_repetition():
 def test_volume_wifi_and_music_display_state():
     """音量饱和、静音及WiFi查询完整模拟，音乐同步LCD但不播放音频。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         agent,
         provider,
@@ -225,7 +223,7 @@ SIMULATION_CALLS = [
 def test_every_source_simulation_action_from_interaction():
     """全部52项动作及别名经固定模型入口执行并产生状态，感知留待65票。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(agent, provider, *SIMULATION_CALLS)
     assert result["status"] == "completed"
     assert len(result["actions"]) == 52
@@ -252,7 +250,7 @@ def test_every_source_simulation_action_from_interaction():
 def test_invalid_parameters_reject_all_without_state_changes():
     """每类错误在全表校验时拒绝，之前的合法修改也不能执行。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     invalid_calls = [
         "head_position()",
         "head_position(64)",
@@ -291,7 +289,7 @@ def test_invalid_parameters_reject_all_without_state_changes():
 def test_navigation_overlap_cancel_restart_and_independent_agents():
     """活动目标不得覆盖，取消可重复，位置与播放状态不能跨实例泄漏。"""
     provider = FixedProvider()
-    first = OnlineInteraction(provider, ActionRegistry())
+    first = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         first, provider, "go_to('厨房')", "navigate_to('厨房')", "head_smile"
     )
@@ -307,7 +305,7 @@ def test_navigation_overlap_cancel_restart_and_independent_agents():
     restarted = submit(first, provider, "navigate_to('厨房')")
     assert restarted["actions"][0]["data"]["state"] == "active"
     submit(first, provider, "add_location('私有', 1, 1)", "play_music('夜曲')")
-    second = OnlineInteraction(provider, ActionRegistry())
+    second = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         second, provider, "list_locations", "music_status", "navigation_status"
     )
@@ -329,7 +327,7 @@ def test_navigation_overlap_cancel_restart_and_independent_agents():
 def test_attention_direction_parameters(direction, pitch, yaw):
     """五个方向通过关键字参数改变首步姿态，结束回到中心。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         agent, provider, f"head_attention(direction='{direction}', duration=4)"
     )
@@ -352,7 +350,7 @@ def test_attention_direction_parameters(direction, pitch, yaw):
 def test_emotional_combinations(emotion, pitch, yaw):
     """五种情感展开不同源组合，时间参数绑定到完整虚拟序列。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         agent, provider, f"head_emotional(emotion='{emotion}', duration=4)"
     )
@@ -367,7 +365,7 @@ def test_emotional_combinations(emotion, pitch, yaw):
 def test_full_pose_parameters_and_volume_saturation():
     """完整位置参数与两类别名按位置/关键字形式绑定同一契约。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     result = submit(
         agent,
         provider,

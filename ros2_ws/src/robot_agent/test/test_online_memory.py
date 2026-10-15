@@ -4,7 +4,7 @@ import json
 import threading
 import time
 
-from robot_agent.actions.registry import ActionRegistry
+from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.interaction import OnlineInteraction
 from robot_agent.conversation.memory import ConversationMemory
 
@@ -33,14 +33,14 @@ def test_context_summary_restart_and_clear(tmp_path):
     provider = MemoryProvider()
     agent = OnlineInteraction(
         provider,
-        ActionRegistry(),
+        create_default_actions().registry,
         memory=ConversationMemory(path, recent_turns=2, summary_trigger=2),
     )
     assert agent.submit("我喜欢蓝色")["status"] == "completed"
     assert agent.submit("我喜欢什么颜色？")["reply"] == "蓝色"
     restarted = OnlineInteraction(
         provider,
-        ActionRegistry(),
+        create_default_actions().registry,
         memory=ConversationMemory(path),
     )
     assert restarted.submit("我喜欢什么颜色？")["reply"] == "蓝色"
@@ -48,7 +48,7 @@ def test_context_summary_restart_and_clear(tmp_path):
     assert restarted.submit("我喜欢什么颜色？")["reply"] == "记住了"
     again = OnlineInteraction(
         provider,
-        ActionRegistry(),
+        create_default_actions().registry,
         memory=ConversationMemory(path),
     )
     assert again.submit("我喜欢什么颜色？")["reply"] == "记住了"
@@ -69,7 +69,7 @@ def test_summary_failure_keeps_context_bounded(tmp_path):
     provider = FailingProvider()
     agent = OnlineInteraction(
         provider,
-        ActionRegistry(),
+        create_default_actions().registry,
         memory=ConversationMemory(tmp_path / "memory", 2, 2),
     )
     agent.submit("old-marker")
@@ -89,7 +89,7 @@ def test_save_failure_and_clear_failure_are_observable(tmp_path):
     parent.write_text("not a directory", encoding="utf-8")
     agent = OnlineInteraction(
         MemoryProvider(),
-        ActionRegistry(),
+        create_default_actions().registry,
         memory=ConversationMemory(parent / "memory", 1, 1),
     )
     result = agent.submit("我喜欢蓝色")
@@ -107,7 +107,7 @@ def test_clear_also_removes_recent_context(tmp_path):
     provider = MemoryProvider()
     agent = OnlineInteraction(
         provider,
-        ActionRegistry(),
+        create_default_actions().registry,
         memory=ConversationMemory(tmp_path / "memory"),
     )
     agent.submit("我喜欢蓝色")
@@ -133,7 +133,7 @@ def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
 
     agent = OnlineInteraction(
         SlowProvider(),
-        ActionRegistry(),
+        create_default_actions().registry,
         provider_timeout=0.05,
         memory=ConversationMemory(tmp_path / "memory", 1, 1),
     )
@@ -162,7 +162,7 @@ def test_invalid_memory_file_is_reported_without_content(tmp_path):
     path.write_text("private-invalid-data", encoding="utf-8")
     agent = OnlineInteraction(
         MemoryProvider(),
-        ActionRegistry(),
+        create_default_actions().registry,
         memory=ConversationMemory(path),
     )
     result = agent.submit("你好")
@@ -192,7 +192,7 @@ def test_summary_actions_are_rejected_without_execution(tmp_path):
         events.append("nod")
         return {"status": "simulated_success"}
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("head_nod", nod)
     agent = OnlineInteraction(
         ActionSummaryProvider(),

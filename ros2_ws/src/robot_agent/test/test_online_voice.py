@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from robot_agent.actions.registry import ActionHandler, ActionRegistry
+from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.actions.registry import ActionHandler
 from robot_agent.conversation.interaction import OnlineInteraction
 from robot_agent.voice.session import OnlineVoice
 
@@ -76,13 +77,14 @@ class FixedTTS:
 def make_voice(tmp_path, **settings):
     """组装真实交互与模拟设备，替换在线输入与合成 Adapter。"""
     speech, model, tts = FixedSpeech(), FixedModel(), FixedTTS()
-    actions = ActionRegistry()
+    capabilities = create_default_actions()
+    actions = capabilities.registry
     voice = OnlineVoice(
         OnlineInteraction(model, actions),
         speech,
         tts,
         tmp_path,
-        music_playing=lambda: actions.music.is_playing,
+        music_playing=capabilities.music_playing,
         retry_delay=0,
         **settings,
     )
@@ -238,7 +240,7 @@ def test_close_releases_adapters_during_provider_call(tmp_path):
 def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
     """语音入口保留既有迟到回执核对 Interface，不重发动作。"""
     speech, model, tts = FixedSpeech(), FixedModel(), FixedTTS()
-    actions = ActionRegistry()
+    actions = create_default_actions().registry
     release = threading.Event()
     finished = threading.Event()
     executions = []

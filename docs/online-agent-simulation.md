@@ -1,6 +1,6 @@
 # 完整缺失设备模拟（#64）
 
-`ActionRegistry()` 默认组装52项源模拟动作及别名，无需任何设备、播放器、联网音乐服务或系统命令。动作名称和默认值见 [源动作清单](online-agent-inventory.md)。8项跟随/tracking/LiDAR动作等待 #65 的真实感知接入，仍整表拒绝。
+`create_default_actions()` 默认组装52项源模拟动作及别名，无需任何设备、播放器、联网音乐服务或系统命令。动作名称和默认值见 [源动作清单](online-agent-inventory.md)。8项跟随/tracking/LiDAR动作等待 #65 的真实感知接入，仍整表拒绝。
 
 ## 独立演示
 
@@ -45,16 +45,16 @@ PYTHONPATH=ros2_ws/src/robot_agent python3 -m robot_agent.actions.demo
 
 各能力在实现旁边提供动作表：`head_actions`、`navigation_actions`、`music_actions`、`volume_actions`、`wifi_actions`。表的形式统一为`Dict[str, ActionHandler]`，处理器同时持有执行函数和可选参数校验函数。别名引用同一处理器，状态继续由绑定的模拟对象持有。
 
-注册表的初始化只组装状态对象并加载能力表，例如：
+默认能力组装位于`actions/capabilities.py`，负责独立设备状态和音乐、WiFi共用LCD的关系。注册表只接收能力表，不认识具体设备对象：
 
 ```python
-self.register_many(head_actions(self.head))
-self.register_many(navigation_actions(self.navigation))
-self.register_many(music_actions(self.music))
-self.register_many(volume_actions(self.volume))
-self.register_many(wifi_actions(self.head.expression))
+from robot_agent.actions.capabilities import create_default_actions
+
+capabilities = create_default_actions()
+registry = capabilities.registry
+# 模型交互使用registry；语音过滤使用capabilities.music_playing。
 ```
 
-`register_many`统一合并能力表，同名覆盖沿用`register`的配置阶段语义。已有`register/validate/execute`和默认52项动作保持兼容。共享`ActionHandler`放在`actions/contracts.py`，能力定义不依赖注册表实现；`ActionHandler`从`robot_agent.actions.contracts`导入。
+`ActionRegistry()`现在是空注册表。默认交互由runtime组装上述能力，自定义能力可直接注册自己的处理器。`register_many`继续统一合并能力表，同名覆盖沿用`register`的配置阶段语义。默认动作名称、参数及52项模拟行为保持。共享`ActionHandler`从`robot_agent.actions.contracts`导入。
 
-本次先完成能力定义与注册机制的分离。尚未新增外部配置、动态导入或自动发现，全部能力默认可用；部署能力选择与别名配置可在确有需求时基于同一能力表接入。
+音乐状态查询与音乐动作应由同一能力组装注入，语音不再穿透注册表读取设备字段。没有外部配置、动态导入或插件发现机制。

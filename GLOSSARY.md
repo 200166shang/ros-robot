@@ -69,3 +69,8 @@ The association of LiDAR measurements with camera detections to estimate the tra
 Carrying out a requested sequence of robot actions while retaining confirmed
 outcomes and the unexecuted remainder. A wait ending without confirmation does
 not establish whether an action occurred.
+
+**Action capability**:
+A supported robot behavior together with the observable state associated with
+that behavior. Music playback and whether music is playing belong to the same
+capability.

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 import websocket
 
-from robot_agent.actions.registry import ActionRegistry
+from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.interaction import OnlineInteraction
 from robot_agent.voice.session import OnlineVoice
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
@@ -134,7 +134,7 @@ def test_reconnect_final_sentences_and_streaming_audio(tmp_path, monkeypatch):
     sockets = [SpeechSocket(fail=True), SpeechSocket(), SpeechSocket()]
     transport(monkeypatch, sockets)
     voice = OnlineVoice(
-        OnlineInteraction(FixedModel(), ActionRegistry()),
+        OnlineInteraction(FixedModel(), create_default_actions().registry),
         DashScopeASR({}),
         DashScopeTTS({}),
         tmp_path,
@@ -180,7 +180,7 @@ def test_partial_tts_failure_has_no_success_audio(tmp_path, monkeypatch):
     sockets = [SpeechSocket(), SpeechSocket(tts_fail=True)]
     transport(monkeypatch, sockets)
     voice = OnlineVoice(
-        OnlineInteraction(FixedModel(), ActionRegistry()),
+        OnlineInteraction(FixedModel(), create_default_actions().registry),
         DashScopeASR({}),
         DashScopeTTS({}),
         tmp_path,

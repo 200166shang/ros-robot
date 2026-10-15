@@ -8,11 +8,11 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.perception import (
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.actions.registry import ActionRegistry
 from robot_agent.actions.simulation import simulate_cue
 from robot_agent.ros.perception import RosPerception
 from robot_agent.runtime import DEFAULT_ACTION_TIMEOUT, load_config
@@ -22,13 +22,14 @@ from robot_agent.voice.session import OnlineVoice
 
 def create_ros_voice(node: Node, config: Dict) -> OnlineVoice:
     """组装同一语音Implementation与ROS感知Adapter，供运行和独立验收。"""
-    actions = ActionRegistry()
+    capabilities = create_default_actions()
+    actions = capabilities.registry
     perception = PerceptionActions(
         RosPerception(node),
         float(config.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
     )
     actions.register_many(perception_actions(perception))
-    return create_voice(config, actions=actions)
+    return create_voice(config, capabilities=capabilities)
 
 
 class OnlineVoiceRosNode(Node):

@@ -6,16 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
 from robot_agent.actions.contracts import ACTION_DEADLINE, ActionHandler
-from robot_agent.actions.head_simulation import HeadSimulation, head_actions
-from robot_agent.actions.simulation import (
-    MusicSimulation,
-    NavigationSimulation,
-    VolumeSimulation,
-    music_actions,
-    navigation_actions,
-    volume_actions,
-    wifi_actions,
-)
 
 CONFIRMED_SUCCESS = frozenset({"simulated_success", "real_success"})
 DEVICE_OUTCOMES = CONFIRMED_SUCCESS | {"failed", "unknown"}
@@ -65,19 +55,8 @@ class ActionRegistry:
     """集中管理动作契约；校验完整列表之后才允许交互模块执行。"""
 
     def __init__(self) -> None:
-        """集中组装完整模拟能力，不创建真实驱动。"""
-        # 1. 状态按职责持有；LCD 由头部共享给音乐与WiFi显示。
-        self.navigation = NavigationSimulation()
-        self.head = HeadSimulation()
-        self.music = MusicSimulation(self.head.expression)
-        self.volume = VolumeSimulation()
+        """创建空注册表；能力与共享设备关系由组装处配置。"""
         self._handlers: Dict[str, ActionHandler] = {}
-        # 2. 各能力定义自己的动作契约，注册表统一批量加载。
-        self.register_many(head_actions(self.head))
-        self.register_many(navigation_actions(self.navigation))
-        self.register_many(music_actions(self.music))
-        self.register_many(volume_actions(self.volume))
-        self.register_many(wifi_actions(self.head.expression))
 
     def register(
         self, name: str, execute: Callable, validate: Optional[Callable] = None

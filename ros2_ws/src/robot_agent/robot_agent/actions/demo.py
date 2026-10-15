@@ -3,7 +3,7 @@
 import json
 from typing import List
 
-from robot_agent.actions.registry import ActionRegistry
+from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.simulation import simulate_cue
 from robot_agent.conversation.interaction import OnlineInteraction
 
@@ -24,7 +24,7 @@ def main() -> None:
     """逐轮展示动作、状态、查询、重复及失败停止，始终保持模拟。"""
     # 1. 固定 provider 只用于演示；缺失设备使用默认模拟注册表。
     provider = FixedDemoProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     print(json.dumps(simulate_cue("startup"), ensure_ascii=False))
     scenarios = [
         (

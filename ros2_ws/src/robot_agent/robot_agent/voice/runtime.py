@@ -7,7 +7,10 @@ import uuid
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from robot_agent.actions.registry import ActionRegistry
+from robot_agent.actions.capabilities import (
+    ActionCapabilities,
+    create_default_actions,
+)
 from robot_agent.results import make_result
 from robot_agent.runtime import create_interaction, load_config
 from robot_agent.voice.session import OnlineVoice
@@ -17,15 +20,15 @@ from robot_audio.audio_sources import create_audio_source
 
 
 def create_voice(
-    config: Dict, actions: Optional[ActionRegistry] = None
+    config: Dict, capabilities: Optional[ActionCapabilities] = None
 ) -> OnlineVoice:
     """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
     directory = Path(config["output_dir"]).expanduser().resolve()
     checkout = Path(__file__).resolve().parents[5]
     if directory == checkout or checkout in directory.parents:
         raise ValueError("output_dir 必须在源码目录外")
-    if actions is None:
-        actions = ActionRegistry()
+    if capabilities is None:
+        capabilities = create_default_actions()
     playback: Optional[Callable[[Path], None]] = None
     if config.get("playback_enabled", False):
 
@@ -41,11 +44,11 @@ def create_voice(
         playback = play_reply
 
     voice = OnlineVoice(
-        create_interaction(config, actions),
+        create_interaction(config, capabilities.registry),
         DashScopeASR(config),
         DashScopeTTS(config),
         directory,
-        music_playing=lambda: actions.music.is_playing,
+        music_playing=capabilities.music_playing,
         playback=playback,
         silence_timeout=float(config.get("silence_timeout", 120)),
         speech_timeout=float(config.get("speech_timeout", 60)),

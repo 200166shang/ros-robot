@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Union
 
+from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.registry import ActionRegistry
 from robot_agent.conversation.interaction import OnlineInteraction
 from robot_agent.conversation.memory import ConversationMemory
@@ -27,7 +28,7 @@ def create_interaction(
 ) -> OnlineInteraction:
     """组装同一交互Implementation；文本测试直接调用，无ROS文本入口。"""
     if actions is None:
-        actions = ActionRegistry()
+        actions = create_default_actions().registry
     return OnlineInteraction(
         DashScopeProvider(config),
         actions,

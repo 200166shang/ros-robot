@@ -2,11 +2,11 @@
 
 import json
 
+from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.perception import (
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.actions.registry import ActionRegistry
 from robot_agent.conversation.provider import DashScopeProvider
 from robot_agent.voice.runtime import create_voice
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
@@ -52,7 +52,8 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(DashScopeASR, "recognize", recognize)
     monkeypatch.setattr(DashScopeProvider, "complete", complete)
     monkeypatch.setattr(DashScopeTTS, "synthesize", synthesize)
-    actions = ActionRegistry()
+    capabilities = create_default_actions()
+    actions = capabilities.registry
     actions.register_many(
         perception_actions(PerceptionActions(FixedPerception()))
     )
@@ -62,7 +63,7 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
         "memory_recent_turns": 2,
         "memory_summary_trigger": 2,
     }
-    voice = create_voice(config, actions=actions)
+    voice = create_voice(config, capabilities=capabilities)
     try:
         first = voice.submit_recording(tmp_path / "input.wav")
         assert first["actions"][0]["status"] == "real_success"
@@ -81,7 +82,7 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
         )
     finally:
         voice.close()
-    restarted = create_voice(config, actions=actions)
+    restarted = create_voice(config, capabilities=capabilities)
     try:
         restarted.submit_transcript("重启后", direct=True)
         assert "用户叫小明" in inputs[-1]

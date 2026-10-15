@@ -24,7 +24,8 @@ robot_agent/
 │   ├── provider.py            # 在线文本模型 Adapter
 │   └── online_system_prompt.txt
 ├── actions/
-│   ├── registry.py            # 动作解析、整表校验与注册
+│   ├── capabilities.py        # 默认能力组装与音乐状态查询
+│   ├── registry.py            # 已配置动作解析、整表校验与注册
 │   ├── contracts.py           # 动作契约与共享期限
 │   ├── execution.py           # 顺序执行、未知状态与显式核对
 │   ├── perception.py          # 感知动作与启停顺序
@@ -47,6 +48,14 @@ robot_agent/
 与[动作执行](../ros2_ws/src/robot_agent/robot_agent/actions/execution.py)。
 目录内的__init__.py只声明Python包，不转发旧导入；测试与探针使用新路径。
 ROS可执行命令、参数与话题保持不变。测试文件仍放在独立test目录。
+
+ActionRegistry()创建空注册表，不再暗含默认设备。默认组装使用
+create_default_actions()，返回ActionCapabilities（registry和
+music_playing查询）。create_interaction缺省使用默认能力的注册表；
+create_voice接收完整capabilities，音乐过滤与动作读取同一能力状态。
+ROS入口在同一registry追加感知动作后注入语音。不保留注册表上的
+head/music/navigation/volume对象；自定义音乐能力须同时提供动作和查询。
+
 
 ## 准备依赖与外部资源
 

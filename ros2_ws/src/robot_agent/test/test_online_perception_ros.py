@@ -13,11 +13,11 @@ from rclpy.parameter import Parameter  # noqa: E402
 from std_msgs.msg import Bool  # noqa: E402
 from std_srvs.srv import SetBool  # noqa: E402
 
+from robot_agent.actions.capabilities import create_default_actions  # noqa: E402
 from robot_agent.actions.perception import (  # noqa: E402
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.actions.registry import ActionRegistry  # noqa: E402
 from robot_agent.conversation.interaction import OnlineInteraction  # noqa: E402
 from robot_agent.ros.perception import RosPerception  # noqa: E402
 
@@ -83,7 +83,7 @@ def ros_devices():
 
 def make_agent(interface, functions):
     """通过现有注册表构造真实 ROS 感知交互 Interface。"""
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(
         perception_actions(PerceptionActions(interface, action_timeout=0.1))
     )
