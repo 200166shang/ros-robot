@@ -42,6 +42,34 @@ def test_native_handshake_binary_and_close(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_deep_control_json_is_a_permanent_protocol_error(monkeypatch):
+    """真实语音任务将控制 JSON 递归耗尽分类为永久协议错误。"""
+
+    async def scenario():
+        """握手完成后接收外部深 JSON，并关闭原连接。"""
+        sockets = []
+
+        async def handler(socket):
+            """本机服务器发送小体积但过深的外部控制消息。"""
+            sockets.append(socket)
+            await acknowledge(socket)
+            await socket.send("[" * 1200 + "0" + "]" * 1200)
+            await socket.wait_closed()
+
+        async with speech_server(monkeypatch, handler):
+            connection = AsyncSpeechConnection({})
+            try:
+                task = await connection.open({}, time.monotonic() + 1)
+                with pytest.raises(SpeechProtocolError):
+                    await task.receive()
+            finally:
+                await connection.aclose()
+            assert len(sockets) == 1
+            assert sockets[0].state.name == "CLOSED"
+
+    asyncio.run(scenario())
+
+
 def test_handshake_wait_sends_no_audio_and_cancellation_closes(monkeypatch):
     """延迟回执期间只有run-task；取消必须关闭已经打开的socket。"""
 

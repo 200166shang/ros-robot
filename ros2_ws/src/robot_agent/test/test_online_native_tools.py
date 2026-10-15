@@ -1,14 +1,23 @@
 """原生动作计划经公开 Interface 的整表契约。"""
 
 import asyncio
+import io
 import json
+import time
 from decimal import Decimal
 
+import httpx
 import pytest
 from native_protocol_fixture import install_async_transport
 
 from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.actions.perception import (
+    PerceptionActions,
+    perception_actions,
+)
 from robot_agent.conversation.agent import Agent
+from robot_agent.conversation.provider import DashScopeProvider
+from robot_agent.results import ModelReply, ToolCall
 
 
 def test_registry_native_plan_defaults_aliases_and_repeats():
@@ -54,9 +63,6 @@ def test_registry_native_plan_defaults_aliases_and_repeats():
 
 def test_provider_assembles_fragmented_native_plan(monkeypatch):
     """模型 Adapter 收齐名称与参数后返回完整请求。"""
-    import io
-
-    from robot_agent.conversation.provider import DashScopeProvider
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
     events = [
@@ -111,7 +117,7 @@ def test_provider_assembles_fragmented_native_plan(monkeypatch):
     reply = asyncio.run(
         DashScopeProvider({}).complete(
             "点头",
-            __import__("time").monotonic() + 1,
+            time.monotonic() + 1,
             tools=registry.tool_schema,
         )
     )
@@ -126,7 +132,6 @@ def test_provider_assembles_fragmented_native_plan(monkeypatch):
 
 def test_agent_native_plan_invalid_tail_sends_nothing_then_confirms_facts():
     """整表末项无效时零执行；修正后采用默认值、别名并只回复回执。"""
-    from robot_agent.results import ModelReply, ToolCall
 
     events = []
 
@@ -198,6 +203,43 @@ def complete_wire(
     ).encode()
 
 
+@pytest.mark.parametrize("depth", [400, 800, 1200])
+def test_deep_external_arguments_are_rejected_without_retry_or_actions(
+    monkeypatch, depth
+):
+    """外部解码及快照递归耗尽均为协议拒绝，不启动动作或重试。"""
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
+
+    async def scenario():
+        """生产 Adapter 到 Agent 共用本机传输和真实动作目录。"""
+        requests, submitted = [], []
+        arguments = '{"actions":' + "[" * depth + "0" + "]" * depth + "}"
+
+        def respond(request):
+            """只替换外部模型响应，不经过真实端点。"""
+            requests.append(request)
+            return httpx.Response(200, content=complete_wire(arguments))
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        registry = create_default_actions().registry
+        registry.register(
+            "device",
+            lambda: submitted.append(True) or {"status": "real_success"},
+        )
+        agent = Agent(DashScopeProvider({}, client=client), registry)
+        try:
+            result = await agent.submit("执行")
+            assert result.status == "rejected"
+            assert result.actions == ()
+            assert len(requests) == 1
+            assert submitted == []
+        finally:
+            await agent.aclose()
+        assert client.is_closed
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "wire",
     [
@@ -254,9 +296,6 @@ def test_real_adapter_rejects_invalid_protocol_before_any_action(
     monkeypatch, wire
 ):
     """完整、交错、多调用和截断的实际协议错误均不能发出首项动作。"""
-    import io
-
-    from robot_agent.conversation.provider import DashScopeProvider
 
     sent = []
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
@@ -277,9 +316,6 @@ def test_full_native_response_executes_once_and_preserves_correlation(
     monkeypatch,
 ):
     """完整 HTTP 工具响应与 SSE 相同，动作结果保留调用标识。"""
-    import io
-
-    from robot_agent.conversation.provider import DashScopeProvider
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
     wire = complete_wire(
@@ -351,12 +387,6 @@ def test_registry_plan_limit_and_integer_duration():
 
 def test_registry_passes_one_explicit_deadline_through_compound_action():
     """内部调用传递同一期限到融合与 Follow，模型参数完全不含期限。"""
-    import time
-
-    from robot_agent.actions.perception import (
-        PerceptionActions,
-        perception_actions,
-    )
 
     deadlines = []
 

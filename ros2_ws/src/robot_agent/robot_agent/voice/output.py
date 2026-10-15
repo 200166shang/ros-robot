@@ -139,6 +139,10 @@ class VoiceOutput:
         """最近输出快照供应用判断退出是否已有当前回合记录。"""
         return self._last_record
 
+    def has_saved_record(self, turn_id: str) -> bool:
+        """按回合归属判断是否已有持久记录，不将较新的本地输出算作该回合。"""
+        return (self._directory / (turn_id + ".json")).exists()
+
     def save_shutdown(
         self, result: TurnResult, text: str, state: str
     ) -> VoiceRecord:
