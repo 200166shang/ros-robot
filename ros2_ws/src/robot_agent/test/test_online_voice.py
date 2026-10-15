@@ -1,5 +1,6 @@
 """从语音交互 Interface 观察会话状态、可信回复与音频回执。"""
 
+import asyncio
 import json
 import threading
 import time
@@ -9,8 +10,8 @@ import pytest
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.registry import ActionHandler
-from robot_agent.conversation.interaction import OnlineInteraction
-from robot_agent.voice.session import OnlineVoice
+from robot_agent.application import AgentApplication
+from robot_agent.conversation.agent import Agent
 
 
 class FixedSpeech:
@@ -79,8 +80,8 @@ def make_voice(tmp_path, **settings):
     speech, model, tts = FixedSpeech(), FixedModel(), FixedTTS()
     capabilities = create_default_actions()
     actions = capabilities.registry
-    voice = OnlineVoice(
-        OnlineInteraction(model, actions),
+    voice = AgentApplication(
+        Agent(model, actions),
         speech,
         tts,
         tmp_path,
@@ -97,7 +98,7 @@ def make_voice(tmp_path, **settings):
 def test_recording_bypasses_wake_and_speaks_confirmed_result(tmp_path):
     """录音直接单回合；合成可信动作回执并关联文本与音频。"""
     voice, speech, model, tts = make_voice(tmp_path)
-    result = voice.submit_recording(tmp_path / "input.wav")
+    result = asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
     assert result["transcript"] == "请点头"
     assert result["actions"][0]["status"] == "simulated_success"
     assert "模拟成功" in tts.replies[0]
@@ -113,16 +114,23 @@ def test_session_wake_continuity_sleep_and_silence(tmp_path):
     """同音唤醒后连续交互，子串不触发休眠，精确指令和静音回待机。"""
     now = [0.0]
     voice, speech, model, tts = make_voice(tmp_path, clock=lambda: now[0])
-    assert voice.submit_transcript("你好")["status"] == "ignored"
+    assert asyncio.run(voice.submit_transcript("你好"))["status"] == "ignored"
     for name in ("小沫", "小莫", "小墨", "小末", "小陌", "小默"):
-        assert voice.submit_transcript(name + "，" + name)["status"] == "woken"
+        assert (
+            asyncio.run(voice.submit_transcript(name + "，" + name))["status"]
+            == "woken"
+        )
         assert voice.state == "listening"
         assert (
-            voice.submit_transcript("好了以后请点头")["status"] == "completed"
+            asyncio.run(voice.submit_transcript("好了以后请点头"))["status"]
+            == "completed"
         )
-        assert voice.submit_transcript("晚安。")["status"] == "sleeping"
+        assert (
+            asyncio.run(voice.submit_transcript("晚安。"))["status"]
+            == "sleeping"
+        )
         assert voice.state == "standby"
-    voice.submit_transcript("小沫小沫")
+    asyncio.run(voice.submit_transcript("小沫小沫"))
     now[0] = 121
     voice.tick()
     assert voice.state == "standby"
@@ -132,13 +140,25 @@ def test_session_wake_continuity_sleep_and_silence(tmp_path):
 def test_music_filters_input_from_actual_simulation_state(tmp_path):
     """通过真实动作改变第二票音乐状态，再观察语音输入过滤和停止。"""
     voice, speech, model, tts = make_voice(tmp_path)
-    voice.submit_transcript("小莫小莫")
+    asyncio.run(voice.submit_transcript("小莫小莫"))
     model.functions = ["play_music('夜曲')"]
-    assert voice.submit_transcript("播放音乐")["status"] == "completed"
-    assert voice.submit_transcript("今天的天气")["status"] == "filtered"
+    assert (
+        asyncio.run(voice.submit_transcript("播放音乐"))["status"]
+        == "completed"
+    )
+    assert (
+        asyncio.run(voice.submit_transcript("今天的天气"))["status"]
+        == "filtered"
+    )
     model.functions = ["stop_music"]
-    assert voice.submit_transcript("停止音乐")["status"] == "completed"
-    assert voice.submit_transcript("今天的天气")["status"] == "completed"
+    assert (
+        asyncio.run(voice.submit_transcript("停止音乐"))["status"]
+        == "completed"
+    )
+    assert (
+        asyncio.run(voice.submit_transcript("今天的天气"))["status"]
+        == "completed"
+    )
     assert model.inputs == ["播放音乐", "停止音乐", "今天的天气"]
 
 
@@ -148,19 +168,36 @@ def test_tts_retry_degradation_and_explicit_recovery(tmp_path):
         tmp_path, tts_attempts=2, failure_threshold=2
     )
     tts.failures = 1
-    assert voice.submit_transcript("小沫小沫")["tts_status"] == "completed"
+    assert (
+        asyncio.run(voice.submit_transcript("小沫小沫"))["tts_status"]
+        == "completed"
+    )
     tts.failures = 10
-    assert voice.submit_transcript("请点头")["tts_status"] == "failed"
-    assert voice.submit_transcript("请点头")["tts_status"] == "degraded"
-    assert voice.submit_transcript("请点头")["tts_status"] == "disabled"
+    assert (
+        asyncio.run(voice.submit_transcript("请点头"))["tts_status"]
+        == "failed"
+    )
+    assert (
+        asyncio.run(voice.submit_transcript("请点头"))["tts_status"]
+        == "degraded"
+    )
+    assert (
+        asyncio.run(voice.submit_transcript("请点头"))["tts_status"]
+        == "disabled"
+    )
     assert len(model.inputs) == 3
     assert speech.events[-1] == "resume"
     voice.enable_tts()
     tts.failures = 0
-    assert voice.submit_transcript("请点头")["tts_status"] == "completed"
-    voice.close()
+    assert (
+        asyncio.run(voice.submit_transcript("请点头"))["tts_status"]
+        == "completed"
+    )
+    asyncio.run(voice.aclose())
     assert voice.state == "closed"
-    assert voice.submit_transcript("请点头")["status"] == "rejected"
+    assert (
+        asyncio.run(voice.submit_transcript("请点头"))["status"] == "rejected"
+    )
 
 
 def test_collecting_pauses_before_model_and_resumes_after_failure(tmp_path):
@@ -175,7 +212,8 @@ def test_collecting_pauses_before_model_and_resumes_after_failure(tmp_path):
 
     model.complete = complete
     assert (
-        voice.submit_recording(tmp_path / "input.wav")["status"] == "completed"
+        asyncio.run(voice.submit_recording(tmp_path / "input.wav"))["status"]
+        == "completed"
     )
     assert speech.events[-1] == "resume"
 
@@ -194,7 +232,9 @@ def test_asr_and_storage_failure_release_turn(
 
     speech.recognize = fail
     assert (
-        voice.submit_recording(tmp_path / "input.wav")["asr_status"]
+        asyncio.run(voice.submit_recording(tmp_path / "input.wav"))[
+            "asr_status"
+        ]
         == "failed"
     )
     assert model.inputs == []
@@ -206,7 +246,7 @@ def test_asr_and_storage_failure_release_turn(
         raise OSError("disk unavailable")
 
     monkeypatch.setattr(type(tmp_path), failed_operation, fail_write)
-    result = voice.submit_recording(tmp_path / "input.wav")
+    result = asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
     assert result["record_status"] == "failed"
     assert result["actions"][0]["status"] == "simulated_success"
     assert result["tts_status"] == "completed"
@@ -215,7 +255,8 @@ def test_asr_and_storage_failure_release_turn(
     assert speech.events[-1] == "resume"
     monkeypatch.setattr(type(tmp_path), failed_operation, original_operation)
     assert (
-        voice.submit_recording(tmp_path / "input.wav")["status"] == "completed"
+        asyncio.run(voice.submit_recording(tmp_path / "input.wav"))["status"]
+        == "completed"
     )
 
 
@@ -233,10 +274,12 @@ def test_close_releases_adapters_during_provider_call(tmp_path):
 
     model.complete = complete
     with ThreadPoolExecutor() as executor:
-        turn = executor.submit(voice.submit_recording, tmp_path / "input.wav")
+        turn = executor.submit(
+            asyncio.run, voice.submit_recording(tmp_path / "input.wav")
+        )
         assert entered.wait(1)
         assert voice.state == "processing"
-        voice.close()
+        asyncio.run(voice.aclose())
         release.set()
         assert turn.result(timeout=2)["tts_status"] == "disabled"
     assert speech.events[-1] == "close"
@@ -259,8 +302,8 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
         return {"status": "simulated_success", "detail": "迟到确认"}
 
     actions.register_many({"head_nod": ActionHandler(nod)})
-    voice = OnlineVoice(
-        OnlineInteraction(model, actions, action_timeout=0.01),
+    voice = AgentApplication(
+        Agent(model, actions, action_timeout=0.01),
         speech,
         tts,
         tmp_path,
@@ -268,7 +311,7 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
         recognize_recording=speech.recognize,
     )
     model.functions = ["head_nod", "head_nod"]
-    result = voice.submit_recording(tmp_path / "input.wav")
+    result = asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
     snapshot = json.loads(json.dumps(result))
     assert result["actions"][0]["status"] == "unknown"
     release.set()
@@ -276,7 +319,7 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
     # 设备函数返回后 Future 才提交回执；公共核对可暂时返回仍未知。
     deadline = time.monotonic() + 1
     while True:
-        reconciled = voice.reconcile(result["turn_id"])
+        reconciled = asyncio.run(voice.reconcile(result["turn_id"]))
         if reconciled["actions"][0]["status"] == "simulated_success":
             break
         assert time.monotonic() < deadline
@@ -292,7 +335,8 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
     assert saved == reconciled
     model.functions = ["head_nod"]
     assert (
-        voice.submit_recording(tmp_path / "input.wav")["status"] == "completed"
+        asyncio.run(voice.submit_recording(tmp_path / "input.wav"))["status"]
+        == "completed"
     )
 
 
@@ -309,13 +353,13 @@ def test_filtered_input_does_not_extend_silence_and_playback_failure_recovers(
     voice, speech, model, tts = make_voice(
         tmp_path, clock=lambda: now[0], playback=fail_playback
     )
-    voice.submit_transcript("小沫小沫")
+    asyncio.run(voice.submit_transcript("小沫小沫"))
     model.functions = ["play_music('夜曲')"]
-    result = voice.submit_transcript("播放音乐")
+    result = asyncio.run(voice.submit_transcript("播放音乐"))
     assert result["playback_status"] == "failed"
     assert result["tts_status"] == "completed"
     now[0] = 119
-    assert voice.submit_transcript("天气")["status"] == "filtered"
+    assert asyncio.run(voice.submit_transcript("天气"))["status"] == "filtered"
     now[0] = 120
     assert voice.state == "standby"
 
@@ -324,10 +368,12 @@ def test_empty_microphone_recognition_does_not_extend_wake_session(tmp_path):
     """持续录音中的空识别不算用户活动，静音期限仍使会话回待机。"""
     now = [0.0]
     voice, speech, model, tts = make_voice(tmp_path, clock=lambda: now[0])
-    voice.submit_transcript("小沫小沫")
+    asyncio.run(voice.submit_transcript("小沫小沫"))
     now[0] = 60
     speech.text = ""
-    result = voice.submit_recording(tmp_path / "input.wav", direct=False)
+    result = asyncio.run(
+        voice.submit_recording(tmp_path / "input.wav", direct=False)
+    )
     assert result["status"] == "rejected"
     now[0] = 121
     assert voice.state == "standby"
@@ -345,12 +391,13 @@ def test_unexpected_synthesis_error_surfaces_and_restores_input(tmp_path):
 
     tts.synthesize = broken_synthesis
     with pytest.raises(ValueError, match="invalid synthesis implementation"):
-        voice.submit_recording(tmp_path / "input.wav")
+        asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
     assert speech.events == ["recognize", "pause", "resume"]
     assert voice.state == "standby"
     tts.synthesize = original
     assert (
-        voice.submit_transcript("请点头", direct=True)["status"] == "completed"
+        asyncio.run(voice.submit_transcript("请点头", direct=True))["status"]
+        == "completed"
     )
     assert len(model.inputs) == 2
 
@@ -361,13 +408,13 @@ def test_closed_voice_rejects_each_entry_without_adapter_calls(
 ):
     """所有入口关闭后直接拒绝，不调用识别、模型或合成适配器。"""
     voice, speech, model, tts = make_voice(tmp_path)
-    voice.close()
+    asyncio.run(voice.aclose())
     if entry == "recording":
-        result = voice.submit_recording(tmp_path / "input.wav")
+        result = asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
     elif entry == "transcript":
-        result = voice.submit_transcript("请点头", direct=True)
+        result = asyncio.run(voice.submit_transcript("请点头", direct=True))
     else:
-        result = voice.reconcile("a" * 32)
+        result = asyncio.run(voice.reconcile("a" * 32))
     assert result["status"] == "rejected"
     assert speech.events == ["close"]
     assert model.inputs == []

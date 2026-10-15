@@ -1,12 +1,13 @@
 """经真实 provider Interface 验证提示词加载与在线请求契约。"""
 
+import asyncio
 import io
 import json
 
 import pytest
 
 from robot_agent.actions.capabilities import create_default_actions
-from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.provider import DashScopeProvider
 
 
@@ -31,10 +32,8 @@ def captured_requests(monkeypatch):
 
 def test_default_prompt_preserves_legacy_contract(captured_requests):
     """请求保留旧人设、格式、动作示例与目录，同时限定当前执行能力。"""
-    agent = OnlineInteraction(
-        DashScopeProvider({}), create_default_actions().registry
-    )
-    assert agent.submit("你好")["reply"] == "你好"
+    agent = Agent(DashScopeProvider({}), create_default_actions().registry)
+    assert asyncio.run(agent.submit("你好"))["reply"] == "你好"
     prompt = captured_requests[0]["messages"][0]["content"]
     for required in (
         "用户创造的科研AI",
@@ -63,8 +62,8 @@ def test_external_prompt_file_overrides_packaged_default(
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("定制提示词，保留 JSON 契约。", encoding="utf-8")
     provider = DashScopeProvider({"system_prompt_file": str(prompt_file)})
-    agent = OnlineInteraction(provider, create_default_actions().registry)
-    assert agent.submit("你好")["status"] == "completed"
+    agent = Agent(provider, create_default_actions().registry)
+    assert asyncio.run(agent.submit("你好"))["status"] == "completed"
     assert captured_requests[0]["messages"][0]["content"] == (
         "定制提示词，保留 JSON 契约。"
     )

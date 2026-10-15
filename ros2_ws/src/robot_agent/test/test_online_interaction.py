@@ -1,5 +1,6 @@
 """从文本交互 Interface 验证在线回合行为。"""
 
+import asyncio
 import json
 import threading
 import time
@@ -7,7 +8,7 @@ import time
 import robot_agent.actions.execution as execution
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.registry import ActionHandler
-from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
 
 
@@ -30,7 +31,7 @@ def await_reconciliation(agent, turn_id, confirmed):
     """只轮询公共核对入口；限定等待，失败时直接报告未确认。"""
     deadline = time.monotonic() + 1
     while time.monotonic() < deadline:
-        result = agent.reconcile(turn_id)
+        result = asyncio.run(agent.reconcile(turn_id))
         if confirmed(result):
             return result
         time.sleep(0.005)
@@ -40,11 +41,11 @@ def await_reconciliation(agent, turn_id, confirmed):
 def test_chat_and_repeated_actions_across_turns():
     """普通聊天及跨回合重复动作均经公共入口得到可信结果。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, create_default_actions().registry)
-    assert agent.submit("你好")["reply"] == "你好"
+    agent = Agent(provider, create_default_actions().registry)
+    assert asyncio.run(agent.submit("你好"))["reply"] == "你好"
     provider.functions = ["head_nod", "head_smile", "head_nod"]
-    first = agent.submit("点头微笑点头")
-    second = agent.submit("再做一次")
+    first = asyncio.run(agent.submit("点头微笑点头"))
+    second = asyncio.run(agent.submit("再做一次"))
     assert [a["name"] for a in first["actions"]] == [
         "head_nod",
         "head_smile",
@@ -74,8 +75,8 @@ def test_invalid_list_executes_nothing():
         "head_nod(x=1)",
         "head_nod(__import__('os'))",
     ):
-        agent = OnlineInteraction(FixedProvider(["device", invalid]), registry)
-        assert agent.submit("执行")["status"] == "rejected"
+        agent = Agent(FixedProvider(["device", invalid]), registry)
+        assert asyncio.run(agent.submit("执行"))["status"] == "rejected"
     assert events == []
 
 
@@ -88,11 +89,11 @@ def test_failure_stops_and_reports_remaining():
         return {"status": "failed"}
 
     registry.register("failure", fail)
-    agent = OnlineInteraction(
+    agent = Agent(
         FixedProvider(["head_nod", "failure", "head_smile"], "已经全成功"),
         registry,
     )
-    result = agent.submit("执行")
+    result = asyncio.run(agent.submit("执行"))
     assert [a["status"] for a in result["actions"]] == [
         "simulated_success",
         "failed",
@@ -111,9 +112,11 @@ def test_stream_fragments_execute_list_once():
             """按字符提供 JSON 片段。"""
             return iter('{"fc":["head_nod","head_nod"],"res":"已完成"}')
 
-    result = OnlineInteraction(
-        StreamProvider(), create_default_actions().registry
-    ).submit("执行")
+    result = asyncio.run(
+        Agent(StreamProvider(), create_default_actions().registry).submit(
+            "执行"
+        )
+    )
     assert len(result["actions"]) == 2
     assert result["status"] == "completed"
 
@@ -132,17 +135,17 @@ def test_action_timeout_is_unknown_and_busy_until_return():
 
     registry = create_default_actions().registry
     registry.register("slow", slow)
-    agent = OnlineInteraction(
+    agent = Agent(
         FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
     )
     try:
-        result = agent.submit("执行")
+        result = asyncio.run(agent.submit("执行"))
         assert sent.is_set()
         assert [a["status"] for a in result["actions"]] == [
             "unknown",
             "not_executed",
         ]
-        assert agent.submit("再次执行")["status"] == "busy"
+        assert asyncio.run(agent.submit("再次执行"))["status"] == "busy"
     finally:
         released.set()
 
@@ -159,16 +162,16 @@ def test_provider_timeout_blocks_next_turn_until_call_finishes():
             released.wait(2)
             return '{"function":["head_nod"],"response":"好了"}'
 
-    agent = OnlineInteraction(
+    agent = Agent(
         SlowProvider(),
         create_default_actions().registry,
         provider_timeout=0.01,
     )
     try:
-        first = agent.submit("你好")
+        first = asyncio.run(agent.submit("你好"))
         assert first["status"] == "failed"
         assert first["actions"] == []
-        assert agent.submit("下一轮")["status"] == "busy"
+        assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
     finally:
         released.set()
 
@@ -182,9 +185,9 @@ def test_exception_and_invalid_receipt_cannot_be_success():
         raise RuntimeError("internal secret")
 
     registry.register("error", error)
-    result = OnlineInteraction(
-        FixedProvider(["error", "head_nod"]), registry
-    ).submit("执行")
+    result = asyncio.run(
+        Agent(FixedProvider(["error", "head_nod"]), registry).submit("执行")
+    )
     assert result["actions"][0]["status"] == "unknown"
     assert "internal secret" not in str(result)
 
@@ -206,11 +209,11 @@ def test_parameter_validation_precedes_all_execution():
     registry = create_default_actions().registry
     registry.register("head_position", position, validate)
     provider = FixedProvider(["head_position(70)", "head_position(pitch=200)"])
-    agent = OnlineInteraction(provider, registry)
-    assert agent.submit("执行")["status"] == "rejected"
+    agent = Agent(provider, registry)
+    assert asyncio.run(agent.submit("执行"))["status"] == "rejected"
     assert events == []
     provider.functions = ["head_position(70)", "head_position(pitch=80)"]
-    result = agent.submit("执行")
+    result = asyncio.run(agent.submit("执行"))
     assert events == [70, 80]
     assert [a["parameters"] for a in result["actions"]] == [
         {"pitch": 70},
@@ -233,9 +236,11 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
             return '{"function":[],"function":["head_nod"],"response":"好了"}'
 
     assert (
-        OnlineInteraction(
-            DuplicateProvider(), create_default_actions().registry
-        ).submit("执行")["status"]
+        asyncio.run(
+            Agent(
+                DuplicateProvider(), create_default_actions().registry
+            ).submit("执行")
+        )["status"]
         == "rejected"
     )
     registry = create_default_actions().registry
@@ -245,9 +250,9 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
         return "设备调用失败"
 
     registry.register("invalid", invalid)
-    result = OnlineInteraction(
-        FixedProvider(["invalid", "head_nod"]), registry
-    ).submit("执行")
+    result = asyncio.run(
+        Agent(FixedProvider(["invalid", "head_nod"]), registry).submit("执行")
+    )
     assert [a["status"] for a in result["actions"]] == [
         "unknown",
         "not_executed",
@@ -272,7 +277,7 @@ def test_call_syntax_defaults_and_literal_arguments_remain_compatible():
             "display(options=None, message='关键字')",
         ]
     )
-    result = OnlineInteraction(provider, registry).submit("按顺序显示")
+    result = asyncio.run(Agent(provider, registry).submit("按顺序显示"))
     assert result["status"] == "completed"
     assert [action["parameters"] for action in result["actions"]] == [
         {},
@@ -287,7 +292,7 @@ def test_unsupported_call_forms_reject_the_whole_list():
     """展开参数、重复参数和属性调用均不能越过整表校验。"""
     registry = create_default_actions().registry
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, registry)
+    agent = Agent(provider, registry)
     for source in (
         "head_nod(*[])",
         "head_nod(**{})",
@@ -296,7 +301,7 @@ def test_unsupported_call_forms_reject_the_whole_list():
         "head_nod(1+2)",
     ):
         provider.functions = ["head_smile", source]
-        result = agent.submit("执行")
+        result = asyncio.run(agent.submit("执行"))
         assert result["status"] == "rejected"
         assert result["actions"] == []
 
@@ -316,12 +321,12 @@ def test_late_action_requires_explicit_reconciliation():
     registry = create_default_actions().registry
     registry.register("slow", slow)
     provider = FixedProvider(["head_nod", "slow", "head_smile"])
-    agent = OnlineInteraction(provider, registry, action_timeout=0.02)
+    agent = Agent(provider, registry, action_timeout=0.02)
     try:
-        result = agent.submit("执行")
+        result = asyncio.run(agent.submit("执行"))
         release.set()
         assert returned.wait(1)
-        assert agent.submit("下一轮")["status"] == "busy"
+        assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
         reconciled = await_reconciliation(
             agent,
             result["turn_id"],
@@ -333,7 +338,7 @@ def test_late_action_requires_explicit_reconciliation():
             "not_executed",
         ]
         provider.functions = []
-        assert agent.submit("你好")["status"] == "completed"
+        assert asyncio.run(agent.submit("你好"))["status"] == "completed"
         assert result["actions"][1]["status"] == "unknown"
     finally:
         release.set()
@@ -347,9 +352,11 @@ def test_reporting_failure_preserves_completed_action(monkeypatch):
         raise ValueError("private error")
 
     monkeypatch.setattr(execution, "confirmed_action_reply", broken_reply)
-    result = OnlineInteraction(
-        FixedProvider(["head_nod"]), create_default_actions().registry
-    ).submit("执行")
+    result = asyncio.run(
+        Agent(
+            FixedProvider(["head_nod"]), create_default_actions().registry
+        ).submit("执行")
+    )
     assert result["status"] == "failed"
     assert result["actions"][0]["status"] == "simulated_success"
     assert "未发出动作" not in result["reply"]
@@ -374,12 +381,15 @@ def test_uncertain_late_receipt_does_not_restore_service():
 
         registry = create_default_actions().registry
         registry.register("slow", slow)
-        agent = OnlineInteraction(
+        agent = Agent(
             FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
         )
         try:
-            result = agent.submit("执行")
-            assert agent.reconcile("wrong-id")["status"] == "rejected"
+            result = asyncio.run(agent.submit("执行"))
+            assert (
+                asyncio.run(agent.reconcile("wrong-id"))["status"]
+                == "rejected"
+            )
             release.set()
             reconciled = await_reconciliation(
                 agent,
@@ -391,7 +401,7 @@ def test_uncertain_late_receipt_does_not_restore_service():
                 "unknown",
                 "not_executed",
             ]
-            assert agent.submit("下一轮")["status"] == "busy"
+            assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
             assert calls == ["sent"]
         finally:
             release.set()
@@ -410,9 +420,9 @@ def test_late_failure_reconciles_without_executing_remaining_actions():
     registry = create_default_actions().registry
     registry.register("slow_failure", slow_failure)
     provider = FixedProvider(["slow_failure", "head_nod"])
-    agent = OnlineInteraction(provider, registry, action_timeout=0.02)
+    agent = Agent(provider, registry, action_timeout=0.02)
     try:
-        result = agent.submit("执行")
+        result = asyncio.run(agent.submit("执行"))
         release.set()
         reconciled = await_reconciliation(
             agent,
@@ -424,7 +434,7 @@ def test_late_failure_reconciles_without_executing_remaining_actions():
             "not_executed",
         ]
         provider.functions = []
-        assert agent.submit("聊天")["status"] == "completed"
+        assert asyncio.run(agent.submit("聊天"))["status"] == "completed"
     finally:
         release.set()
 
@@ -444,9 +454,9 @@ def test_validation_exception_reports_its_stage_and_executes_nothing():
 
     registry = create_default_actions().registry
     registry.register("device", execute, validate)
-    result = OnlineInteraction(
-        FixedProvider(["head_nod", "device"]), registry
-    ).submit("执行")
+    result = asyncio.run(
+        Agent(FixedProvider(["head_nod", "device"]), registry).submit("执行")
+    )
     assert result["status"] == "failed"
     assert result["actions"] == []
     assert "校验异常" in result["reply"]
@@ -481,16 +491,14 @@ def test_late_model_output_is_discarded_without_executing_actions():
 
     registry = create_default_actions().registry
     registry.register("device", execute)
-    agent = OnlineInteraction(
-        SlowFirstProvider(), registry, provider_timeout=0.02
-    )
+    agent = Agent(SlowFirstProvider(), registry, provider_timeout=0.02)
     try:
-        first = agent.submit("请求动作")
+        first = asyncio.run(agent.submit("请求动作"))
         assert first["status"] == "failed" and not first["actions"]
         release.set()
         deadline = time.monotonic() + 1
         while time.monotonic() < deadline:
-            next_turn = agent.submit("聊天")
+            next_turn = asyncio.run(agent.submit("聊天"))
             if next_turn["status"] != "busy":
                 break
             time.sleep(0.005)
@@ -520,11 +528,11 @@ def test_bulk_capability_loading_preserves_validation_and_replacement():
     registry.register_many({"custom": handler, "alias": handler})
     registry.register_many({"head_smile": handler})
     provider = FixedProvider(["custom(2)", "alias(level=-1)"])
-    agent = OnlineInteraction(provider, registry)
-    assert agent.submit("执行")["status"] == "rejected"
+    agent = Agent(provider, registry)
+    assert asyncio.run(agent.submit("执行"))["status"] == "rejected"
     assert calls == []
     provider.functions = ["custom(2)", "alias(level=3)", "head_smile"]
-    assert agent.submit("执行")["status"] == "completed"
+    assert asyncio.run(agent.submit("执行"))["status"] == "completed"
     assert calls == [2, 3, 5]
 
 
@@ -550,10 +558,10 @@ def test_execution_flow_failure_preserves_pending_and_skips_memory(
     registry.register("action", action)
     memory = ConversationMemory(tmp_path / "memory.json")
     provider = FixedProvider(["action", "head_nod"])
-    agent = OnlineInteraction(provider, registry, memory=memory)
+    agent = Agent(provider, registry, memory=memory)
     with monkeypatch.context() as patch:
         patch.setattr(execution, "wait", broken_wait)
-        result = agent.submit("failed-turn-marker")
+        result = asyncio.run(agent.submit("failed-turn-marker"))
     assert result["reply"] == "动作执行流程异常，请核对执行记录。"
     assert [a["status"] for a in result["actions"]] == [
         "unknown",
@@ -561,13 +569,13 @@ def test_execution_flow_failure_preserves_pending_and_skips_memory(
     ]
     assert "private failure" not in str(result)
     assert "failed-turn-marker" not in memory.context("next")
-    assert agent.submit("下一轮")["status"] == "busy"
-    reconciled = agent.reconcile(result["turn_id"])
+    assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
+    reconciled = asyncio.run(agent.reconcile(result["turn_id"]))
     assert reconciled["actions"][0]["data"] == {"enabled": True}
     assert result["actions"][0]["status"] == "unknown"
     assert calls == ["sent"]
     provider.functions = []
-    assert agent.submit("下一轮")["status"] == "completed"
+    assert asyncio.run(agent.submit("下一轮"))["status"] == "completed"
 
 
 def test_reconciled_turn_cannot_clear_later_pending_turn():
@@ -583,11 +591,11 @@ def test_reconciled_turn_cannot_clear_later_pending_turn():
 
     registry = create_default_actions().registry
     registry.register("slow", slow)
-    agent = OnlineInteraction(
+    agent = Agent(
         FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
     )
     try:
-        first = agent.submit("第一轮")
+        first = asyncio.run(agent.submit("第一轮"))
         release.set()
         await_reconciliation(
             agent,
@@ -595,9 +603,12 @@ def test_reconciled_turn_cannot_clear_later_pending_turn():
             lambda reply: reply["actions"][0]["status"] == "real_success",
         )
         release.clear()
-        second = agent.submit("第二轮")
-        assert agent.reconcile(first["turn_id"])["status"] == "rejected"
-        assert agent.submit("第三轮")["status"] == "busy"
+        second = asyncio.run(agent.submit("第二轮"))
+        assert (
+            asyncio.run(agent.reconcile(first["turn_id"]))["status"]
+            == "rejected"
+        )
+        assert asyncio.run(agent.submit("第三轮"))["status"] == "busy"
         release.set()
         reconciled = await_reconciliation(
             agent,

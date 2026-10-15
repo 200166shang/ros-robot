@@ -9,8 +9,8 @@ reconcile输入话题。文本只作为ASR输出或测试数据进入交互Inter
 
 runtime.load_config读取外部UTF-8 JSON对象，支持路径中的~；
 文件、JSON语法或顶层形状错误直接显露，不静默回退。
-create_interaction集中创建模型、动作注册表和记忆；语音组装也调用它。
-ROS参数声明、ASR/TTS、录音与播放仍由对应入口负责。
+build_agent集中创建模型、动作注册表和记忆；语音组装也调用它。
+build_application统一解释ASR/TTS、录音与播放配置；ROS入口只接线设备。
 
 非敏感模型配置示例，追加到[完整配置](online-agent.md)：
 
@@ -38,15 +38,17 @@ system_prompt_file；UTF-8文件为空或不存在时启动失败，不自动回
 加载ROS及源码外安装环境，导入共同组装；不启动额外文本节点：
 
 ```python
-from robot_agent.runtime import create_interaction, load_config
+import asyncio
+
+from robot_agent.runtime import build_agent, load_config
 
 config = load_config("/absolute/external/test-config.json")
-agent = create_interaction(config)
-result = agent.submit("你好，请只聊天")
+agent = build_agent(config)
+result = asyncio.run(agent.submit("你好，请只聊天"))
 print(result)
 # 独立测试可在每轮完整返回后调用：
-# agent.clear_memory()
-# agent.reconcile(result["turn_id"])
+# asyncio.run(agent.clear_memory())
+# asyncio.run(agent.reconcile(result["turn_id"]))
 ```
 
 默认动作注册表为明确模拟；需要真实感知时运行[独立综合探针](online-agent.md)，

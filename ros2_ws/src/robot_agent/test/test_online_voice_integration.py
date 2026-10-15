@@ -1,5 +1,6 @@
 """通过语音组装 Interface 验证合入主线的记忆与感知能力。"""
 
+import asyncio
 import json
 import wave
 from pathlib import Path
@@ -12,7 +13,8 @@ from robot_agent.actions.perception import (
     perception_actions,
 )
 from robot_agent.conversation.provider import DashScopeProvider
-from robot_agent.voice.runtime import capture_turn, create_voice
+from robot_agent.runtime import build_application
+from robot_agent.voice.runtime import capture_turn
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 
 
@@ -67,14 +69,16 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
         "memory_recent_turns": 2,
         "memory_summary_trigger": 2,
     }
-    voice = create_voice(config, capabilities=capabilities)
+    voice = build_application(config, capabilities=capabilities)
     try:
-        first = voice.submit_recording(tmp_path / "input.wav")
+        first = asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
         assert first["actions"][0]["status"] == "real_success"
         assert first["actions"][1]["status"] == "simulated_success"
         assert "模型的提前承诺" not in first["reply"]
         assert (
-            voice.submit_transcript("第二轮", direct=True)["status"]
+            asyncio.run(voice.submit_transcript("第二轮", direct=True))[
+                "status"
+            ]
             == "completed"
         )
         context = json.loads(inputs[1].split("\n", 1)[1])
@@ -85,16 +89,16 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
             == "用户叫小明"
         )
     finally:
-        voice.close()
-    restarted = create_voice(config, capabilities=capabilities)
+        asyncio.run(voice.aclose())
+    restarted = build_application(config, capabilities=capabilities)
     try:
-        restarted.submit_transcript("重启后", direct=True)
+        asyncio.run(restarted.submit_transcript("重启后", direct=True))
         assert "用户叫小明" in inputs[-1]
-        assert restarted.clear_memory()["status"] == "completed"
-        restarted.submit_transcript("清空后", direct=True)
+        assert asyncio.run(restarted.clear_memory())["status"] == "completed"
+        asyncio.run(restarted.submit_transcript("清空后", direct=True))
         assert inputs[-1] == "清空后"
     finally:
-        restarted.close()
+        asyncio.run(restarted.aclose())
 
 
 def test_wav_runtime_preserves_actions_reply_audio_and_record(
@@ -117,11 +121,11 @@ def test_wav_runtime_preserves_actions_reply_audio_and_record(
 
     monkeypatch.setattr(DashScopeProvider, "complete", complete)
     directory = tmp_path / "output"
-    voice = create_voice({"output_dir": str(directory)})
+    voice = build_application({"output_dir": str(directory)})
     try:
-        result = capture_turn(voice, str(fixture_wav(tmp_path)))
+        result = asyncio.run(capture_turn(voice, str(fixture_wav(tmp_path))))
     finally:
-        voice.close()
+        asyncio.run(voice.aclose())
 
     assert model_inputs == ["真实句一。真实句二。"]
     assert result["transcript"] == model_inputs[0]

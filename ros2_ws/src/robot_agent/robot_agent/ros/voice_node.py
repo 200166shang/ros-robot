@@ -1,8 +1,8 @@
 """ROS 2正常在线入口：唯一麦克风逐轮交互及退出生命周期。"""
 
+import asyncio
 import json
 import threading
-import uuid
 from typing import Dict, List, Optional
 
 import rclpy
@@ -15,18 +15,18 @@ from robot_agent.actions.perception import (
     perception_actions,
 )
 from robot_agent.actions.simulation import simulate_cue
-from robot_agent.results import make_result
+from robot_agent.application import AgentApplication
 from robot_agent.ros.perception import RosPerception
-from robot_agent.runtime import DEFAULT_ACTION_TIMEOUT, load_config
-from robot_agent.voice.live_input import LiveSpeechInput
-from robot_agent.voice.runtime import create_voice
-from robot_agent.voice.session import OnlineVoice, SpeechInput
-from robot_audio.pcm_input import PcmMicrophone
+from robot_agent.runtime import (
+    DEFAULT_ACTION_TIMEOUT,
+    build_application,
+    load_config,
+)
 
 
-def create_ros_voice(
-    node: Node, config: Dict, speech_input: Optional[SpeechInput] = None
-) -> OnlineVoice:
+def create_ros_application(
+    node: Node, config: Dict, *, input_mode: str = "recording"
+) -> AgentApplication:
     """组装同一语音Implementation与ROS感知Adapter，供运行和独立验收。"""
     capabilities = create_default_actions()
     actions = capabilities.registry
@@ -35,8 +35,8 @@ def create_ros_voice(
         float(config.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
     )
     actions.register_many(perception_actions(perception))
-    return create_voice(
-        config, capabilities=capabilities, speech_input=speech_input
+    return build_application(
+        config, capabilities=capabilities, input_mode=input_mode
     )
 
 
@@ -51,16 +51,10 @@ class OnlineVoiceRosNode(Node):
         if not isinstance(filename, str) or not filename:
             raise ValueError("必须指定外部 config_file 路径")
         config = load_config(filename)
-        self._config = config
-        self._input = LiveSpeechInput(
-            config,
-            PcmMicrophone(
-                config.get("record_executable", "arecord"),
-                config.get("record_device", "default"),
-            ),
+        self._voice = create_ros_application(
+            self, config, input_mode="microphone"
         )
-        self._voice = create_ros_voice(self, config, self._input)
-        self._stop = threading.Event()
+        self._loop = asyncio.new_event_loop()
         self._publisher = self.create_publisher(
             String, "/online_agent/result", 10
         )
@@ -74,27 +68,8 @@ class OnlineVoiceRosNode(Node):
 
     def _microphone_loop(self) -> None:
         """持续ASR交付完整句，业务顺序处理；传输线程保活并丢弃暂停音频。"""
-        try:
-            while not self._stop.is_set():
-                try:
-                    text = self._input.listen()
-                except OSError:
-                    result = make_result(
-                        uuid.uuid4().hex,
-                        "failed",
-                        "持续ASR不可用，监听已停止。",
-                    )
-                    result["asr_status"] = "failed"
-                    self._publish(result)
-                    return
-                if text is None:
-                    self._voice.tick()
-                    continue
-                result = self._voice.submit_transcript(text)
-                if not self._stop.is_set():
-                    self._publish(result)
-        finally:
-            self._input.close()
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._voice.run(self._publish))
 
     def _publish(self, result: Dict) -> None:
         """只发布执行事实；输入重连耗尽明确报告，不重复提交模型。"""
@@ -106,11 +81,14 @@ class OnlineVoiceRosNode(Node):
 
     def stop(self) -> None:
         """关闭语音连接并取消录制/播放，回收业务线程后才销毁节点。"""
-        self._stop.set()
-        try:
-            self._voice.close()
-        finally:
-            self._microphone.join()
+
+        def close_application() -> None:
+            """在业务所属事件循环发起关闭。"""
+            self._loop.create_task(self._voice.aclose())
+
+        self._loop.call_soon_threadsafe(close_application)
+        self._microphone.join()
+        self._loop.close()
 
 
 def main(args: Optional[List[str]] = None) -> None:

@@ -1,8 +1,6 @@
 """通过真实 ROS 传输与固定服务事件验证交互结果，不替代在线验收。"""
 
-# ROS 缺失时先跳过模块，再导入依赖 ROS 的 Interface。
-# ruff: noqa: E402
-
+import asyncio
 import threading
 import time
 
@@ -10,23 +8,21 @@ import pytest
 from test_online_interaction import FixedProvider, await_reconciliation
 
 rclpy = pytest.importorskip("rclpy")
-from rclpy.executors import SingleThreadedExecutor
-from rclpy.node import Node
-from rclpy.parameter import Parameter
-from std_msgs.msg import Bool
-from std_srvs.srv import SetBool
+from rclpy.executors import SingleThreadedExecutor  # noqa: E402
+from rclpy.node import Node  # noqa: E402
+from rclpy.parameter import Parameter  # noqa: E402
+from std_msgs.msg import Bool  # noqa: E402
+from std_srvs.srv import SetBool  # noqa: E402
 
-from robot_agent.actions.capabilities import (
+from robot_agent.actions.capabilities import (  # noqa: E402
     create_default_actions,
 )
-from robot_agent.actions.perception import (
+from robot_agent.actions.perception import (  # noqa: E402
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.conversation.interaction import (
-    OnlineInteraction,
-)
-from robot_agent.ros.perception import RosPerception
+from robot_agent.conversation.agent import Agent  # noqa: E402
+from robot_agent.ros.perception import RosPerception  # noqa: E402
 
 
 @pytest.fixture
@@ -94,21 +90,21 @@ def make_agent(interface, functions):
     registry.register_many(
         perception_actions(PerceptionActions(interface, action_timeout=0.1))
     )
-    return OnlineInteraction(
-        FixedProvider(functions), registry, action_timeout=0.1
-    )
+    return Agent(FixedProvider(functions), registry, action_timeout=0.1)
 
 
 def test_ros_confirmations_without_agent_mode_gate(ros_devices):
     """Agent直接使用设备回执，不再读取或校验设备模式参数。"""
     device, interface, events, scenario = ros_devices
     agent = make_agent(interface, ["start_following", "disable_lidar"])
-    result = agent.submit("跟随后关闭融合")
+    result = asyncio.run(agent.submit("跟随后关闭融合"))
     assert result["status"] == "completed", result
     assert ("fusion", True) in events and ("follow", True) in events
     device.set_parameters([Parameter("dry_run", value=False)])
     events.clear()
-    result = make_agent(interface, ["enable_lidar", "head_nod"]).submit("开启")
+    result = asyncio.run(
+        make_agent(interface, ["enable_lidar", "head_nod"]).submit("开启")
+    )
     assert result["status"] == "completed"
     assert result["actions"][0]["status"] == "real_success"
     assert ("fusion", True) in events
@@ -118,8 +114,8 @@ def test_ros_rejection_and_late_receipt(ros_devices):
     """真实传输下拒绝不跟随，超时不重发也不补执行。"""
     device, interface, events, scenario = ros_devices
     scenario.update(success=False, message="invalid camera <- laser TF")
-    result = make_agent(interface, ["start_following", "head_nod"]).submit(
-        "跟随"
+    result = asyncio.run(
+        make_agent(interface, ["start_following", "head_nod"]).submit("跟随")
     )
     assert [a["status"] for a in result["actions"]] == [
         "failed",
@@ -130,7 +126,7 @@ def test_ros_rejection_and_late_receipt(ros_devices):
     events.clear()
     scenario.update(success=True, delay=0.25)
     agent = make_agent(interface, ["start_following", "head_nod"])
-    result = agent.submit("跟随")
+    result = asyncio.run(agent.submit("跟随"))
     assert result["actions"][0]["status"] == "unknown"
     reconciled = await_reconciliation(
         agent,

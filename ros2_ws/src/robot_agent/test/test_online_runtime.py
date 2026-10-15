@@ -1,12 +1,13 @@
 """通过共同组装Interface验证配置、文本交互与持久记忆。"""
 
+import asyncio
 import io
 import json
 
 import pytest
 
 from robot_agent.actions.registry import ActionRegistry
-from robot_agent.runtime import create_interaction, load_config
+from robot_agent.runtime import build_agent, load_config
 
 
 def install_model_transport(monkeypatch):
@@ -48,20 +49,20 @@ def test_loaded_config_drives_text_memory_restart_and_clear(
         encoding="utf-8",
     )
     config = load_config(config_file)
-    agent = create_interaction(config)
-    first = agent.submit("recent-marker")
+    agent = build_agent(config)
+    first = asyncio.run(agent.submit("recent-marker"))
     assert first["status"] == "completed"
     assert not first["memory_warnings"]
-    assert agent.submit("继续聊天")["status"] == "completed"
+    assert asyncio.run(agent.submit("继续聊天"))["status"] == "completed"
     assert "recent-marker" in requests[1][0]
     assert memory_file.exists()
     assert all(timeout == 1.5 for _, timeout in requests)
 
-    restarted = create_interaction(config)
-    assert restarted.submit("重启后")["status"] == "completed"
+    restarted = build_agent(config)
+    assert asyncio.run(restarted.submit("重启后"))["status"] == "completed"
     assert "recent-marker" in requests[-1][0]
-    assert restarted.clear_memory()["status"] == "completed"
-    assert restarted.submit("重新聊天")["status"] == "completed"
+    assert asyncio.run(restarted.clear_memory())["status"] == "completed"
+    assert asyncio.run(restarted.submit("重新聊天"))["status"] == "completed"
     assert requests[-1][0] == "重新聊天"
 
 
@@ -80,9 +81,9 @@ def test_invalid_common_settings_fail_before_interaction(
     requests = install_model_transport(monkeypatch)
     config = {"memory_file": str(tmp_path / "memory.json")}
     with pytest.raises(ValueError, match="超时"):
-        create_interaction(dict(config, action_timeout=0))
+        build_agent(dict(config, action_timeout=0))
     with pytest.raises(ValueError, match="记忆回合"):
-        create_interaction(dict(config, memory_recent_turns=1))
+        build_agent(dict(config, memory_recent_turns=1))
     assert requests == []
 
 
@@ -109,10 +110,10 @@ def test_custom_actions_are_used_by_common_assembly(tmp_path, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", send)
     actions = ActionRegistry()
     actions.register("head_nod", nod)
-    agent = create_interaction(
+    agent = build_agent(
         {"memory_file": str(tmp_path / "memory.json")}, actions
     )
-    result = agent.submit("点头两次")
+    result = asyncio.run(agent.submit("点头两次"))
     assert result["status"] == "completed"
     assert executions == ["nod", "nod"]
     assert "测试确认" in result["reply"]

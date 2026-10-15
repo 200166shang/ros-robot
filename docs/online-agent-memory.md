@@ -18,11 +18,11 @@
 
 路径支持 `~`，不允许落在 Git 源码仓库内（包括 worktree）。摘要文件采用版本化 JSON、私有临时文件、原子替换，文件权限为 0600，新建末级目录为 0700；不包含凭证、录音或完整逐轮历史。只有成功生成摘要才保存，尚未达到阈值的近期回合不会跨重启恢复。重启时缺失文件正常启动；文件损坏、过大或读取失败不阻断启动，首个记忆更新回执报告 `load_failed`。
 
-`OnlineInteraction` 的非 ROS 调用方可注入 `memory=ConversationMemory(...)`；未注入时保留原有无记忆行为。
+`Agent` 的非 ROS 调用方可注入 `memory=ConversationMemory(...)`；未注入时保留原有无记忆行为。
 
 ## 清空与故障反馈
 
-`OnlineInteraction.clear_memory()`清空近期上下文及内存摘要，并原子保存空摘要。
+`await agent.clear_memory()`清空近期上下文及内存摘要，并原子保存空摘要。
 独立测试在同一调用者的两轮之间直接调用，返回关联turn_id、status、reply和
 memory_warnings；没有clear_memory文本话题。
 
