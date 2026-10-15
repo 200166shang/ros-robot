@@ -322,7 +322,9 @@ class DashScopeProvider:
                 name += function.get("name", "")
                 arguments += function.get("arguments", "")
                 if "type" in call:
-                    call_type += call["type"]
+                    if call["type"] != "function":
+                        raise ModelProtocolError("工具类型无效")
+                    call_type = "function"
             finish = choice.get("finish_reason")
 
     def _reply(self, content, calls, finish, tools_enabled) -> ModelReply:

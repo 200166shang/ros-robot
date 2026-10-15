@@ -61,7 +61,8 @@ def test_registry_native_plan_defaults_aliases_and_repeats():
     ]
 
 
-def test_provider_assembles_fragmented_native_plan(monkeypatch):
+@pytest.mark.parametrize("repeat_type", [False, True])
+def test_provider_assembles_fragmented_native_plan(monkeypatch, repeat_type):
     """模型 Adapter 收齐名称与参数后返回完整请求。"""
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
@@ -91,6 +92,9 @@ def test_provider_assembles_fragmented_native_plan(monkeypatch):
             ]
         },
     ]
+    if repeat_type:
+        # Qwen 后续帧重复固定类型，并用空标识表示同一调用的延续。
+        events[1]["tool_calls"][0].update(id="", type="function")
     wire = b"".join(
         (
             "data: "
