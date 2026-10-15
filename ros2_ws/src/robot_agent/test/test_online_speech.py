@@ -407,3 +407,24 @@ def test_wav_validation_precedes_connection(
         audio.writeframes(bytes(frames * channels * 2))
     with pytest.raises(ValueError):
         DashScopeASR({}).recognize(path, 1)
+
+
+def test_tts_close_failure_still_removes_partial_audio(tmp_path, monkeypatch):
+    """部分合成失败后，即使关闭传输也失败，临时音频仍被清理。"""
+
+    class BrokenCloseSocket(SpeechSocket):
+        """模拟清理阶段的传输关闭错误。"""
+
+        def close(self, timeout=None):
+            """记录已尝试释放后报告传输错误。"""
+            super().close(timeout)
+            raise websocket.WebSocketConnectionClosedException("closed")
+
+    socket = BrokenCloseSocket(tts_fail=True)
+    transport(monkeypatch, [socket])
+    destination = tmp_path / "reply.wav"
+    with pytest.raises(OSError):
+        DashScopeTTS({}).synthesize("你好", destination, 1)
+    assert socket.closed
+    assert not destination.exists()
+    assert not destination.with_suffix(".wav.tmp").exists()

@@ -199,9 +199,11 @@ class DashScopeTTS:
             temporary.replace(destination)
         finally:
             # 3. 失败产物不冒充音频；连接由本次合成负责释放。
-            self._connection.disconnect()
-            if temporary.exists():
-                temporary.unlink()
+            try:
+                self._connection.disconnect()
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
 
     def close(self) -> None:
         """关闭在途合成连接。"""
