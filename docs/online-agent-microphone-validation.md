@@ -166,3 +166,33 @@ robot_agent（在线ASR/TTS） → robot_audio ← robot_voice（本地ASR/TTS�
 联合收集时曾观察到两个名为test的Python包冲突，已把新包测试
 目录命名为tests；最终98项回归包含该修正。运行Interface未改变。
 双轴审查首轮及目录修正后复审：Standards/Spec均0项剩余发现。
+
+## OnlineVoice流程组织重构（2026-10-15）
+
+基线f672899。用户确认将多用途_submit拆为明确的录音、文本与
+动作核对流程，会话规则集中，生命周期统一协调。
+
+```text
+submit_recording → _process_recording → _process_text
+submit_transcript → _process_text
+    _decide_session → 必要时interaction.submit → _finish_turn
+reconcile → _reconcile_turn
+所有入口 → _run_turn统一暂停后的恢复、活动时间与处理标记收尾
+```
+
+私有_VoiceTurn只保存一轮结果、文本、暂停与有效输入状态。
+不引入会话锁、队列或新的执行调度。公共参数和默认值、唤醒/休眠、
+音乐过滤、静音计时、ASR失败、busy不合成、TTS重试/降级、原动作
+核对及JSON/WAV记录契约保持。未知编程错误继续显露，已关闭入口
+不调用外部适配器。未改变固定录音方式，没有重跑真实在线服务。
+
+- 重构前既有语音测试10项通过；新增4项合成异常/关闭入口行为
+  检查在旧实现也通过，用于保护既有生命周期契约。
+- 重构后语音与麦克风节点15项通过；完整Python回归102 passed
+  （13.73秒）。
+- Pyright修改模块0错误/警告；Ruff45文件格式与lint通过，
+  git diff --check通过。
+- robot_agent源码外增量构建成功（8.51秒）。
+
+安装版与双轴审查结果在提交前补充。日志沿用源码外证据目录，
+前缀voice-flow-。

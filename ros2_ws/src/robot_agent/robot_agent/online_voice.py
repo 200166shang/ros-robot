@@ -6,6 +6,7 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Protocol
 
@@ -99,6 +100,16 @@ class SpeechOutput(Protocol):
         ...
 
 
+@dataclass
+class _VoiceTurn:
+    """一轮处理的结果、输入与暂停状态，由生命周期流程统一收尾。"""
+
+    result: Dict
+    text: str = ""
+    paused: bool = False
+    heard_input: bool = False
+
+
 class OnlineVoice:
     """单一调用者逐轮语音Interface；录音验收绕过唤醒，麦克风遵循会话。"""
 
@@ -163,17 +174,21 @@ class OnlineVoice:
 
     def submit_recording(self, path: Path, direct: bool = True) -> Dict:
         """真实识别录音后提交；direct 为单回合免唤醒入口。"""
-        return self._submit(path=path, direct=direct)
+        return self._run_turn(
+            lambda turn: self._process_recording(turn, path, direct)
+        )
 
     def submit_transcript(self, text: str, direct: bool = False) -> Dict:
         """接收最终识别事件，应用唤醒、音乐过滤与连续会话规则。"""
-        return self._submit(text=text, direct=direct)
+        return self._run_turn(
+            lambda turn: self._process_text(turn, text, direct)
+        )
 
     def reconcile(self, turn_id: str) -> Dict:
         """复用迟到动作回执核对，不重发动作，更新关联文本与语音。"""
         if re.fullmatch(r"[0-9a-f]{32}", turn_id) is None:
             return make_result(uuid.uuid4().hex, "rejected", "回合标识无效。")
-        return self._submit(reconcile_turn_id=turn_id)
+        return self._run_turn(lambda turn: self._reconcile_turn(turn, turn_id))
 
     def clear_memory(self) -> Dict:
         """由同一调用者清空记忆；保留模型仍在途时的执行约束。"""
@@ -187,104 +202,106 @@ class OnlineVoice:
         self._failures = 0
         self._tts_enabled = True
 
-    def _submit(
-        self,
-        text: str = "",
-        path: Optional[Path] = None,
-        direct: bool = False,
-        reconcile_turn_id: Optional[str] = None,
-    ) -> Dict:
-        """集中组织识别、状态门控、动作、合成和采集恢复。"""
+    def _run_turn(self, operation: Callable[[_VoiceTurn], Dict]) -> Dict:
+        """统一回合生命周期；业务入口各自处理，不调度并发输入。"""
         turn_id = uuid.uuid4().hex
         if self._closed.is_set():
             return make_result(turn_id, "rejected", "语音入口已关闭。")
+        turn = _VoiceTurn(make_result(turn_id, "failed", "语音回合失败。"))
         self._processing = True
-        paused = False
-        heard_input = False
-        result = make_result(turn_id, "failed", "语音回合失败。")
         try:
-            if reconcile_turn_id is not None:
-                heard_input = True
-                paused = True
-                self._input.pause()
-                result = self._interaction.reconcile(reconcile_turn_id)
-                if result["status"] != "busy":
-                    self._speak(result)
-                record = self._directory / (reconcile_turn_id + ".json")
-                if record.is_file():
-                    text = json.loads(record.read_text(encoding="utf-8"))[
-                        "transcript"
-                    ]
-                return self._save(result, text)
-
-            # 1. 输入必须来自真实录音识别或已完成的识别事件。
-            if path is not None:
-                try:
-                    text = self._input.recognize(
-                        Path(path), self._speech_timeout
-                    )
-                except (OSError, TimeoutError):
-                    result["reply"] = "在线识别不可用，本轮未发出动作。"
-                    result["asr_status"] = "failed"
-                    return self._save(result, "")
-            if not isinstance(text, str) or not text.strip():
-                result.update(status="rejected", reply="未识别到有效文本。")
-                return self._save(result, "")
-            heard_input = True
-            clean = re.sub(r"[^\w]", "", text)
-
-            paused = True
-            self._input.pause()
-
-            # 2. 单回合录音不改变会话；普通输入需要唤醒且遵循音乐过滤。
-            if not direct:
-                if (
-                    self._clock() - self._last_activity
-                    >= self._silence_timeout
-                ):
-                    self._awake = False
-                wake = next(
-                    (word for word in WAKE_WORDS if word in clean), None
-                )
-                if wake is not None:
-                    self._awake = True
-                    self._last_activity = self._clock()
-                    result.update(status="woken", reply="我在，请说。")
-                elif not self._awake:
-                    result.update(status="ignored", reply="等待唤醒词。")
-                    return self._save(result, text)
-                elif clean in SLEEP_COMMANDS:
-                    self._awake = False
-                    result.update(status="sleeping", reply="好的，进入待机。")
-                elif self._music_playing() and not any(
-                    word in clean for word in MUSIC_CONTROLS
-                ):
-                    result.update(
-                        status="filtered", reply="音乐期间仅接收控制指令。"
-                    )
-                    return self._save(result, text)
-                else:
-                    result = self._interaction.submit(text)
-            else:
-                result = self._interaction.submit(text)
-
-            # 3. 模型与动作只运行一次；仅合成可信回复，重试不重复动作。
-            if result["status"] == "busy":
-                return self._save(result, text)
-            self._speak(result)
-            return self._save(result, text)
+            return operation(turn)
         finally:
-            # 4. 结束处理并恢复采集；空识别不延长唤醒后的静音期限。
+            # 结束处理并恢复采集；空识别不延长唤醒后的静音期限。
             try:
-                if paused and not self._closed.is_set():
+                if turn.paused and not self._closed.is_set():
                     self._input.resume()
-                if heard_input and result["status"] not in (
+                if turn.heard_input and turn.result["status"] not in (
                     "ignored",
                     "filtered",
                 ):
                     self._last_activity = self._clock()
             finally:
                 self._processing = False
+
+    def _process_recording(
+        self, turn: _VoiceTurn, path: Path, direct: bool
+    ) -> Dict:
+        """只处理录音识别及其I/O失败，成功后进入共同文本流程。"""
+        try:
+            text = self._input.recognize(Path(path), self._speech_timeout)
+        except (OSError, TimeoutError):
+            turn.result.update(
+                reply="在线识别不可用，本轮未发出动作。", asr_status="failed"
+            )
+            return self._save(turn.result, "")
+        return self._process_text(turn, text, direct)
+
+    def _process_text(self, turn: _VoiceTurn, text: str, direct: bool) -> Dict:
+        """顺序组织文本校验、会话决策、交互执行与语音记录。"""
+        # 1. 外部文本或识别结果在进入会话前统一校验。
+        if not isinstance(text, str) or not text.strip():
+            turn.result.update(status="rejected", reply="未识别到有效文本。")
+            return self._save(turn.result, "")
+        turn.text = text
+        turn.heard_input = True
+        turn.paused = True
+        self._input.pause()
+
+        # 2. 会话规则可直接生成结果，正常请求才交给模型和动作。
+        decision = self._decide_session(text, direct, turn.result["turn_id"])
+        if decision is None:
+            turn.result = self._interaction.submit(text)
+        else:
+            turn.result = decision
+
+        # 3. 输出与保存不重复模型或动作，生命周期统一恢复采集。
+        return self._finish_turn(turn)
+
+    def _decide_session(
+        self, text: str, direct: bool, turn_id: str
+    ) -> Optional[Dict]:
+        """集中应用会话规则；返回固定回执，None表示进入模型交互。"""
+        if direct:
+            return None
+        clean = re.sub(r"[^\w]", "", text)
+        if self._clock() - self._last_activity >= self._silence_timeout:
+            self._awake = False
+        if any(word in clean for word in WAKE_WORDS):
+            self._awake = True
+            self._last_activity = self._clock()
+            return make_result(turn_id, "woken", "我在，请说。")
+        if not self._awake:
+            return make_result(turn_id, "ignored", "等待唤醒词。")
+        if clean in SLEEP_COMMANDS:
+            self._awake = False
+            return make_result(turn_id, "sleeping", "好的，进入待机。")
+        if self._music_playing() and not any(
+            word in clean for word in MUSIC_CONTROLS
+        ):
+            return make_result(turn_id, "filtered", "音乐期间仅接收控制指令。")
+        return None
+
+    def _reconcile_turn(self, turn: _VoiceTurn, turn_id: str) -> Dict:
+        """独立核对原动作；只关联原文本，不识别或提交新的模型请求。"""
+        turn.heard_input = True
+        turn.paused = True
+        self._input.pause()
+        turn.result = self._interaction.reconcile(turn_id)
+        if turn.result["status"] != "busy":
+            self._speak(turn.result)
+        record = self._directory / (turn_id + ".json")
+        if record.is_file():
+            turn.text = json.loads(record.read_text(encoding="utf-8"))[
+                "transcript"
+            ]
+        return self._save(turn.result, turn.text)
+
+    def _finish_turn(self, turn: _VoiceTurn) -> Dict:
+        """被忽略、过滤或执行仍在途时只记录，其余结果合成后保存。"""
+        if turn.result["status"] not in ("ignored", "filtered", "busy"):
+            self._speak(turn.result)
+        return self._save(turn.result, turn.text)
 
     def _speak(self, result: Dict) -> None:
         """有限合成重试，连续回合失败后降级为文本；播放失败保留音频。"""
@@ -337,7 +354,7 @@ class OnlineVoice:
         return result
 
     def close(self) -> None:
-        """停止接入并关闭在线连接；回合 finally 负责释放忙碌标识。"""
+        """停止接入并关闭在线连接；回合生命周期负责清除处理标记。"""
         self._closed.set()
         try:
             self._input.close()

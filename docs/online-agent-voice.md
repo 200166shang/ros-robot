@@ -12,6 +12,20 @@ ROS主executor处理设备回执，唯一麦克风线程组织业务。没有输
 OnlineInteraction的公共Interface要求同一调用者顺序调用；处理阶段状态
 用于观测和静音计时，不作为并发输入锁。
 
+OnlineVoice内部按入口和职责组织：
+
+```text
+submit_recording → _process_recording（ASR） → _process_text
+submit_transcript → _process_text
+    _decide_session → 必要时interaction.submit → _finish_turn
+reconcile → _reconcile_turn（核对原动作并关联原文本）
+```
+
+三个入口均由_run_turn统一协调处理状态、暂停后恢复和活动时间。
+临时回合记录只保存结果、文本和生命周期状态，不承担并发调度。
+会话决策返回固定回执，或以None明确表示继续模型交互；忽略、过滤、
+busy不合成，识别失败及空文本只记录。核对分支不发起新模型或动作。
+
 ## 外部配置与启动
 
 依赖 Python3.8、ROS2 Foxy、`websocket-client>=1.6,<2` 与robot_audio。

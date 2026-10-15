@@ -5,6 +5,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from robot_agent.online_actions import ActionHandler, ActionRegistry
 from robot_agent.online_interaction import OnlineInteraction
 from robot_agent.online_voice import OnlineVoice
@@ -312,3 +314,44 @@ def test_empty_microphone_recognition_does_not_extend_wake_session(tmp_path):
     now[0] = 121
     assert voice.state == "standby"
     assert model.inputs == []
+
+
+def test_unexpected_synthesis_error_surfaces_and_restores_input(tmp_path):
+    """合成器编程错误向外显露，但仍恢复输入并允许下一回合。"""
+    voice, speech, model, tts = make_voice(tmp_path)
+    original = tts.synthesize
+
+    def broken_synthesis(text, destination, timeout):
+        """模拟不属于I/O失败的合成器实现错误。"""
+        raise ValueError("invalid synthesis implementation")
+
+    tts.synthesize = broken_synthesis
+    with pytest.raises(ValueError, match="invalid synthesis implementation"):
+        voice.submit_recording(tmp_path / "input.wav")
+    assert speech.events == ["recognize", "pause", "resume"]
+    assert voice.state == "standby"
+    tts.synthesize = original
+    assert (
+        voice.submit_transcript("请点头", direct=True)["status"] == "completed"
+    )
+    assert len(model.inputs) == 2
+
+
+@pytest.mark.parametrize("entry", ["recording", "transcript", "reconcile"])
+def test_closed_voice_rejects_each_entry_without_adapter_calls(
+    tmp_path, entry
+):
+    """所有入口关闭后直接拒绝，不调用识别、模型或合成适配器。"""
+    voice, speech, model, tts = make_voice(tmp_path)
+    voice.close()
+    if entry == "recording":
+        result = voice.submit_recording(tmp_path / "input.wav")
+    elif entry == "transcript":
+        result = voice.submit_transcript("请点头", direct=True)
+    else:
+        result = voice.reconcile("a" * 32)
+    assert result["status"] == "rejected"
+    assert speech.events == ["close"]
+    assert model.inputs == []
+    assert tts.replies == []
+    assert list(tmp_path.iterdir()) == []
