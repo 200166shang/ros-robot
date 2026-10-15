@@ -265,6 +265,7 @@ dependencies = [
     { name = "sherpa-onnx-bin", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
     { name = "typing-extensions", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
     { name = "websocket-client", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
+    { name = "websockets", marker = "platform_machine == 'aarch64' and sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -282,6 +283,7 @@ requires-dist = [
     { name = "sherpa-onnx-bin", specifier = "==1.13.8" },
     { name = "typing-extensions", specifier = "==4.13.2" },
     { name = "websocket-client", specifier = "==1.8.0" },
+    { name = "websockets", specifier = "==13.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -372,6 +374,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e6/30/fba0d96b4b5fbf5948ed3f4681f7da2f9f64512e1d303f94b4cc174c24a5/websocket_client-1.8.0.tar.gz", hash = "sha256:3239df9f44da632f96012472805d40a23281a991027ce11d2f45a6f24ac4c3da", size = 54648, upload-time = "2024-04-23T22:16:16.976Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/84/44687a29792a70e111c5c477230a72c4b957d88d16141199bf9acb7537a3/websocket_client-1.8.0-py3-none-any.whl", hash = "sha256:17b44cc997f5c498e809b22cdf2d9c7a9e71c02c8cc2b6c56e7c2d1239bfa526", size = 58826, upload-time = "2024-04-23T22:16:14.422Z" },
+]
+
+[[package]]
+name = "websockets"
+version = "13.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/73/9223dbc7be3dcaf2a7bbf756c351ec8da04b1fa573edaf545b95f6b0c7fd/websockets-13.1.tar.gz", hash = "sha256:a3b3366087c1bc0a2795111edcadddb8b3b59509d5db5d7ea3fdd69f954a8878", size = 158549, upload-time = "2024-09-21T17:34:21.54Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/7e/8fa930c6426a56c47910792717787640329e4a0e37cdfda20cf89da67126/websockets-13.1-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:95df24ca1e1bd93bbca51d94dd049a984609687cb2fb08a7f2c56ac84e9816ea", size = 164995, upload-time = "2024-09-21T17:33:30.802Z" },
+    { url = "https://files.pythonhosted.org/packages/20/ef/d87c5fc0aa7fafad1d584b6459ddfe062edf0d0dd64800a02e67e5de048b/websockets-13.1-cp38-cp38-musllinux_1_2_aarch64.whl", hash = "sha256:e4450fc83a3df53dec45922b576e91e94f5578d06436871dce3a6be38e40f5db", size = 164222, upload-time = "2024-09-21T17:33:34.423Z" },
+    { url = "https://files.pythonhosted.org/packages/74/0b/f8ec74ac3b14a983289a1b42dc2c518a0e2030b486d0549d4f51ca11e7c9/websockets-13.1-pp38-pypy38_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:82d0ba76371769d6a4e56f7e83bb8e81846d17a6190971e38b5de108bde9b0d7", size = 157093, upload-time = "2024-09-21T17:34:06.398Z" },
+    { url = "https://files.pythonhosted.org/packages/56/27/96a5cd2626d11c8280656c6c71d8ab50fe006490ef9971ccd154e0c42cd2/websockets-13.1-py3-none-any.whl", hash = "sha256:a9a396a6ad26130cdae92ae10c36af09d9bfe6cafe69670fd3b6da9b07b4044f", size = 152134, upload-time = "2024-09-21T17:34:19.904Z" },
 ]
 
 [[package]]

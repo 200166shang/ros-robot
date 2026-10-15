@@ -21,6 +21,7 @@ setup(
     install_requires=[
         "setuptools",
         "websocket-client>=1.6,<2",
+        "websockets==13.1",
         "pydantic==2.10.6",
         "httpx==0.28.1",
         "typing-extensions==4.13.2",

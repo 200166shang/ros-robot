@@ -14,6 +14,7 @@ import websocket
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
+from robot_agent.legacy_io import LegacySpeechInput
 from robot_agent.results import ModelReply
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 
@@ -146,7 +147,7 @@ def test_reconnect_final_sentences_and_streaming_audio(tmp_path, monkeypatch):
     asr = DashScopeASR({})
     voice = AgentApplication(
         Agent(FixedModel(), create_default_actions().registry),
-        asr,
+        LegacySpeechInput(asr),
         DashScopeTTS({}),
         tmp_path,
         music_playing=lambda: False,
@@ -192,7 +193,7 @@ def test_partial_tts_failure_has_no_success_audio(tmp_path, monkeypatch):
     asr = DashScopeASR({})
     voice = AgentApplication(
         Agent(FixedModel(), create_default_actions().registry),
-        asr,
+        LegacySpeechInput(asr),
         DashScopeTTS({}),
         tmp_path,
         music_playing=lambda: False,

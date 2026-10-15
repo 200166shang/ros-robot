@@ -1,27 +1,11 @@
 """迁移期阻塞 I/O Adapter；调用所有权不暴露给业务调用者。"""
 
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Optional
 
 from robot_agent.calls import LegacyCall
 from robot_agent.results import TurnResult, VoiceRecord
 from robot_agent.voice.output import VoiceOutput
-
-
-class SpeechInput(Protocol):
-    """旧输入只需生命周期能力，不要求麦克风同时提供文件识别。"""
-
-    def pause(self) -> None:
-        """暂停有效音频。"""
-        ...
-
-    def resume(self) -> None:
-        """恢复有效音频。"""
-        ...
-
-    def close(self) -> None:
-        """释放输入资源。"""
-        ...
 
 
 class LegacyRecordingInput:

@@ -12,11 +12,10 @@ from typing import Callable, Optional
 from robot_agent.conversation.agent import Agent
 from robot_agent.legacy_io import (
     LegacyRecordingInput,
-    LegacySpeechInput,
     LegacyVoiceOutput,
-    SpeechInput,
 )
 from robot_agent.results import TurnResult, VoiceRecord, make_result
+from robot_agent.voice.live_input import SpeechInput
 from robot_agent.voice.output import SpeechOutput, VoiceOutput
 from robot_agent.voice.session import VoiceSession
 
@@ -48,7 +47,7 @@ class AgentApplication:
         if not math.isfinite(retry_delay) or retry_delay < 0:
             raise ValueError("重试间隔必须为非负有限秒数")
         self._agent = agent
-        self._input = LegacySpeechInput(speech_input)
+        self._input = speech_input
         self._recording = (
             LegacyRecordingInput(recognize_recording)
             if recognize_recording is not None
