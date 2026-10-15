@@ -74,6 +74,30 @@ def test_live_pause_drains_mic_keeps_connection_and_filters_late_sentence(
     try:
         assert live.listen(0.02) is None
         until(lambda: len(socket.frames) >= 2)
+        socket.event(
+            "result-generated",
+            {
+                "output": {
+                    "sentence": {
+                        "text": "中间句",
+                        "sentence_end": False,
+                    }
+                }
+            },
+        )
+        socket.event(
+            "result-generated",
+            {
+                "output": {
+                    "sentence": {
+                        "text": "心跳",
+                        "sentence_end": True,
+                        "heartbeat": True,
+                    }
+                }
+            },
+        )
+        assert live.listen(0.03) is None
         final(socket, "第一句", 0)
         assert live.listen(1) == "第一句"
         baseline = len(socket.frames)

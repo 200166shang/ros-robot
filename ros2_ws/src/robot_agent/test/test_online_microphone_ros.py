@@ -32,6 +32,14 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
         encoding="utf-8",
     )
     recorder.chmod(0o755)
+    playing = tmp_path / "playback-active"
+    player = tmp_path / "play-fixture"
+    player.write_text(
+        "#!/usr/bin/python3\nimport time\nfrom pathlib import Path\n"
+        f"active = Path({str(playing)!r})\n"
+        "active.touch()\ntime.sleep(.08)\nactive.unlink()\n"
+    )
+    player.chmod(0o755)
     texts = iter(["小沫小沫", "请点头", "晚安"])
     model_inputs = []
     sockets = []
@@ -69,6 +77,8 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
             """只有恢复后的真实音频才产生下一句，不依赖finish-task。"""
             nonlocal ready
             super().send_binary(frame)
+            if self.kind == "asr" and playing.exists():
+                assert frame == bytes(3200), "播放期间不能发送真实麦克风音频"
             if self.kind == "asr" and frame != bytes(3200) and ready:
                 text = next(texts, "")
                 if not text:
@@ -116,7 +126,9 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
                 "memory_file": str(tmp_path / "memory.json"),
                 "record_executable": str(recorder),
                 "record_device": "fixture",
-                "record_seconds": 1,
+                "playback_enabled": True,
+                "play_executable": str(player),
+                "play_device": "fixture",
             }
         ),
         encoding="utf-8",
@@ -160,6 +172,7 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
         assert model_inputs == ["请点头"]
         assert results[1]["actions"][0]["status"] == "simulated_success"
         assert all(r["tts_status"] == "completed" for r in results[:3])
+        assert all(r["playback_status"] == "completed" for r in results[:3])
         assert results[2]["session_state"] == "standby"
         assert len(asr_sockets) == 1
         assert len(asr_sockets[0].commands) == 1
