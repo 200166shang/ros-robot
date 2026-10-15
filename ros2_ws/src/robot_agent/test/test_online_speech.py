@@ -2,6 +2,7 @@
 
 import json
 import queue
+import threading
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
@@ -213,3 +214,196 @@ def test_recognition_timeout_is_bounded_and_releases_connection(
     asr.close()
     with pytest.raises(OSError):
         asr.recognize(tmp_path / "input.wav", 0.1)
+
+
+def test_tts_transport_send_error_is_compatible(tmp_path, monkeypatch):
+    """文本传输失败转换为业务错误，仍释放连接且不提交音频。"""
+
+    class BrokenTextSocket(SpeechSocket):
+        """在真实文本提交阶段模拟连接中断。"""
+
+        def send(self, raw):
+            """握手成功后拒绝文本发送。"""
+            if json.loads(raw)["header"]["action"] == "continue-task":
+                raise websocket.WebSocketConnectionClosedException("broken")
+            super().send(raw)
+
+    socket = BrokenTextSocket()
+    transport(monkeypatch, [socket])
+    destination = tmp_path / "reply.wav"
+    with pytest.raises(OSError):
+        DashScopeTTS({}).synthesize("你好", destination, 1)
+    assert socket.closed
+    assert not destination.exists()
+    assert not destination.with_suffix(".wav.tmp").exists()
+
+
+@pytest.mark.parametrize("operation", ["asr", "tts"])
+def test_late_connection_does_not_start_expired_task(
+    tmp_path, monkeypatch, operation
+):
+    """建立连接耗尽总期限时释放迟到连接，不再提交任务。"""
+    socket = SpeechSocket()
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    def connect(*args, **kwargs):
+        """模拟连接在调用期限后才返回。"""
+        time.sleep(0.03)
+        return socket
+
+    monkeypatch.setattr(websocket, "create_connection", connect)
+    with pytest.raises(OSError):
+        if operation == "asr":
+            DashScopeASR({}).recognize(fixture_wav(tmp_path), 0.01)
+        else:
+            DashScopeTTS({}).synthesize("你好", tmp_path / "reply.wav", 0.01)
+    assert socket.closed
+    assert socket.commands == []
+
+
+@pytest.mark.parametrize("failure", ["empty", "timeout", "wrong-task"])
+def test_tts_requires_audio_and_matching_finish(
+    tmp_path, monkeypatch, failure
+):
+    """无音频、未确认结束和其他任务的确认均不能提交成功 WAV。"""
+
+    class IncompleteSocket(SpeechSocket):
+        """在完成请求后只返回指定的不完整合成结果。"""
+
+        def send(self, raw):
+            """保留真实握手与文本请求，仅控制外部完成事件。"""
+            command = json.loads(raw)
+            if command["header"]["action"] != "finish-task":
+                return super().send(raw)
+            self.commands.append(command)
+            if failure == "empty":
+                self.event("task-finished")
+            else:
+                self.queue.put(b"\x01\x00" * 1600)
+                if failure == "wrong-task":
+                    self.task_id = "another-task"
+                    self.event("task-finished")
+
+    socket = IncompleteSocket()
+    transport(monkeypatch, [socket])
+    destination = tmp_path / "reply.wav"
+    with pytest.raises(OSError):
+        DashScopeTTS({}).synthesize("你好", destination, 0.08)
+    assert not destination.exists()
+    assert not destination.with_suffix(".wav.tmp").exists()
+    assert socket.closed
+
+
+def test_retry_discards_failed_sentences_and_replays_audio(
+    tmp_path, monkeypatch
+):
+    """部分最终句后断线，重试完整录音但不保留失败轮的识别句。"""
+
+    class InterruptedSocket(SpeechSocket):
+        """收完录音后先报告句子，再中断任务。"""
+
+        def send(self, raw):
+            """握手照常响应，结束输入后返回部分识别与断线。"""
+            if json.loads(raw)["header"]["action"] != "finish-task":
+                return super().send(raw)
+            self.event(
+                "result-generated",
+                {
+                    "output": {
+                        "sentence": {
+                            "text": "失败轮句子",
+                            "sentence_end": True,
+                        }
+                    },
+                },
+            )
+            self.queue.put("")
+
+    sockets = [InterruptedSocket(), SpeechSocket()]
+    transport(monkeypatch, sockets)
+    assert DashScopeASR({}).recognize(fixture_wav(tmp_path), 2) == (
+        "真实句一。真实句二。"
+    )
+    assert sockets[0].frames == sockets[1].frames == [b"\x01\x00" * 1600]
+    assert sockets[0].task_id != sockets[1].task_id
+    assert all(socket.closed for socket in sockets)
+    for socket in sockets:
+        assert all(
+            command["header"]["task_id"] == socket.task_id
+            for command in socket.commands
+        )
+
+
+@pytest.mark.parametrize("operation", ["asr", "tts"])
+def test_close_during_connect_releases_late_connection(
+    tmp_path, monkeypatch, operation
+):
+    """关闭正在建立的入口，迟到连接被回收且不会启动任务或重连。"""
+    entered = threading.Event()
+    release = threading.Event()
+    socket = SpeechSocket()
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    def connect(*args, **kwargs):
+        """连接建立由测试事件控制完成。"""
+        entered.set()
+        assert release.wait(2)
+        return socket
+
+    monkeypatch.setattr(websocket, "create_connection", connect)
+    caller = DashScopeASR({}) if operation == "asr" else DashScopeTTS({})
+    with ThreadPoolExecutor() as executor:
+        if operation == "asr":
+            result = executor.submit(
+                caller.recognize, fixture_wav(tmp_path), 2
+            )
+        else:
+            result = executor.submit(
+                caller.synthesize, "你好", tmp_path / "reply.wav", 2
+            )
+        try:
+            assert entered.wait(1)
+            caller.close()
+        finally:
+            release.set()
+        with pytest.raises(OSError):
+            result.result(timeout=2)
+    assert socket.closed
+    assert socket.commands == []
+
+
+@pytest.mark.parametrize("operation", ["asr", "tts"])
+def test_programming_error_surfaces_after_release(
+    tmp_path, monkeypatch, operation
+):
+    """意外编程错误不会变成默认成功或触发识别重试，连接仍回收。"""
+
+    class BrokenSocket(SpeechSocket):
+        """握手中报告非传输类错误。"""
+
+        def recv(self):
+            """暴露意外的内部错误。"""
+            raise RuntimeError("programming error")
+
+    socket = BrokenSocket()
+    transport(monkeypatch, [socket])
+    with pytest.raises(RuntimeError, match="programming error"):
+        if operation == "asr":
+            DashScopeASR({}).recognize(fixture_wav(tmp_path), 1)
+        else:
+            DashScopeTTS({}).synthesize("你好", tmp_path / "reply.wav", 1)
+    assert socket.closed
+
+
+@pytest.mark.parametrize("channels,frames", [(2, 1600), (1, 0)])
+def test_wav_validation_precedes_connection(
+    tmp_path, monkeypatch, channels, frames
+):
+    """无效格式和空录音在接入网络前被拒绝。"""
+    transport(monkeypatch, [])
+    path = tmp_path / "invalid.wav"
+    with wave.open(str(path), "wb") as audio:
+        audio.setparams((channels, 2, 16000, 0, "NONE", "not compressed"))
+        audio.writeframes(bytes(frames * channels * 2))
+    with pytest.raises(ValueError):
+        DashScopeASR({}).recognize(path, 1)
