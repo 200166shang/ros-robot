@@ -5,6 +5,7 @@ requires-python = "==3.8.*"
 dependencies = [
     "Flask==3.0.3",
     "websocket-client==1.8.0",
+    "websockets==13.1",
     "sherpa-onnx-bin==1.13.8",
     "pydantic==2.10.6",
     "typing-extensions==4.13.2",
@@ -27,7 +28,7 @@ environments = ["sys_platform == 'linux' and platform_machine == 'aarch64'"]
 # ROS 2 Foxy uses Python 3.8; scope checks to migrated online/demo modules.
 target-version = "py38"
 line-length = 79
-include = ["pyproject.toml", "tests/test_dev_commands.py", "scripts/verify_environment.py", "**/online_*.py", "**/robot_agent/**/*.py", "**/robot_agent/setup.py", "**/robot_audio/audio_io.py", "**/robot_audio/pcm_input.py", "**/test_pcm_input.py", "**/robot_audio/audio_sources.py", "**/test_audio_io.py", "**/test_audio_sources.py", "**/robot_audio/setup.py", "**/robot_audio/__init__.py", "**/voice_frontend_node.py", "**/test_online_*.py", "**/tracking_control_node.py", "**/person_tracking_demo.launch.py", "**/online_agent.launch.py", "**/tracking_control_acceptance_probe.py", "**/test_tracking_launch.py"]
+include = ["pyproject.toml", "tests/test_dev_commands.py", "scripts/verify_environment.py", "**/online_*.py", "**/robot_agent/**/*.py", "**/robot_agent/setup.py", "**/robot_audio/audio_io.py", "**/robot_audio/pcm_input.py", "**/robot_audio/async_pcm_input.py", "**/test_async_pcm_input.py", "**/test_pcm_input.py", "**/robot_audio/audio_sources.py", "**/test_audio_io.py", "**/test_audio_sources.py", "**/robot_audio/setup.py", "**/robot_audio/__init__.py", "**/voice_frontend_node.py", "**/test_online_*.py", "**/tracking_control_node.py", "**/person_tracking_demo.launch.py", "**/online_agent.launch.py", "**/tracking_control_acceptance_probe.py", "**/test_tracking_launch.py"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I"]

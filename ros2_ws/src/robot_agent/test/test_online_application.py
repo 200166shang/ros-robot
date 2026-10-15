@@ -1,7 +1,6 @@
 """应用公开异步入口的回合接纳与生命周期。"""
 
 import asyncio
-import threading
 
 from test_online_voice import FixedModel, FixedSpeech, FixedTTS, make_voice
 
@@ -108,7 +107,7 @@ def test_idle_microphone_wait_expires_session_and_reports_input_failure(
             super().__init__()
             self.inputs = iter([(0, "小莫小莫"), (121, None), (122, "请点头")])
 
-        def listen(self, timeout):
+        async def listen(self, timeout):
             """返回超时无文本或最终文本，耗尽时模拟连接失败。"""
             try:
                 now[0], text = next(self.inputs)
@@ -149,16 +148,16 @@ def test_concurrent_close_waits_for_the_same_resource_cleanup(tmp_path):
     async def scenario():
         """可控输入关闭模拟ROS循环与退出调用同时等待关闭。"""
         application, speech, model, tts = make_voice(tmp_path)
-        entered, release = threading.Event(), threading.Event()
-        original = speech.close
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = speech.aclose
 
-        def close():
+        async def close():
             """在输入资源关闭中保留一个可观察的等待窗口。"""
             entered.set()
-            release.wait(2)
-            original()
+            await release.wait()
+            await original()
 
-        speech.close = close
+        speech.aclose = close
         first = asyncio.create_task(application.aclose())
         while not entered.is_set():
             await asyncio.sleep(0.001)
