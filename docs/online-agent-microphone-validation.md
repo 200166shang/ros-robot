@@ -270,3 +270,39 @@ Standards/Spec均0项发现。
 全新构建目录为 `issue-68-execution-build/{build,install,log}`。
 本轮为行为保持重构，未重跑云端在线音频或实体麦克风；此前真实在线
 证据与实体硬件验证限度保持，不将本轮固定测试当作新增在线验收。
+
+## 按功能目录管理（2026-10-15）
+
+用户授权执行此前延后的目录整理。本轮仅迁移文件与导入：
+conversation保存模型交互/记忆/provider及提示词，actions保存动作契约/
+注册/执行/设备行为，voice保存会话/ASR/TTS/语音组装，ros保存正常
+麦克风节点及ROS感知Adapter；共同runtime保留根目录。完整目录及
+阅读索引见[统一指南](online-agent.md#代码目录与阅读入口)。
+
+所有调用者、探针、测试同步使用新Python导入路径，不保留旧模块转发。
+setup.py使用find_packages安装子包；提示词资源归属conversation；
+语音输出目录保护的父目录层级随文件迁移调整。ROS命令、参数、话题与
+动作/记忆/语音行为保持。历史验收报告中的旧路径记录原验证时结构。
+
+验证结果：
+
+- 源码相关组装/provider/语音集成/正常麦克风10项通过，3.64秒。
+- 全部源码回归107项通过，12.53秒，范围与上一节完整pytest命令相同。
+- 干净源码外目录构建robot_audio、robot_agent两包成功，15.7秒。
+- 从/tmp加载本轮新install，不加入源码路径：确认16个迁移模块可导入，
+  默认提示词可从conversation读取，两个console entry point可加载；
+  抽查6个旧模块路径均不存在。实际ROS可执行列表仍仅有
+  online_voice_agent、online_voice_wav，WAV命令--help通过。
+- 同一安装环境运行robot_agent/test全部测试：89项通过，7.55秒；
+  模拟演示通过新路径 `python3 -m robot_agent.actions.demo` 运行。
+- 手动通过create_voice检查源码内输出路径仍被拒绝，无文件生成。
+- Ruff格式及静态检查49文件通过。加载Foxy与源码/工具依赖后，对整个
+  robot_agent Python目录运行Pyright：0错误、0警告；首次未加载依赖
+  环境时的9项缺失导入不作为源码错误。git diff --check通过。
+- 双轴审查范围 `018d0e0...29543b7`：Standards 0项、Spec 0项。
+
+本轮构建目录为源码外
+`/home/orangepi/local-data/ros-robot/issue-68-layout-build/{build,install,log}`。
+日志在同级issue-68-microphone-refactor的
+layout-{build,pyright,pytest,installed,demo}.log。部署应干净重建以避免
+旧模块残留；本轮未重新调用云端或验证实体麦克风/扬声器。
