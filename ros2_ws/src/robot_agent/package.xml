@@ -2,7 +2,7 @@
 <package format="3">
   <name>robot_agent</name>
   <version>0.1.0</version>
-  <description>Hardware-safe ROS 2 online text agent.</description>
+  <description>Sequential microphone Online Agent with independent WAV tests.</description>
   <maintainer email="robot@example.com">robot</maintainer>
   <license>MIT</license>
   <buildtool_depend>ament_python</buildtool_depend>

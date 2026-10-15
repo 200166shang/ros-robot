@@ -3,6 +3,7 @@
 ROS 2 Foxy / Python 3.8，统一入口组合真实在线 ASR、LLM、TTS、
 完整动作注册表、会话记忆与真实感知 Adapter。正常运行只有麦克风
 `online_voice_agent`；文本/WAV由独立测试进程使用同一交互Implementation。
+已删除online_agent文本节点与输入话题，旧离线前端不作兼容。
 LCD、舵机、底盘、导航、音乐、系统音量、WiFi 与提示音均保持日志模拟。
 Agent不配置dry_run；ObjectTrack自身仍dry_run=true，服务保留数据/TF前提。
 
@@ -43,6 +44,9 @@ source "$ONLINE_BUILD_ROOT/install/setup.bash"
 退出终端后需重新加载 ROS、SDK、Python 依赖及该 install 环境。
 
 ## 外部配置与凭证
+
+配置文件统一由online_runtime.load_config读取；模型、记忆与共同期限
+默认值集中在create_interaction。语音专属配置仍由create_voice解释。
 
 创建 `$HOME/.config/ros-robot/online.json`（源码外），将下面两个数据路径
 替换为自己的绝对路径。自定义 prompt 可用 `system_prompt_file`，默认
@@ -138,7 +142,7 @@ record_seconds。playback_enabled=true及play_executable/play_device
 ### 记忆、恢复与退出
 
 正常入口没有clear_memory/tts_enable/reconcile文本话题。公共Interface
-由同一调用者轮间调用，独立文本验收支持clear_memory/reconcile；退出后
+由同一调用者轮间调用，独立测试可直接调用clear_memory/reconcile；退出后
 可清理专用记忆文件。模型仍在途、动作unknown时继续保留无执行重叠与
 显式核对规则。TTS降级后可停止/重启恢复，绝不自动重试原动作。
 记忆语义见[记忆说明](online-agent-memory.md)。

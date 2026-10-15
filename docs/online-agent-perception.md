@@ -8,12 +8,12 @@ ObjectTrack继续dry_run=true，Agent不配置或读取该模式；不启动子�
 先按既有流程构建并启动固定组合：
 
 ```bash
-ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
-ros2 run robot_agent online_agent --ros-args -p config_file:=/外部目录/config.json
+ros2 launch robot_bringup online_agent.launch.py \
+  config_file:=/外部目录/config.json
 ```
 
 ROS 环境、SDK 和模型配置沿用各包说明。外部在线配置及凭证加载见
-[在线文本入口](online-agent-text.md)。Agent 不自动启动或重启设备。
+[在线模型与文本测试](online-agent-text.md)。Agent 不自动启动或重启设备。
 
 ## 动作与结果
 
@@ -46,36 +46,16 @@ failed，保留原因。Agent直接消费设备服务回执，不再读取或校
 
 多阶段动作共享截止时间。超时只报告 unknown，保留调用，不取消或重试。
 迟到融合回执不能继续提交 Follow；迟到待机回执不能继续暂停相机。
-通过 `/online_agent/reconcile` 显式核对，后续动作不会补执行。完整参数与
-回合语义见[在线文本入口](online-agent-text.md)。
+独立测试通过交互Interface的reconcile(turn_id)显式核对，后续动作不会补执行。完整参数与
+回合语义见[在线模型与文本测试](online-agent-text.md)。
 
 ## 验收
 
 固定模型事件从 `OnlineInteraction.submit` 观察回复、动作回执与顺序。
 `test_online_perception_ros.py` 在隔离 ROS domain 内通过真实 ROS 传输与固定
-设备响应测试安全参数、拒绝、超时与迟到回执；这不是实机或在线模型证据。
+设备响应测试设备回执、拒绝、超时与迟到回执；这不是实机或在线模型证据。
 
-真实在线探针只连接已启动组合，不管理设备；凭证由环境提供：
-
-```bash
-python3 ros2_ws/src/robot_agent/test/online_perception_probe.py \
-  --ros-args -p config_file:=/外部目录/config.json
-```
-
-探针依次恢复采集、开启融合、开启 Follow、查询、关闭融合、暂停并恢复采集，
-检查真实在线模型选出的函数、实际回执以及无 Twist 输出。环境阻塞时探针失败，
-不能用固定 provider 或传感器样例替代实机通过。详情见[验收报告](online-agent-perception-validation.md)。
-
-## 能力表组装
-
-感知与 #64 的头部、导航、音乐能力统一使用 `Dict[str, ActionHandler]`：
-
-```python
-perception = PerceptionActions(RosPerception(self), action_timeout)
-registry.register_many(perception_actions(perception))
-```
-
-`perception_actions()` 声明动作名称与实现；入口负责把能力表装入注册表。
-`PerceptionActions` 只持有设备 Interface、期限配置和最后确认状态，不引用
-注册表。动作截止时间由共享 `online_action_contracts` 提供，执行层设置与恢复
-线程上下文，业务流程读取同一期限，保持超时不重试、不补执行。
+真实在线综合探针独立运行，直接调用交互/语音Interface，并观察真实扫描、
+图像和设备回执；不通过文本话题，也不自行管理设备。执行命令与前提见
+[综合验收](online-agent.md)。原online_perception_probe已随文本节点删除，
+历史结果仍见[原感知验收](online-agent-perception-validation.md)。

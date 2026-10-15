@@ -197,3 +197,41 @@ reconcile → _reconcile_turn
 从/tmp加载安装版执行相同语音/麦克风回归：15 passed（3.35秒）。
 双轴审查Standards/Spec均0项发现。日志沿用源码外证据目录，
 前缀voice-flow-。
+
+## 统一交互组装与删除文本节点（2026-10-15）
+
+基线95c451e。用户确认正常只有麦克风→ASR→text→LLM，文本只作为
+ASR输出或测试数据；删除正式ROS文本入口，不兼容现有旧离线前端。
+后续离线方案重新开发，本轮没有实现新离线能力。
+
+新增online_runtime：load_config统一读取UTF-8 JSON对象并支持~路径；
+create_interaction集中模型、动作注册表、记忆与共同期限的组装及默认值。
+语音组装继续负责ASR/TTS、录音播放和语音专属配置；ROS参数仍由节点声明。
+文件及语法错误直接显露，配置顶层不是JSON对象时在输入边缘明确拒绝。
+不添加配置框架、队列或进程。模型/动作的执行和未知回执规则保持。
+
+```text
+正常麦克风 / 独立WAV → create_voice → create_interaction
+直接文本 / 记忆测试                 → create_interaction
+```
+
+删除online_ros_node、online_agent console script、两个依赖旧话题的
+文本/感知探针及旧ROS文本记忆测试。以共同组装Interface直接验证文本记忆；
+真实ROS接线仍由麦克风节点与感知Adapter集成测试覆盖，综合探针保留。
+当前操作文档已更新，历史验收报告中的旧命令仅作为历史证据保留。
+
+- 新组装测试先观察到缺少module失败，实施后相关6项通过。
+  测试覆盖配置驱动的HTTPS调用期限、近期上下文、摘要、重新组装召回、
+  清空、错误JSON形状/共同设置、显式动作Adapter及有意重复。
+- 完整回归首次104 passed、1项ROS感知确认超时；当时并行执行构建和
+  类型检查。保持0.1秒测试期限不变，单独感知测试2项通过，随后完整
+  复验105 passed（11.40秒）。这是观察到的时序限度，不能抹去首次失败。
+- 全新源码外issue-68-assembly-build目录：robot_audio与robot_agent
+  两包构建成功。安装版相关6项通过（3.08秒）。
+- 安装环境ros2 pkg executables仅列出online_voice_agent、
+  online_voice_wav；旧文本module不存在。部署须使用干净安装目录，
+  旧增量安装可能遗留已删除可执行文件。
+- 修改的5个模块Pyright零错误/警告，Ruff43文件及git diff --check通过。
+  记忆探针--help在安装环境可运行；本轮未重跑真实云端或实体麦克风。
+
+日志位于同一源码外证据目录，前缀assembly-；双轴审查结果提交前补充。

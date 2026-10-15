@@ -20,11 +20,10 @@ setup(
     zip_safe=True,
     maintainer="robot",
     maintainer_email="robot@example.com",
-    description="Hardware-safe ROS 2 online text agent",
+    description="Online microphone Agent and independent WAV tests",
     license="MIT",
     entry_points={
         "console_scripts": [
-            "online_agent = robot_agent.online_ros_node:main",
             "online_voice_agent = robot_agent.online_voice_ros_node:main",
             "online_voice_wav = robot_agent.online_voice_runtime:main",
         ]

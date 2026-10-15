@@ -2,7 +2,6 @@
 
 import json
 import threading
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import rclpy
@@ -12,6 +11,7 @@ from std_msgs.msg import String
 from .online_actions import ActionRegistry
 from .online_perception import PerceptionActions, perception_actions
 from .online_perception_ros import RosPerception
+from .online_runtime import DEFAULT_ACTION_TIMEOUT, load_config
 from .online_simulation import simulate_cue
 from .online_voice import OnlineVoice
 from .online_voice_runtime import capture_turn, create_voice
@@ -21,7 +21,8 @@ def create_ros_voice(node: Node, config: Dict) -> OnlineVoice:
     """组装同一语音Implementation与ROS感知Adapter，供运行和独立验收。"""
     actions = ActionRegistry()
     perception = PerceptionActions(
-        RosPerception(node), float(config.get("action_timeout", 5))
+        RosPerception(node),
+        float(config.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
     )
     actions.register_many(perception_actions(perception))
     return create_voice(config, actions=actions)
@@ -37,9 +38,7 @@ class OnlineVoiceRosNode(Node):
         filename = self.declare_parameter("config_file", "").value
         if not isinstance(filename, str) or not filename:
             raise ValueError("必须指定外部 config_file 路径")
-        config = json.loads(
-            Path(filename).expanduser().read_text(encoding="utf-8")
-        )
+        config = load_config(filename)
         self._config = config
         self._voice = create_ros_voice(self, config)
         self._stop = threading.Event()

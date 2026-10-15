@@ -17,6 +17,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, LaserScan
 
+from robot_agent.online_runtime import load_config
 from robot_agent.online_voice import OnlineVoice
 from robot_agent.online_voice_ros_node import create_ros_voice
 from robot_agent.online_voice_runtime import capture_turn
@@ -125,9 +126,7 @@ def main() -> None:
     phase.add_argument("--recall", action="store_true")
     phase.add_argument("--recording-only", action="store_true")
     args = parser.parse_args()
-    config = json.loads(
-        Path(args.config).expanduser().read_text(encoding="utf-8")
-    )
+    config = load_config(args.config)
     rclpy.init()
     probe = OnlineIntegrationProbe(config)
     executor = SingleThreadedExecutor()

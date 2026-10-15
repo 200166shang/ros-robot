@@ -74,7 +74,7 @@ ros2 topic echo /online_agent/result std_msgs/msg/String
 ```
 
 凭证仅环境读取，不写配置明文api_key。默认真实在线ASR/LLM/TTS使用
-DashScope；端点与地域说明见[独立文本说明](online-agent-text.md)。
+DashScope；端点与地域说明见[模型与文本测试说明](online-agent-text.md)。
 `record_executable`、`record_device`、`record_seconds`控制已有录音Adapter；
 `playback_enabled=true`时，play_executable/play_device控制回复播放。
 所有录音副本为临时文件；回复JSON/WAV及记忆放在源码外。
@@ -105,8 +105,8 @@ Ctrl+C关闭语音连接、取消并回收录制/播放子进程，等待唯一�
 
 ## 独立测试入口
 
-文本测试单独运行 `ros2 run robot_agent online_agent`，不可与麦克风运行
-混用；按每项完整回执再提交下一项，详情见[文本说明](online-agent-text.md)。
+文本测试直接调用create_interaction(config).submit(text)，不启动ROS文本
+节点，详情见[模型与文本测试说明](online-agent-text.md)。
 
 WAV单回合CLI仅处理文件，必须提供--wav；免唤醒，不启动麦克风：
 

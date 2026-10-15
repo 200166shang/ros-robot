@@ -11,9 +11,8 @@ from robot_audio.audio_io import play_wav
 from robot_audio.audio_sources import create_audio_source
 
 from .online_actions import ActionRegistry
-from .online_interaction import OnlineInteraction, make_result
-from .online_memory import ConversationMemory
-from .online_provider import DashScopeProvider
+from .online_interaction import make_result
+from .online_runtime import create_interaction, load_config
 from .online_speech import DashScopeASR, DashScopeTTS
 from .online_voice import OnlineVoice
 
@@ -43,22 +42,7 @@ def create_voice(
         playback = play_reply
 
     voice = OnlineVoice(
-        OnlineInteraction(
-            DashScopeProvider(config),
-            actions,
-            provider_timeout=float(config.get("provider_timeout", 60)),
-            action_timeout=float(config.get("action_timeout", 5)),
-            memory=ConversationMemory(
-                Path(
-                    config.get(
-                        "memory_file",
-                        "~/.local/state/ros-robot/conversation-summary.json",
-                    )
-                ),
-                recent_turns=config.get("memory_recent_turns", 6),
-                summary_trigger=config.get("memory_summary_trigger", 6),
-            ),
-        ),
+        create_interaction(config, actions),
         DashScopeASR(config),
         DashScopeTTS(config),
         directory,
@@ -107,9 +91,7 @@ def main() -> None:
     parser.add_argument("--wav", required=True)
     args = parser.parse_args()
     # 1. 外部配置和凭证由组装入口/provider 分别负责。
-    config = json.loads(
-        Path(args.config).expanduser().read_text(encoding="utf-8")
-    )
+    config = load_config(args.config)
     voice = create_voice(config)
     try:
         # 2. 真实输入与动作确认后输出，单回合无需唤醒词。
