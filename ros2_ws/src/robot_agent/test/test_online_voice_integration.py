@@ -1,6 +1,10 @@
 """通过语音组装 Interface 验证合入主线的记忆与感知能力。"""
 
 import json
+import wave
+from pathlib import Path
+
+from test_online_speech import SpeechSocket, fixture_wav, transport
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.perception import (
@@ -8,7 +12,7 @@ from robot_agent.actions.perception import (
     perception_actions,
 )
 from robot_agent.conversation.provider import DashScopeProvider
-from robot_agent.voice.runtime import create_voice
+from robot_agent.voice.runtime import capture_turn, create_voice
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 
 
@@ -91,3 +95,51 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
         assert inputs[-1] == "清空后"
     finally:
         restarted.close()
+
+
+def test_wav_runtime_preserves_actions_reply_audio_and_record(
+    tmp_path, monkeypatch
+):
+    """独立 WAV 通过真实语音任务协议进入模型和动作主线并关联产物。"""
+    sockets = [SpeechSocket(), SpeechSocket()]
+    transport(monkeypatch, sockets)
+    model_inputs = []
+
+    def complete(self, text, timeout):
+        """固定模型外部结果，保留动作解析、执行和确认回复主线。"""
+        model_inputs.append(text)
+        return json.dumps(
+            {
+                "function": ["head_nod"],
+                "response": "模型的提前承诺",
+            }
+        )
+
+    monkeypatch.setattr(DashScopeProvider, "complete", complete)
+    directory = tmp_path / "output"
+    voice = create_voice({"output_dir": str(directory)})
+    try:
+        result = capture_turn(voice, str(fixture_wav(tmp_path)))
+    finally:
+        voice.close()
+
+    assert model_inputs == ["真实句一。真实句二。"]
+    assert result["transcript"] == model_inputs[0]
+    assert result["actions"][0]["status"] == "simulated_success"
+    assert "模型的提前承诺" not in result["reply"]
+    assert result["tts_status"] == "completed"
+    assert (
+        sockets[1].commands[1]["payload"]["input"]["text"] == result["reply"]
+    )
+    audio_path = Path(result["audio_path"])
+    assert audio_path == directory / (result["turn_id"] + ".wav")
+    with wave.open(str(audio_path)) as audio:
+        assert audio.getnframes() == 2400
+    record = json.loads(
+        (directory / (result["turn_id"] + ".json")).read_text()
+    )
+    assert record["transcript"] == result["transcript"]
+    assert record["reply"] == result["reply"]
+    assert record["actions"] == result["actions"]
+    assert record["audio_path"] == result["audio_path"]
+    assert all(socket.closed for socket in sockets)

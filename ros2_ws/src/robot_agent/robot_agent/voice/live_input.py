@@ -9,11 +9,8 @@ from typing import Dict, Optional, Protocol
 import websocket
 
 from robot_agent.calls import start_call
-from robot_agent.voice.speech import (
-    FRAME_SAMPLES,
-    SILENCE_FRAME,
-    SpeechConnection,
-)
+from robot_agent.voice._speech_task import SpeechConnection, SpeechTask
+from robot_agent.voice.speech import FRAME_SAMPLES, SILENCE_FRAME
 
 
 class PcmInput(Protocol):
@@ -56,7 +53,7 @@ class LiveSpeechInput:
         self._paused = False
         self._resume_requested = False
         self._text: Optional[str] = None
-        self._stream: Optional[websocket.WebSocket] = None
+        self._stream: Optional[SpeechTask] = None
         self._sent_samples = 0
         self._accept_after_ms = 0
         self._send_error: Optional[Exception] = None

@@ -1,118 +1,18 @@
 """DashScope 流式 ASR/TTS Adapters：有界连接、暂停保活和资源释放。"""
 
-import json
-import os
 import threading
 import time
-import uuid
 import wave
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Dict, Optional, Union
-
-import websocket
+from typing import Dict, List, Optional
 
 from robot_agent.calls import start_call
+from robot_agent.voice._speech_task import SpeechConnection, SpeechTask
 
-DEFAULT_SPEECH_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 FRAME_SECONDS = 0.1
 FRAME_SAMPLES = 1600
 SILENCE_FRAME = bytes(FRAME_SAMPLES * 2)
-
-
-class SpeechConnection:
-    """单个任务连接；只共享 ASR/TTS 实际一致的协议与连接生命周期。"""
-
-    def __init__(self, config: Dict) -> None:
-        """环境读取凭证，外部端点必须加密，退出关闭在途连接。"""
-        if "api_key" in config:
-            raise ValueError("使用 api_key_env，不允许明文 api_key")
-        self._key = os.environ[config.get("api_key_env", "DASHSCOPE_API_KEY")]
-        self._endpoint = config.get("speech_endpoint", DEFAULT_SPEECH_ENDPOINT)
-        if not self._endpoint.startswith("wss://"):
-            raise ValueError("语音端点必须使用 WSS")
-        self._socket: Optional[websocket.WebSocket] = None
-        self._lock = threading.Lock()
-        self.closed = threading.Event()
-        self.task_id = ""
-
-    def open(self, payload: Dict, deadline: float) -> websocket.WebSocket:
-        """创建新任务，收到启动确认后才允许音频或文本输入。"""
-        remaining = deadline - time.monotonic()
-        if remaining <= 0 or self.closed.is_set():
-            raise TimeoutError("语音任务期限已到或入口已关闭")
-        connection = websocket.create_connection(
-            self._endpoint,
-            header={"Authorization": "Bearer " + self._key},
-            timeout=remaining,
-        )
-        with self._lock:
-            if self.closed.is_set():
-                connection.close()
-                raise OSError("语音入口已关闭")
-            self._socket = connection
-        connection.settimeout(min(0.2, remaining))
-        self.task_id = uuid.uuid4().hex
-        self.send(connection, "run-task", payload)
-        while True:
-            event = self.receive(connection, deadline)
-            if event is not None and not isinstance(event, bytes):
-                if event["header"]["event"] == "task-started":
-                    return connection
-
-    def send(
-        self, connection: websocket.WebSocket, action: str, payload: Dict
-    ) -> None:
-        """发送同一任务标识的控制事件。"""
-        connection.send(
-            json.dumps(
-                {
-                    "header": {
-                        "action": action,
-                        "task_id": self.task_id,
-                        "streaming": "duplex",
-                    },
-                    "payload": payload,
-                }
-            )
-        )
-
-    def receive(
-        self, connection: websocket.WebSocket, deadline: float
-    ) -> Optional[Union[Dict, bytes]]:
-        """轮询期限与关闭状态，校验外部事件并脱敏 provider 错误。"""
-        if self.closed.is_set() or time.monotonic() >= deadline:
-            raise TimeoutError("语音连接关闭或任务超时")
-        try:
-            message = connection.recv()
-        except websocket.WebSocketTimeoutException:
-            return None
-        if not message:
-            raise OSError("语音连接中断")
-        if isinstance(message, bytes):
-            return message
-        try:
-            event = json.loads(message)
-            header = event["header"]
-            if header["task_id"] != self.task_id:
-                raise ValueError("任务标识不匹配")
-            if header["event"] == "task-failed":
-                raise OSError("在线语音任务失败")
-            return event
-        except (ValueError, KeyError, TypeError) as error:
-            raise OSError("在线语音事件无效") from error
-
-    def disconnect(self) -> None:
-        """释放本轮连接，允许下一回合重新连接。"""
-        with self._lock:
-            connection, self._socket = self._socket, None
-        if connection is not None:
-            connection.close(timeout=0)
-
-    def close(self) -> None:
-        """关闭入口及活跃连接，不再建立新任务。"""
-        self.closed.set()
-        self.disconnect()
 
 
 class DashScopeASR:
@@ -145,7 +45,7 @@ class DashScopeASR:
             sender: Optional[Future] = None
             try:
                 # 2. 每次重连使用新任务；采集与最终识别同时进行。
-                connection = self._connection.open(
+                task = self._connection.open(
                     {
                         "task_group": "audio",
                         "task": "asr",
@@ -161,13 +61,13 @@ class DashScopeASR:
                     deadline,
                 )
                 sender = start_call(
-                    lambda: self._send_audio(path, connection, stop, deadline)
+                    lambda: self._send_audio(path, task, stop, deadline)
                 )
-                sentences = []
+                sentences: List[str] = []
                 while True:
                     if sender.done():
                         sender.result()
-                    event = self._connection.receive(connection, deadline)
+                    event = task.receive(deadline)
                     if event is None or isinstance(event, bytes):
                         continue
                     kind = event["header"]["event"]
@@ -185,7 +85,7 @@ class DashScopeASR:
                                 sentences.append(text)
                         except (KeyError, TypeError, ValueError) as error:
                             raise OSError("识别事件无效") from error
-            except (OSError, websocket.WebSocketException) as error:
+            except OSError as error:
                 if (
                     attempt + 1 == self._attempts
                     or time.monotonic() >= deadline
@@ -199,18 +99,14 @@ class DashScopeASR:
                 if sender is not None:
                     try:
                         sender.result(timeout=1)
-                    except (
-                        OSError,
-                        TimeoutError,
-                        websocket.WebSocketException,
-                    ):
+                    except OSError:
                         pass
         raise OSError("在线识别未完成")
 
     def _send_audio(
         self,
         path: Path,
-        connection: websocket.WebSocket,
+        task: SpeechTask,
         stop: threading.Event,
         deadline: float,
     ) -> None:
@@ -228,11 +124,9 @@ class DashScopeASR:
                     else audio.readframes(FRAME_SAMPLES)
                 )
                 if not frame:
-                    self._connection.send(
-                        connection, "finish-task", {"input": {}}
-                    )
+                    task.send("finish-task", {"input": {}})
                     return
-                connection.send_binary(frame)
+                task.send_binary(frame)
                 stop.wait(FRAME_SECONDS)
 
     def pause(self) -> None:
@@ -263,7 +157,7 @@ class DashScopeTTS:
         temporary = destination.with_suffix(".wav.tmp")
         try:
             # 1. 确认任务启动后提交可信文本，再显式结束文本输入。
-            connection = self._connection.open(
+            task = self._connection.open(
                 {
                     "task_group": "audio",
                     "task": "tts",
@@ -282,10 +176,8 @@ class DashScopeTTS:
                 },
                 deadline,
             )
-            self._connection.send(
-                connection, "continue-task", {"input": {"text": text}}
-            )
-            self._connection.send(connection, "finish-task", {"input": {}})
+            task.send("continue-task", {"input": {"text": text}})
+            task.send("finish-task", {"input": {}})
             # 2. 音频片段直接落盘；task-finished 才代表合成成功。
             frames = 0
             with wave.open(str(temporary), "wb") as audio:
@@ -293,7 +185,7 @@ class DashScopeTTS:
                 audio.setsampwidth(2)
                 audio.setframerate(16000)
                 while True:
-                    event = self._connection.receive(connection, deadline)
+                    event = task.receive(deadline)
                     if isinstance(event, bytes):
                         audio.writeframesraw(event)
                         frames += len(event)
@@ -305,13 +197,13 @@ class DashScopeTTS:
             if frames == 0:
                 raise OSError("合成没有返回音频")
             temporary.replace(destination)
-        except websocket.WebSocketException as error:
-            raise OSError("在线合成连接失败") from error
         finally:
             # 3. 失败产物不冒充音频；连接由本次合成负责释放。
-            self._connection.disconnect()
-            if temporary.exists():
-                temporary.unlink()
+            try:
+                self._connection.disconnect()
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
 
     def close(self) -> None:
         """关闭在途合成连接。"""
