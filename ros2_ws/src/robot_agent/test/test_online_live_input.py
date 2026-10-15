@@ -1,419 +1,560 @@
-"""在PCM与WSS真实Seam验证持续输入、暂停保活及迟到句过滤。"""
+"""通过原生WebSocket和PCM Seam验证持续输入与半双工交接。"""
 
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 
 import pytest
-import websocket
-from test_online_speech import SpeechSocket, transport
+from async_speech_fixture import acknowledge, event, final, speech_server
+from websockets.asyncio import client
+from websockets.asyncio.client import ClientConnection
 
 from robot_agent.voice.live_input import LiveSpeechInput
 
 
 class PcmFixture:
-    """按固定节奏产出可辨认PCM帧，关闭可取消读取。"""
+    """以固定节奏交付可辨认PCM，记录实际设备生命周期。"""
 
     def __init__(self):
-        """保存设备生命周期与清理回执。"""
-        self.closed = threading.Event()
-        self.discarded = threading.Event()
+        """只保存测试设备状态，不启动读取。"""
         self.frames = 0
+        self.started = False
+        self.closed = False
+        self.discards = 0
 
-    def start(self):
-        """固定设备无需外部资源。"""
+    async def start(self):
+        """打开外部PCM源。"""
+        self.started = True
 
-    def read(self, size, timeout=0.2):
-        """产出非静音；暂停时仍必须持续消费。"""
-        if self.closed.wait(0.02):
-            return None
+    async def read(self, size, timeout=0.2):
+        """每帧标记独立采集次序。"""
+        await asyncio.sleep(0.01)
         self.frames += 1
-        return b"\x01\x00" * (size // 2)
+        return self.frames.to_bytes(2, "little") * (size // 2)
 
     def discard(self):
-        """向测试回执恢复前的音频积压已经清理。"""
-        self.discarded.set()
+        """回执恢复时丢弃源积压。"""
+        self.discards += 1
 
-    def close(self):
-        """取消在途读取。"""
-        self.closed.set()
-
-
-def until(predicate):
-    """只等待公开设备回执，避免线程时序依赖固定睡眠。"""
-    deadline = time.monotonic() + 2
-    while not predicate():
-        assert time.monotonic() < deadline
-        time.sleep(0.005)
+    async def aclose(self):
+        """关闭实际设备。"""
+        self.closed = True
 
 
-def final(socket, text, begin):
-    """提供带音频时间戳的最终句。"""
-    socket.event(
-        "result-generated",
-        {
-            "output": {
-                "sentence": {
-                    "text": text,
-                    "begin_time": begin,
-                    "sentence_end": True,
-                    "heartbeat": False,
-                }
-            }
-        },
-    )
+async def until(predicate):
+    """等待外部可观察回执，超时明确失败。"""
+
+    async def wait():
+        """等待设备或网络的公开回执。"""
+        while not predicate():
+            await asyncio.sleep(0.001)
+
+    await asyncio.wait_for(wait(), 2)
 
 
-def test_live_pause_drains_mic_keeps_connection_and_filters_late_sentence(
+def test_live_pause_drains_keeps_silence_and_delivers_one_final(monkeypatch):
+    """一个持续任务跨回合，超时不取消任务，暂停丢弃且新回合可重复文本。"""
+
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        frames, sockets = [], []
+        command_ready = asyncio.Event()
+
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            command = await acknowledge(socket)
+            sockets.append((socket, command))
+            command_ready.set()
+            async for frame in socket:
+                frames.append(frame)
+
+        async with speech_server(monkeypatch, handler):
+            source = PcmFixture()
+            live = LiveSpeechInput({}, source)
+            assert not source.started
+            try:
+                assert await live.listen(0.02) is None
+                await command_ready.wait()
+                await until(lambda: len(frames) >= 2)
+                socket, command = sockets[0]
+                await event(
+                    socket,
+                    command,
+                    "result-generated",
+                    {"output": {"sentence": {"sentence_end": False}}},
+                )
+                await event(
+                    socket,
+                    command,
+                    "result-generated",
+                    {
+                        "output": {
+                            "sentence": {
+                                "sentence_end": True,
+                                "heartbeat": True,
+                            }
+                        }
+                    },
+                )
+                assert await live.listen(0.02) is None
+                await final(socket, command, "相同句", 0)
+                assert await live.listen(1) == "相同句"
+                baseline = len(frames)
+                await until(lambda: len(frames) >= baseline + 3)
+                assert frames[-2:] == [bytes(3200)] * 2
+                before = source.frames
+                await final(socket, command, "暂停旧句", 0)
+                assert await live.listen(0.03) is None
+                assert source.frames > before
+                live.resume()
+                await final(socket, command, "迟到旧句", 0)
+                assert await live.listen(0.03) is None
+                await final(socket, command, "相同句", len(frames) * 100)
+                assert await live.listen(1) == "相同句"
+                assert await live.listen(0.02) is None
+                assert len(sockets) == 1
+                assert source.discards >= 2
+            finally:
+                await live.aclose()
+            assert source.closed
+
+    asyncio.run(scenario())
+
+
+def test_pcm_failure_wakes_idle_receiver_without_reconnect(monkeypatch):
+    """设备失败不能等待服务端事件，也不能消耗网络重连后继续录音。"""
+
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        sockets = []
+
+        class BrokenPcm(PcmFixture):
+            """第一帧之后报告具体设备错误。"""
+
+            async def read(self, size, timeout=0.2):
+                """只产生一帧，随后确定性失败。"""
+                if self.frames:
+                    raise OSError("PCM device failed")
+                return await super().read(size, timeout)
+
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            await acknowledge(socket)
+            sockets.append(socket)
+            await socket.wait_closed()
+
+        async with speech_server(monkeypatch, handler):
+            source = BrokenPcm()
+            live = LiveSpeechInput({}, source)
+            try:
+                with pytest.raises(OSError, match="PCM device failed"):
+                    await live.listen(1)
+            finally:
+                await live.aclose()
+            assert source.closed
+            assert len(sockets) <= 1
+
+    asyncio.run(scenario())
+
+
+def test_reconnect_success_does_not_reset_failure_budget(monkeypatch):
+    """两次已握手断线耗尽预算，连接成功本身不是识别成功。"""
+
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        connections = []
+
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            await acknowledge(socket)
+            connections.append(socket)
+            await socket.close()
+
+        async with speech_server(monkeypatch, handler):
+            source = PcmFixture()
+            live = LiveSpeechInput({"asr_attempts": 2}, source)
+            with pytest.raises(OSError, match="重连次数"):
+                await live.listen(1)
+            await live.aclose()
+            assert len(connections) == 2
+            assert source.closed
+
+    asyncio.run(scenario())
+
+
+def test_pause_during_backpressure_drains_and_reconnects_only_new_audio(
     monkeypatch,
 ):
-    """一条任务跨越多轮，暂停丢弃真实音频且恢复不交付旧句。"""
-    socket, source = SpeechSocket(), PcmFixture()
-    transport(monkeypatch, [socket])
-    live = LiveSpeechInput({}, source)
-    try:
-        assert live.listen(0.02) is None
-        until(lambda: len(socket.frames) >= 2)
-        socket.event(
-            "result-generated",
-            {
-                "output": {
-                    "sentence": {
-                        "text": "中间句",
-                        "sentence_end": False,
-                    }
-                }
-            },
-        )
-        socket.event(
-            "result-generated",
-            {
-                "output": {
-                    "sentence": {
-                        "text": "心跳",
-                        "sentence_end": True,
-                        "heartbeat": True,
-                    }
-                }
-            },
-        )
-        assert live.listen(0.03) is None
-        final(socket, "第一句", 0)
-        assert live.listen(1) == "第一句"
-        baseline = len(socket.frames)
-        until(lambda: len(socket.frames) >= baseline + 3)
-        assert socket.frames[-2:] == [bytes(3200)] * 2
-        assert source.frames > baseline
-        final(socket, "播报泄漏", 0)
-        assert live.listen(0.05) is None
-        live.resume()
-        assert source.discarded.wait(1)
-        final(socket, "迟到旧句", 0)
-        assert live.listen(0.05) is None
-        final(socket, "第二句", len(socket.frames) * 100)
-        assert live.listen(1) == "第二句"
-        assert len(socket.commands) == 1
-        assert socket.commands[0]["payload"]["parameters"]["heartbeat"]
-        assert not socket.closed
-    finally:
-        live.close()
-    assert socket.closed and source.closed.is_set()
+    """旧发送被背压卡住时暂停必须撤销旧任务，恢复后不能提交旧帧。"""
+
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        blocked = asyncio.Event()
+        frames, sockets = [], []
+        original_send = ClientConnection.send
+        blocked_once = False
+
+        async def send(socket, message, *args, **kwargs):
+            """只阻塞一次真实客户端音频发送，控制消息仍走原生socket。"""
+            nonlocal blocked_once
+            if isinstance(message, bytes) and not blocked_once:
+                blocked_once = True
+                blocked.set()
+                await asyncio.Event().wait()
+            return await original_send(socket, message, *args, **kwargs)
+
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            await acknowledge(socket)
+            sockets.append(socket)
+            async for frame in socket:
+                frames.append(frame)
+
+        monkeypatch.setattr(ClientConnection, "send", send)
+        async with speech_server(monkeypatch, handler):
+            source = PcmFixture()
+            live = LiveSpeechInput({}, source)
+            try:
+                assert await live.listen(0.03) is None
+                await asyncio.wait_for(blocked.wait(), 1)
+                before = source.frames
+                await until(lambda: source.frames >= before + 4)
+                live.pause()
+                await until(lambda: bool(frames))
+                assert frames[-1] == bytes(3200)
+                assert len(sockets) == 2
+                live.resume()
+                resume_frame = source.frames
+                await until(lambda: frames[-1] != bytes(3200))
+                assert int.from_bytes(frames[-1][:2], "little") > resume_frame
+                assert len(sockets) == 2
+            finally:
+                await live.aclose()
+            assert source.closed
+
+    asyncio.run(scenario())
 
 
-def test_live_reconnect_does_not_replay_and_exhaustion_is_visible(monkeypatch):
-    """失败任务不交付句子；重连有界，耗尽明确失败且回收设备。"""
-    first, second = SpeechSocket(fail=True), SpeechSocket()
-    third = SpeechSocket(fail=True)
-    transport(monkeypatch, [first, second, third])
-    source = PcmFixture()
-    live = LiveSpeechInput({"asr_attempts": 2}, source)
-    try:
-        live.listen(0.02)
-        until(lambda: bool(second.frames))
-        assert first.closed
-        final(second, "恢复后的输入", 0)
-        assert live.listen(1) == "恢复后的输入"
-        second.event("task-failed")
-        # 有效句重置连续失败计数，第二次失败耗尽重连预算。
-        with pytest.raises(OSError, match="重连次数"):
-            while True:
-                live.listen(0.1)
-    finally:
-        live.close()
-    assert source.closed.is_set()
-
-
-def test_live_close_cancels_idle_listen_and_pcm_read(monkeypatch):
-    """无人说话也能关闭，不等待整句超时或遗留采集线程。"""
-    socket, source = SpeechSocket(), PcmFixture()
-    transport(monkeypatch, [socket])
-    live = LiveSpeechInput({}, source)
-    live.listen(0.02)
-    until(lambda: bool(socket.frames))
-    before = time.monotonic()
-    live.close()
-    assert time.monotonic() - before < 1
-    assert live.listen(0.02) is None
-    assert source.closed.is_set() and socket.closed
-
-
-def test_pcm_failure_stops_input_without_network_replay(monkeypatch):
-    """设备错误不重开ASR任务，更不能把缺失音频当作静音成功。"""
-
-    class FailingPcm(PcmFixture):
-        """显式触发真实设备读取失败。"""
-
-        failed = False
-
-        def read(self, size, timeout=0.2):
-            """读取失败经公共listen显露。"""
-            if self.failed:
-                raise OSError("PCM device failed")
-            return super().read(size, timeout)
-
-    socket, source = SpeechSocket(), FailingPcm()
-    transport(monkeypatch, [socket])
-    live = LiveSpeechInput({}, source)
-    try:
-        live.listen(0.02)
-        until(lambda: bool(socket.frames))
-        source.failed = True
-        with pytest.raises(OSError, match="PCM device failed"):
-            while True:
-                live.listen(0.1)
-    finally:
-        live.close()
-    assert socket.closed and source.closed.is_set()
-
-
-def test_close_during_connection_creation_releases_late_socket(monkeypatch):
-    """关闭遇到尚未返回的连接时，迟到socket仍须被关闭且不启动任务。"""
-    opened, release = threading.Event(), threading.Event()
-    socket, source = SpeechSocket(), PcmFixture()
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-
-    def connect(*args, **kwargs):
-        """模拟握手I/O尚未返回，外部网络等待有界。"""
-        opened.set()
-        assert release.wait(1)
-        return socket
-
-    monkeypatch.setattr(websocket, "create_connection", connect)
-    live = LiveSpeechInput({}, source)
-    live.listen(0.02)
-    assert opened.wait(1)
-    try:
-        with ThreadPoolExecutor() as executor:
-            closing = executor.submit(live.close)
-            release.set()
-            closing.result(timeout=2)
-    finally:
-        release.set()
-        live.close()
-    assert socket.closed
-    assert socket.commands == []
-
-
-@pytest.mark.parametrize("failing_resource", ["socket", "source"])
-def test_close_failure_still_releases_other_resources(
-    monkeypatch, failing_resource
+def test_accepted_final_resets_budget_but_preserves_pause_across_reconnect(
+    monkeypatch,
 ):
-    """关闭步骤出现编程异常时，其余设备回收仍必须执行并显露错误。"""
+    """只有实际交付最终句重置失败预算，重连期间暂停继续发送静音。"""
 
-    class ClosingSocket(SpeechSocket):
-        """在传输资源Seam注入关闭异常。"""
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        sockets, frames = [], []
+        disconnect = asyncio.Event()
 
-        def close(self, timeout=None):
-            """标记真实关闭后抛出可观察的编程错误。"""
-            super().close(timeout)
-            if failing_resource == "socket":
-                raise RuntimeError("cleanup failure")
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            command = await acknowledge(socket)
+            sockets.append(socket)
+            if len(sockets) == 2:
+                await final(socket, command, "有效句")
+                await disconnect.wait()
+            if len(sockets) == 3:
+                frames.append(await socket.recv())
+            await socket.close()
 
-    class ClosingSource(PcmFixture):
-        """在设备资源Seam注入关闭异常。"""
+        async with speech_server(monkeypatch, handler):
+            source = PcmFixture()
+            live = LiveSpeechInput({"asr_attempts": 2}, source)
+            try:
+                assert await live.listen(1) == "有效句"
+                disconnect.set()
+                with pytest.raises(OSError, match="重连次数"):
+                    await live.listen(1)
+            finally:
+                await live.aclose()
+            assert len(sockets) == 3
+            assert frames == [bytes(3200)]
+            assert source.closed
 
-        def close(self):
-            """设备仍需取消读取，再向调用者显露错误。"""
-            super().close()
-            if failing_resource == "source":
-                raise RuntimeError("cleanup failure")
-
-    socket, source = ClosingSocket(), ClosingSource()
-    transport(monkeypatch, [socket])
-    live = LiveSpeechInput({}, source)
-    live.listen(0.02)
-    until(lambda: bool(socket.frames))
-    with pytest.raises(RuntimeError, match="cleanup failure"):
-        live.close()
-    assert socket.closed and source.closed.is_set()
+    asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("operation", ["send", "receive"])
-@pytest.mark.parametrize("programming_error", [False, True])
-def test_live_transport_failure_is_visible_and_releases_pcm(
-    monkeypatch, operation, programming_error
+def test_invalid_final_flags_fail_once_instead_of_delivering_text(monkeypatch):
+    """外部事件的布尔字段必须严格校验，不能把字符串当作最终句。"""
+
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        connections = []
+
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            command = await acknowledge(socket)
+            connections.append(socket)
+            await event(
+                socket,
+                command,
+                "result-generated",
+                {
+                    "output": {
+                        "sentence": {
+                            "sentence_end": "yes",
+                            "text": "错误句",
+                            "begin_time": 0,
+                        }
+                    },
+                },
+            )
+            await socket.wait_closed()
+
+        async with speech_server(monkeypatch, handler):
+            source = PcmFixture()
+            live = LiveSpeechInput({}, source)
+            try:
+                with pytest.raises(OSError, match="最终句无效"):
+                    await live.listen(1)
+            finally:
+                await live.aclose()
+            assert len(connections) == 1
+            assert source.closed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "phase", ["connect", "handshake", "send", "pcm", "receive"]
+)
+def test_cancel_listen_releases_all_owned_io(monkeypatch, phase):
+    """取消在途等待必须回收连接和PCM，不能留下后台原始操作。"""
+
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        entered = asyncio.Event()
+        original_send = client.ClientConnection.send
+
+        class WaitingPcm(PcmFixture):
+            """只在PCM场景保持读取在途。"""
+
+            async def read(self, size, timeout=0.2):
+                """可控PCM等待，不涉及真实硬件。"""
+                if phase == "pcm":
+                    entered.set()
+                    await asyncio.Event().wait()
+                return await super().read(size, timeout)
+
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            if phase == "handshake":
+                await socket.recv()
+                entered.set()
+                await socket.wait_closed()
+                return
+            await acknowledge(socket)
+            if phase == "receive":
+                entered.set()
+            await socket.wait_closed()
+
+        async with speech_server(monkeypatch, handler) as network:
+            routed_connect = client.connect
+
+            async def connect(uri, **kwargs):
+                """控制原生连接建立前的网络等待。"""
+                if phase == "connect":
+                    entered.set()
+                    await asyncio.Event().wait()
+                return await routed_connect(uri, **kwargs)
+
+            async def send(socket, message, *args, **kwargs):
+                """控制原生发送背压，关闭随后取消持有它的任务。"""
+                if phase == "send" and isinstance(message, bytes):
+                    entered.set()
+                    await asyncio.Event().wait()
+                return await original_send(socket, message, *args, **kwargs)
+
+            network.setattr(client, "connect", connect)
+            network.setattr(client.ClientConnection, "send", send)
+            source = WaitingPcm()
+            live = LiveSpeechInput({}, source)
+            listening = asyncio.create_task(live.listen(10))
+            await asyncio.wait_for(entered.wait(), 1)
+            listening.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(listening, 1)
+            await live.aclose()
+            assert source.closed
+            assert await live.listen(0.01) is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["capture", "send", "receive", "close"])
+def test_programming_errors_surface_after_resource_cleanup(
+    monkeypatch, operation
 ):
-    """传输失败有限重连；编程错误原样显露且不遗漏设备清理。"""
+    """编程异常原样显露，不伪装成普通网络失败或遗漏其余资源。"""
 
-    class FailingSocket(SpeechSocket):
-        """在已握手的传输操作中注入可控错误。"""
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        original_send = ClientConnection.send
+        original_recv = ClientConnection.recv
+        sockets = []
+        error_ready = asyncio.Event()
+        release_error = asyncio.Event()
 
-        def send_binary(self, frame):
-            """模拟发送失败，不把失败帧记录为成功。"""
-            if operation == "send":
-                self.fail_operation()
-            super().send_binary(frame)
+        async def programming_error():
+            """就绪后门控注入，隔离启动耗时与错误传播期限。"""
+            error_ready.set()
+            await release_error.wait()
+            raise RuntimeError("fixture programming error")
 
-        def recv(self):
-            """握手成功后才触发接收失败。"""
-            if operation == "receive" and self.queue.empty():
-                self.fail_operation()
-            return super().recv()
+        class BrokenPcm(PcmFixture):
+            """在外部设备操作中注入确定性的编程错误。"""
 
-        def fail_operation(self):
-            """网络异常由任务转换，编程异常必须保留原类型。"""
-            if programming_error:
-                raise RuntimeError("transport programming error")
-            raise websocket.WebSocketConnectionClosedException("disconnected")
+            async def read(self, size, timeout=0.2):
+                """在网络握手完成后才触发采集错误。"""
+                await until(lambda: bool(sockets))
+                if operation == "capture":
+                    await programming_error()
+                return await super().read(size, timeout)
 
-    socket, source = FailingSocket(), PcmFixture()
-    transport(monkeypatch, [socket])
-    live = LiveSpeechInput({"asr_attempts": 1}, source)
-    expected = RuntimeError if programming_error else OSError
-    message = (
-        "transport programming error" if programming_error else "重连次数"
-    )
-    try:
-        with pytest.raises(expected, match=message):
-            while True:
-                live.listen(0.1)
-    finally:
-        if programming_error:
-            with pytest.raises(RuntimeError, match=message):
-                live.close()
-        else:
-            live.close()
-    assert socket.closed and source.closed.is_set()
-    assert len(socket.commands) == 1
+            async def aclose(self):
+                """先完成设备回收再暴露关闭异常。"""
+                await super().aclose()
+                if operation == "close":
+                    raise RuntimeError("fixture programming error")
+
+        async def send(socket, message, *args, **kwargs):
+            """握手控制消息不变，音频发送可注入编程错误。"""
+            if operation == "send" and isinstance(message, bytes):
+                await programming_error()
+            return await original_send(socket, message, *args, **kwargs)
+
+        async def recv(socket, *args, **kwargs):
+            """握手之后接收可以暴露编程错误。"""
+            if operation == "receive" and sockets:
+                await programming_error()
+            return await original_recv(socket, *args, **kwargs)
+
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            await acknowledge(socket)
+            sockets.append(socket)
+            await socket.wait_closed()
+
+        monkeypatch.setattr(ClientConnection, "send", send)
+        monkeypatch.setattr(ClientConnection, "recv", recv)
+        async with speech_server(monkeypatch, handler):
+            source = BrokenPcm()
+            live = LiveSpeechInput({}, source)
+            if operation == "close":
+                assert await live.listen(0.03) is None
+            else:
+                assert await live.listen(0.03) is None
+                await asyncio.wait_for(error_ready.wait(), 2)
+                with pytest.raises(RuntimeError, match="programming error"):
+                    release_error.set()
+                    await live.listen(1)
+            with pytest.raises(RuntimeError, match="programming error"):
+                await live.aclose()
+            assert source.closed
+            assert all(socket.state.name == "CLOSED" for socket in sockets)
+
+    asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("operation", ["send", "receive", "pcm"])
-def test_close_cancels_inflight_io(monkeypatch, operation):
-    """关闭可取消在途发送、接收或PCM读取，所有线程均有界结束。"""
-    entered, released = threading.Event(), threading.Event()
+def test_pcm_stall_fails_without_fake_silence_or_network_retry(monkeypatch):
+    """缺少真实PCM必须停止接入，不能伪造静音掩盖故障。"""
 
-    class BlockingSocket(SpeechSocket):
-        """等待关闭回执的外部传输替身。"""
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        connections, frames = [], []
 
-        def send_binary(self, frame):
-            """让发送停留在外部I/O中，直到关闭取消。"""
-            if operation == "send":
-                entered.set()
-                assert released.wait(2)
-                raise websocket.WebSocketConnectionClosedException("closed")
-            super().send_binary(frame)
+        class SilentPcm(PcmFixture):
+            """持续无数据的设备，只按读取期限返回None。"""
 
-        def recv(self):
-            """先完成握手，再阻塞事件接收。"""
-            if operation == "receive" and self.queue.empty():
-                entered.set()
-                assert released.wait(2)
-                raise websocket.WebSocketConnectionClosedException("closed")
-            return super().recv()
-
-        def close(self, timeout=None):
-            """释放外部I/O等待者。"""
-            super().close(timeout)
-            released.set()
-
-    class BlockingPcm(PcmFixture):
-        """提供等待设备关闭的PCM读取。"""
-
-        def read(self, size, timeout=0.2):
-            """外部关闭取消读取，不伪造采集成功。"""
-            if operation == "pcm":
-                entered.set()
-                assert self.closed.wait(2)
+            async def read(self, size, timeout=0.2):
+                """有限等待保持事件循环可响应。"""
+                await asyncio.sleep(timeout)
                 return None
-            return super().read(size, timeout)
 
-    socket, source = BlockingSocket(), BlockingPcm()
-    transport(monkeypatch, [socket])
-    live = LiveSpeechInput({}, source)
-    try:
-        with ThreadPoolExecutor() as executor:
-            listening = executor.submit(live.listen, 1)
-            assert entered.wait(1)
-            until(lambda: bool(socket.commands))
-            live.close()
-            assert listening.result(timeout=1) is None
-        assert live.listen(0.01) is None
-    finally:
-        released.set()
-        live.close()
-    assert source.closed.is_set() and socket.closed
+        async def handler(socket):
+            """本机语音服务器提供可控事件并等待连接释放。"""
+            await acknowledge(socket)
+            connections.append(socket)
+            async for frame in socket:
+                frames.append(frame)
 
+        async with speech_server(monkeypatch, handler):
+            source = SilentPcm()
+            live = LiveSpeechInput({"speech_timeout": 0.06}, source)
+            with pytest.raises(OSError, match="PCM采集超时"):
+                await live.listen(1)
+            await live.aclose()
+            assert len(connections) == 1
+            assert frames == []
+            assert source.closed
 
-def test_missing_pcm_times_out_without_silence_success(monkeypatch):
-    """采集持续无数据必须显露超时，不能用静音冒充正常保活。"""
-
-    class EmptyPcm(PcmFixture):
-        """只报告轮询无数据的采集替身。"""
-
-        def read(self, size, timeout=0.2):
-            """模拟有界读取始终拿不到完整PCM帧。"""
-            self.closed.wait(0.01)
-            return None
-
-    socket, source = SpeechSocket(), EmptyPcm()
-    transport(monkeypatch, [socket])
-    live = LiveSpeechInput({"speech_timeout": 0.05}, source)
-    try:
-        with pytest.raises(OSError, match="PCM采集超时"):
-            while True:
-                live.listen(0.1)
-    finally:
-        live.close()
-    assert socket.frames == []
-    assert len(socket.commands) == 1
-    assert socket.closed and source.closed.is_set()
+    asyncio.run(scenario())
 
 
-def test_live_reconnect_sends_only_new_capture(monkeypatch):
-    """发送失败后只发新采集帧，不能重放上一任务已消费的音频。"""
+@pytest.mark.parametrize("status, expected_attempts", [(401, 1), (503, 2)])
+def test_http_authentication_and_transient_failures_have_distinct_budget(
+    monkeypatch, status, expected_attempts
+):
+    """鉴权失败立刻停止；明确的暂时HTTP故障才使用连续网络预算。"""
 
-    class NumberedPcm(PcmFixture):
-        """每帧内容标记采集次序，便于观察重放。"""
+    async def scenario():
+        """在同一事件循环观察输入、错误及资源回收。"""
+        attempts = []
 
-        def read(self, size, timeout=0.2):
-            """按公开PCM读取契约返回唯一帧。"""
-            frame = super().read(size, timeout)
-            if frame is None:
+        async def reject(socket, request):
+            """在真实HTTP升级处拒绝无效fixture凭证。"""
+            attempts.append(request)
+            return socket.respond(status, "fixture rejection")
+
+        async def handler(socket):
+            """拒绝升级后不允许启动语音任务。"""
+            raise AssertionError("拒绝的连接不能启动任务")
+
+        async with speech_server(monkeypatch, handler, process_request=reject):
+            source = PcmFixture()
+            live = LiveSpeechInput({}, source)
+            try:
+                with pytest.raises(OSError):
+                    await live.listen(1)
+            finally:
+                await live.aclose()
+            assert len(attempts) == expected_attempts
+            assert source.closed
+
+    asyncio.run(scenario())
+
+
+def test_duplicate_final_cannot_be_delivered_again_after_immediate_resume(
+    monkeypatch,
+):
+    """即使尚未发送下一帧，恢复也不能再次交付同一服务端最终句。"""
+
+    async def scenario():
+        """用延迟PCM控制最终句与恢复之间没有发送进度的时段。"""
+        sockets = []
+
+        class DelayedPcm(PcmFixture):
+            """保持第一帧在途，使重复事件落在相同音频时刻。"""
+
+            async def read(self, size, timeout=0.2):
+                """最终句来自已确定的服务端测试事件，不伪造PCM数据。"""
+                await asyncio.sleep(0.1)
                 return None
-            return self.frames.to_bytes(2, "little") * (size // 2)
 
-    class InterruptedSocket(SpeechSocket):
-        """第二帧发送发生断线，前一帧已经提交。"""
+        async def handler(socket):
+            """先交付最终句，然后等待调用者发送重复事件。"""
+            command = await acknowledge(socket)
+            sockets.append((socket, command))
+            await final(socket, command, "同一句", 0)
+            await socket.wait_closed()
 
-        def send_binary(self, frame):
-            """记录已尝试发送的音频，包括结果未知的失败帧。"""
-            super().send_binary(frame)
-            if len(self.frames) == 2:
-                raise websocket.WebSocketConnectionClosedException("lost")
+        async with speech_server(monkeypatch, handler):
+            source = DelayedPcm()
+            live = LiveSpeechInput({}, source)
+            try:
+                assert await live.listen(1) == "同一句"
+                live.resume()
+                socket, command = sockets[0]
+                await final(socket, command, "同一句", 0)
+                assert await live.listen(0.03) is None
+            finally:
+                await live.aclose()
 
-    first, second = InterruptedSocket(), SpeechSocket()
-    source = NumberedPcm()
-    transport(monkeypatch, [first, second])
-    live = LiveSpeechInput({}, source)
-    try:
-        live.listen(0.02)
-        until(lambda: len(second.frames) >= 2)
-        final(second, "断线后新句", 0)
-        assert live.listen(1) == "断线后新句"
-        assert len(first.frames) == 2
-        assert all(frame not in first.frames for frame in second.frames[:2])
-        assert len(first.commands) == len(second.commands) == 1
-        assert first.closed
-    finally:
-        live.close()
-    assert second.closed and source.closed.is_set()
+    asyncio.run(scenario())

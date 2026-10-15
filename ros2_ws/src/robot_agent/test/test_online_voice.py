@@ -35,7 +35,7 @@ class FixedSpeech:
         """记录半双工恢复。"""
         self.events.append("resume")
 
-    def close(self):
+    async def aclose(self):
         """记录连接关闭。"""
         self.events.append("close")
 

@@ -13,11 +13,11 @@ from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import DashScopeProvider
-from robot_agent.legacy_io import SpeechInput
-from robot_agent.voice.live_input import LiveSpeechInput
+from robot_agent.legacy_io import LegacySpeechInput
+from robot_agent.voice.live_input import LiveSpeechInput, SpeechInput
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
+from robot_audio.async_pcm_input import AsyncPcmMicrophone
 from robot_audio.audio_io import play_wav
-from robot_audio.pcm_input import PcmMicrophone
 
 DEFAULT_ACTION_TIMEOUT = 5.0
 
@@ -92,14 +92,14 @@ def build_application(
         if input_mode == "microphone":
             speech_input = LiveSpeechInput(
                 config,
-                PcmMicrophone(
+                AsyncPcmMicrophone(
                     config.get("record_executable", "arecord"),
                     config.get("record_device", "default"),
                 ),
             )
         elif input_mode == "recording":
             recording_input = DashScopeASR(config)
-            speech_input = recording_input
+            speech_input = LegacySpeechInput(recording_input)
             recognize = recording_input.recognize
         else:
             raise ValueError("未知语音输入模式")

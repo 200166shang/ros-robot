@@ -34,6 +34,7 @@ def main() -> None:
         "websocket",
         "pydantic",
         "httpx",
+        "websockets",
     ):
         module = importlib.import_module(name)
         print(name, module.__file__)
@@ -44,6 +45,7 @@ def main() -> None:
         "pydantic",
         "pydantic-core",
         "httpx",
+        "websockets",
         "httpcore",
     ):
         installed = distribution(name)

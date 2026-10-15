@@ -6,9 +6,11 @@ import os
 import signal
 import threading
 import time
+from contextlib import contextmanager
 
 import rclpy
 import websocket
+from async_speech_fixture import acknowledge, final, speech_server
 from native_protocol_fixture import install_async_transport, native_response
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
@@ -16,6 +18,36 @@ from std_srvs.srv import SetBool
 from test_online_speech import SpeechSocket
 
 from robot_agent.ros.voice_node import OnlineVoiceRosNode, RosExecutor, main
+
+
+@contextmanager
+def native_asr_server(monkeypatch, handler):
+    """本机语音服务器拥有独立循环，公共主入口仍可拥有应用主循环。"""
+    ready = threading.Event()
+    control = []
+
+    async def serve():
+        """复用原生语音fixture，在接纳应用前完成外部端点路由。"""
+        async with speech_server(monkeypatch, handler):
+            stop = asyncio.Event()
+            control.append((asyncio.get_running_loop(), stop))
+            ready.set()
+            await stop.wait()
+
+    def run_server():
+        """线程只接收外部测试服务的协议消息，不运行应用。"""
+        asyncio.run(serve())
+
+    worker = threading.Thread(target=run_server, name="fixture-asr-server")
+    worker.start()
+    assert ready.wait(2), "本机语音fixture未启动"
+    try:
+        yield
+    finally:
+        loop, stop = control[0]
+        loop.call_soon_threadsafe(stop.set)
+        worker.join(2)
+        assert not worker.is_alive()
 
 
 def test_microphone_is_only_input_and_turns_resume_in_order(
@@ -50,57 +82,42 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
 
     ready = True
     asr_sockets = []
+    asr_frames = []
     pause_frames = []
 
     class MicrophoneSocket(SpeechSocket):
-        """替换WSS事件，保留持续PCM、ASR保活与TTS真实协议。"""
+        """临时 TTS 同步传输替身；ASR 始终使用原生 WebSocket。"""
 
         def send(self, raw):
-            """ASR任务跨三轮；TTS期间必须继续发送静音。"""
+            """TTS 完成前观察持续 ASR 静音保活。"""
             nonlocal ready
             super().send(raw)
             command = json.loads(raw)
-            if (
-                command["header"]["action"] == "run-task"
-                and self.kind == "asr"
-            ):
-                asr_sockets.append(self)
-            if (
-                command["header"]["action"] == "finish-task"
-                and self.kind == "tts"
-            ):
-                count = len(asr_sockets[0].frames)
+            if command["header"]["action"] == "finish-task":
+                count = len(asr_frames)
                 deadline = time.monotonic() + 1
-                while len(asr_sockets[0].frames) < count + 2:
+                while len(asr_frames) < count + 2:
                     assert time.monotonic() < deadline
                     time.sleep(0.005)
-                pause_frames.extend(asr_sockets[0].frames[-2:])
+                pause_frames.extend(asr_frames[-2:])
                 ready = True
 
-        def send_binary(self, frame):
-            """只有恢复后的真实音频才产生下一句，不依赖finish-task。"""
-            nonlocal ready
-            super().send_binary(frame)
-            if self.kind == "asr" and playing.exists():
+    async def recognize(socket):
+        """真实原生 socket 接收 PCM，只有恢复后的新音频触发下一句。"""
+        nonlocal ready
+        command = await acknowledge(socket)
+        asr_sockets.append(command)
+        async for frame in socket:
+            asr_frames.append(frame)
+            if playing.exists():
                 assert frame == bytes(3200), "播放期间不能发送真实麦克风音频"
-            if self.kind == "asr" and frame != bytes(3200) and ready:
+            if frame != bytes(3200) and ready:
                 text = next(texts, "")
-                if not text:
-                    return
-                ready = False
-                self.event(
-                    "result-generated",
-                    {
-                        "output": {
-                            "sentence": {
-                                "text": text,
-                                "begin_time": (len(self.frames) - 1) * 100,
-                                "sentence_end": True,
-                                "heartbeat": False,
-                            }
-                        }
-                    },
-                )
+                if text:
+                    ready = False
+                    await final(
+                        socket, command, text, (len(asr_frames) - 1) * 100
+                    )
 
     def connect(endpoint, header, timeout):
         """在线传输在外部Seam替换，生产组装与会话不替换。"""
@@ -120,7 +137,7 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
             ]
         )
 
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
     monkeypatch.setattr(websocket, "create_connection", connect)
     install_async_transport(monkeypatch, complete)
     config = tmp_path / "config.json"
@@ -221,7 +238,7 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
             )
             assert results[2]["session_state"] == "standby"
             assert len(asr_sockets) == 1
-            assert len(asr_sockets[0].commands) == 1
+            assert asr_sockets[0]["header"]["action"] == "run-task"
             assert pause_frames == [bytes(3200)] * 6
         finally:
             # 3. 生产退出 Interface 关闭应用后再回收 ROS executor。
@@ -234,14 +251,15 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
             rclpy.shutdown()
         assert all(socket.closed for socket in sockets)
 
-    asyncio.run(run())
+    with native_asr_server(monkeypatch, recognize):
+        asyncio.run(run())
 
 
 def test_node_constructor_keeps_business_and_recording_idle(
     tmp_path, monkeypatch
 ):
     """构造只接线；启动由主事件循环的明确调用控制。"""
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"output_dir": str(tmp_path / "results")}))
     rclpy.init(args=["--ros-args", "-p", "config_file:=" + str(config)])
@@ -257,7 +275,7 @@ def test_node_constructor_keeps_business_and_recording_idle(
 
 def test_main_sigint_closes_application_before_ros(tmp_path, monkeypatch):
     """Foxy 主入口收到 SIGINT 后按顺序关闭输入、应用与 executor。"""
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
     recorder = tmp_path / "idle-recorder"
     recorder.write_text("#!/usr/bin/python3\nimport time\ntime.sleep(60)\n")
     recorder.chmod(0o755)
@@ -280,16 +298,36 @@ def test_main_sigint_closes_application_before_ros(tmp_path, monkeypatch):
         return socket
 
     monkeypatch.setattr(websocket, "create_connection", connect)
+    connected = threading.Event()
+    disconnected = threading.Event()
+
+    async def recognize(socket):
+        """真实握手到达后发送 SIGINT，验证在途原生连接收尾。"""
+        await acknowledge(socket)
+        connected.set()
+        os.kill(os.getpid(), signal.SIGINT)
+        await socket.wait_closed()
+        disconnected.set()
+
+    def unexpected_model(request, timeout):
+        """此场景不提供最终句；意外模型调用也不能访问外网。"""
+        raise AssertionError("没有最终句时不应请求模型")
+
+    install_async_transport(monkeypatch, unexpected_model)
     before = set(threading.enumerate())
-    interrupt = threading.Timer(
-        0.5, lambda: os.kill(os.getpid(), signal.SIGINT)
-    )
-    interrupt.start()
-    try:
-        main(["--ros-args", "-p", "config_file:=" + str(config)])
-    finally:
-        interrupt.cancel()
-        interrupt.join()
+    with native_asr_server(monkeypatch, recognize):
+        # 握手失败仍可退出，connected 断言保留原生链路失败证据。
+        interrupt = threading.Timer(
+            2, lambda: os.kill(os.getpid(), signal.SIGINT)
+        )
+        interrupt.start()
+        try:
+            main(["--ros-args", "-p", "config_file:=" + str(config)])
+        finally:
+            interrupt.cancel()
+            interrupt.join()
+        assert connected.is_set()
+        assert disconnected.wait(1)
     assert not rclpy.ok()
     assert all(socket.closed for socket in sockets)
     assert not [

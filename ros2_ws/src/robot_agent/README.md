@@ -46,10 +46,11 @@ Unexpected action/report errors carry `ActionExecutionError.result` and preserve
 the original exception as the cause. `Agent.last_result` also retains confirmed
 or submitted facts when later memory or programming errors propagate.
 
-The temporary `legacy_io.py` Adapters still own blocking speech operations.
+Normal microphone input uses native async PCM and continuous ASR. The temporary
+`legacy_io.py` Adapters still own blocking WAV input and speech output.
 `AgentApplication.aclose(deadline)` closes speech and the Agent, retaining action
-receipt delivery within the remaining deadline. Native audio I/O and a configurable
-total budget across all resources remain subsequent migration steps.
+receipt delivery within the remaining deadline. Native WAV/output I/O and a
+configurable total budget across all resources remain subsequent migration steps.
 The model Adapter owns bounded JSON/SSE assembly and returns a complete `ModelReply`.
 It exposes one native `execute_actions` tool; ordinary chat is plain model text.
 Summaries explicitly disable tools and use one attempt with a separate phase
