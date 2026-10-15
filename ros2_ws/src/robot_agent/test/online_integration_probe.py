@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -19,6 +19,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, LaserScan
 
 from robot_agent.application import AgentApplication
+from robot_agent.results import TurnResult, VoiceRecord, result_to_json
 from robot_agent.ros.voice_node import create_ros_application
 from robot_agent.runtime import load_config
 from robot_agent.voice.runtime import capture_turn
@@ -32,7 +33,7 @@ class OnlineIntegrationProbe(Node):
         super().__init__("online_integration_probe")
         self._config = config
         self._updated = threading.Event()
-        self.results: List[Dict] = []
+        self.results: List[Union[TurnResult, VoiceRecord]] = []
         self.motion: List[Twist] = []
         self.scans = 0
         self.images = 0
@@ -89,7 +90,7 @@ class OnlineIntegrationProbe(Node):
         kind: str,
         text: str,
         expected: Optional[List[str]] = None,
-    ) -> Dict:
+    ) -> Union[TurnResult, VoiceRecord]:
         """真实输入等待完整在线回复，失败不重试，不替换模型选择。"""
         operations = {
             "text": lambda: voice.submit_transcript(text, direct=True),
@@ -98,21 +99,23 @@ class OnlineIntegrationProbe(Node):
         }
         result = asyncio.run(operations[kind]())
         self.results.append(result)
-        print(json.dumps(result, ensure_ascii=False), flush=True)
-        assert result["status"] == "completed", result
-        if kind != "clear_memory":
-            assert result["tts_status"] == "completed", result
-            assert result["record_status"] == "completed", result
-            assert not result.get("memory_warnings"), result
+        print(
+            json.dumps(result_to_json(result), ensure_ascii=False), flush=True
+        )
+        assert result.status == "completed", result
+        if isinstance(result, VoiceRecord):
+            assert result.tts_status == "completed", result
+            assert result.record_status == "completed", result
+            assert not result.turn.memory_warnings, result
         if expected is not None:
-            assert [a["name"] for a in result["actions"]] == expected, result
-            for action in result["actions"]:
+            assert [a.name for a in result.actions] == expected, result
+            for action in result.actions:
                 status = (
                     "simulated_success"
-                    if action["name"].startswith(("volume_", "head_"))
+                    if action.name.startswith(("volume_", "head_"))
                     else "real_success"
                 )
-                assert action["status"] == status, result
+                assert action.status == status, result
         assert not self.motion, "dry-run 出现运动输出"
         return result
 
@@ -151,12 +154,12 @@ def main() -> None:
             recalled = probe.submit(
                 voice, "text", "我之前告诉你的验收代号是什么？只聊天。"
             )
-            assert "蓝鹭" in recalled["reply"], recalled
+            assert "蓝鹭" in recalled.reply, recalled
             probe.submit(voice, "clear_memory", "clear", [])
             cleared = probe.submit(
                 voice, "text", "我之前告诉你的验收代号是什么？只聊天。"
             )
-            assert "蓝鹭" not in cleared["reply"], cleared
+            assert "蓝鹭" not in cleared.reply, cleared
         elif args.recording_only:
             # 录音动作验收先建立真实扫描前提，不预置识别文本。
             probe.submit(
@@ -170,12 +173,12 @@ def main() -> None:
                 lambda: probe.scans >= before + 2, 5, "融合后扫描未到达"
             )
             recording = probe.submit(voice, "wav", args.wav)
-            assert recording["transcript"], recording
+            assert recording.transcript, recording
             assert any(
-                action["name"]
+                action.name
                 in ("start_following", "start_tracking", "enable_tracking")
-                and action["status"] == "real_success"
-                for action in recording["actions"]
+                and action.status == "real_success"
+                for action in recording.actions
             ), recording
             probe.submit(
                 voice,
@@ -215,7 +218,7 @@ def main() -> None:
                     "stop_following",
                 ],
             )
-            assert mixed["actions"][4]["data"]["level"] == 35
+            assert mixed.actions[4].data["level"] == 35
             probe.submit(
                 voice,
                 "text",
@@ -230,7 +233,7 @@ def main() -> None:
             )
             # 3. 原录音经真实 ASR，不预置或猜测其文本。
             recording = probe.submit(voice, "wav", args.wav)
-            assert recording["transcript"], recording
+            assert recording.transcript, recording
             probe.submit(
                 voice,
                 "text",
@@ -256,7 +259,9 @@ def main() -> None:
                 "scan_messages": probe.scans,
                 "detection_images": probe.images,
                 "motion_messages": len(probe.motion),
-                "results": probe.results,
+                "results": [
+                    result_to_json(result) for result in probe.results
+                ],
             }
             directory = Path(args.evidence_dir).expanduser()
             # 保存失败仍输出完整执行事实；已有验收异常优先显露。

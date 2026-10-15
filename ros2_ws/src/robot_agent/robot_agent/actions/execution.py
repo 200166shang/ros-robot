@@ -2,8 +2,8 @@
 
 import time
 from concurrent.futures import Future, wait
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from dataclasses import dataclass, replace
+from typing import List, Optional
 
 from robot_agent.actions.registry import (
     CONFIRMED_SUCCESS,
@@ -11,7 +11,7 @@ from robot_agent.actions.registry import (
     ActionRegistry,
 )
 from robot_agent.calls import start_call
-from robot_agent.results import make_result
+from robot_agent.results import ActionOutcome, ActionReceipt, ExecutionResult
 
 
 @dataclass(frozen=True)
@@ -20,10 +20,10 @@ class _PendingAction:
 
     call: Future
     turn_id: str
-    actions: List[Dict]
+    actions: List[ActionOutcome]
 
 
-def confirmed_action_reply(actions: List[Dict]) -> str:
+def confirmed_action_reply(actions: List[ActionOutcome]) -> str:
     """仅根据已确认回执回复，不采用模型执行前的成功承诺。"""
     labels = {
         "simulated_success": "模拟成功",
@@ -34,10 +34,10 @@ def confirmed_action_reply(actions: List[Dict]) -> str:
     }
     return (
         "；".join(
-            action["name"]
+            action.name
             + "："
-            + labels[action["status"]]
-            + ("，" + action["detail"] if action.get("detail") else "")
+            + labels[action.status]
+            + ("，" + action.detail if action.detail else "")
             for action in actions
         )
         + "。"
@@ -47,9 +47,9 @@ def confirmed_action_reply(actions: List[Dict]) -> str:
 class ActionExecutionError(Exception):
     """执行流程异常，携带已提交动作快照，交互层不得将其写入记忆。"""
 
-    def __init__(self, result: Dict) -> None:
+    def __init__(self, result: ExecutionResult) -> None:
         """保留原错误分类与动作事实，不暴露内部异常信息。"""
-        super().__init__(result["reply"])
+        super().__init__(result.reply)
         self.result = result
 
 
@@ -67,139 +67,151 @@ class ActionExecution:
         """未知动作即使调用已结束，也必须显式核对后才能恢复。"""
         return self._pending_action is not None
 
-    def execute(self, commands: List[ActionCommand], turn_id: str) -> Dict:
+    def execute(
+        self, commands: List[ActionCommand], turn_id: str
+    ) -> ExecutionResult:
         """执行已校验动作；须先确认未阻塞，流程异常携带事实抛出。"""
         # 1. 建立全表记录，后续失败不能丢弃已提交动作与剩余项。
         outcomes = [
-            {
-                "name": command.name,
-                "parameters": command.parameters,
-                "status": "not_executed",
-            }
+            ActionOutcome(command.name, command.parameters)
             for command in commands
         ]
         try:
             self._execute_actions(commands, outcomes, turn_id)
         except Exception as error:
             raise ActionExecutionError(
-                make_result(
+                ExecutionResult(
                     turn_id,
                     "failed",
                     "动作执行流程异常，请核对执行记录。",
-                    outcomes,
+                    tuple(outcomes),
                 )
             ) from error
 
         # 2. 报告只依据执行事实，异常也必须保留原记录。
         return self._report_actions(turn_id, outcomes)
 
-    def reconcile(self, turn_id: str) -> Dict:
+    def reconcile(self, turn_id: str) -> ExecutionResult:
         """只核对原调用的迟到回执，不重新执行；未知或异常回执不能解除阻塞。"""
         pending = self._pending_action
         if pending is None or pending.turn_id != turn_id:
-            return make_result(
-                turn_id, "rejected", "没有匹配的待核对动作回合。"
+            return ExecutionResult(
+                turn_id, "rejected", "没有匹配的待核对动作回合。", ()
             )
         if not pending.call.done():
-            return make_result(
+            return ExecutionResult(
                 turn_id,
                 "failed",
                 "调用仍在执行，结果未知。",
-                pending.actions,
+                tuple(pending.actions),
             )
 
         try:
             receipt = pending.call.result()
         except Exception:
-            receipt = {"status": "unknown"}
+            receipt = ActionReceipt("unknown")
         confirmed = (
-            receipt["status"] in CONFIRMED_SUCCESS
-            or receipt["status"] == "failed"
+            receipt.status in CONFIRMED_SUCCESS or receipt.status == "failed"
         )
         if not confirmed:
-            return make_result(
+            return ExecutionResult(
                 turn_id,
                 "failed",
                 "设备最终状态仍未知，请核实设备状态后重新启动入口。",
-                pending.actions,
+                tuple(pending.actions),
             )
 
         # 仅替换超时项，未执行的后续动作保持原状，绝不补执行。
-        action = next(
-            action
+        outcomes = [
+            replace(
+                action,
+                status=receipt.status,
+                detail=receipt.detail,
+                data=receipt.data,
+            )
+            if action.status == "unknown"
+            else action
             for action in pending.actions
-            if action["status"] == "unknown"
-        )
-        action.update(
-            status=receipt["status"], detail=receipt.get("detail", "")
-        )
-        if "data" in receipt:
-            action["data"] = receipt["data"]
+        ]
         self._pending_action = None
-        return self._report_actions(turn_id, pending.actions)
+        return self._report_actions(turn_id, outcomes)
 
     def _execute_actions(
         self,
         commands: List[ActionCommand],
-        outcomes: List[Dict],
+        outcomes: List[ActionOutcome],
         turn_id: str,
     ) -> None:
         """按序提交调用；超时或未知回执保留 Future 供核对。"""
-        for command, outcome in zip(commands, outcomes):
+        for index, command in enumerate(commands):
+            outcome = outcomes[index]
             # 提交前先保守记为未知，任何后续异常都不会伪报未执行。
-            outcome.update(status="unknown", detail="已提交调用，等待设备回执")
+            outcomes[index] = replace(
+                outcome, status="unknown", detail="已提交调用，等待设备回执"
+            )
             deadline = time.monotonic() + self._action_timeout
             try:
                 call = start_call(
-                    lambda: self._actions.execute(
-                        command.name, command.parameters, deadline
+                    lambda: ActionReceipt.from_legacy(
+                        self._actions.execute(
+                            command.name, command.parameters, deadline
+                        )
                     )
                 )
             except Exception:
-                outcome.update(
-                    status="failed", detail="调用提交失败，未发出设备动作"
+                outcomes[index] = replace(
+                    outcomes[index],
+                    status="failed",
+                    detail="调用提交失败，未发出设备动作",
                 )
                 break
             self._pending_action = _PendingAction(call, turn_id, outcomes)
             if not wait(
                 [call], timeout=max(0.0, deadline - time.monotonic())
             ).done:
-                outcome["detail"] = "已发出调用超时，执行结果未知"
+                outcomes[index] = replace(
+                    outcomes[index], detail="已发出调用超时，执行结果未知"
+                )
                 break
 
             try:
                 receipt = call.result()
             except Exception:
-                outcome["detail"] = "执行异常，无法确认设备结果"
+                outcomes[index] = replace(
+                    outcomes[index], detail="执行异常，无法确认设备结果"
+                )
                 break
 
-            outcome.update(
-                status=receipt["status"], detail=receipt.get("detail", "")
+            outcomes[index] = replace(
+                outcomes[index],
+                status=receipt.status,
+                detail=receipt.detail,
+                data=receipt.data,
             )
-            if "data" in receipt:
-                outcome["data"] = receipt["data"]
-            if outcome["status"] == "unknown":
+            if receipt.status == "unknown":
                 break
             self._pending_action = None
-            if outcome["status"] not in CONFIRMED_SUCCESS:
+            if receipt.status not in CONFIRMED_SUCCESS:
                 break
 
-    def _report_actions(self, turn_id: str, outcomes: List[Dict]) -> Dict:
+    def _report_actions(
+        self, turn_id: str, outcomes: List[ActionOutcome]
+    ) -> ExecutionResult:
         """只在报告阶段捕获格式异常，始终保留完整执行记录。"""
         try:
             completed = all(
-                action["status"] in CONFIRMED_SUCCESS for action in outcomes
+                action.status in CONFIRMED_SUCCESS for action in outcomes
             )
-            return make_result(
+            return ExecutionResult(
                 turn_id,
                 "completed" if completed else "failed",
                 confirmed_action_reply(outcomes),
-                outcomes,
+                tuple(outcomes),
             )
         except Exception:
-            return make_result(
+            return ExecutionResult(
                 turn_id,
                 "failed",
                 "执行结果回复生成失败，请查看动作记录。",
-                outcomes,
+                tuple(outcomes),
             )

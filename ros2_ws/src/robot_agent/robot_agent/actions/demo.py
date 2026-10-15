@@ -7,6 +7,7 @@ from typing import List
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.simulation import simulate_cue
 from robot_agent.conversation.agent import Agent
+from robot_agent.results import result_to_json
 
 
 class FixedDemoProvider:
@@ -87,9 +88,12 @@ async def _run_demo() -> None:
         provider.functions = functions
         result = await agent.submit(text)
         print(
-            json.dumps({"input": text, "result": result}, ensure_ascii=False)
+            json.dumps(
+                {"input": text, "result": result_to_json(result)},
+                ensure_ascii=False,
+            )
         )
-        if result["status"] == "failed":
+        if result.status == "failed":
             print(json.dumps(simulate_cue("error"), ensure_ascii=False))
 
 

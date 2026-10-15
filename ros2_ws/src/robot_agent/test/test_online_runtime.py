@@ -51,18 +51,18 @@ def test_loaded_config_drives_text_memory_restart_and_clear(
     config = load_config(config_file)
     agent = build_agent(config)
     first = asyncio.run(agent.submit("recent-marker"))
-    assert first["status"] == "completed"
-    assert not first["memory_warnings"]
-    assert asyncio.run(agent.submit("继续聊天"))["status"] == "completed"
+    assert first.status == "completed"
+    assert not first.memory_warnings
+    assert asyncio.run(agent.submit("继续聊天")).status == "completed"
     assert "recent-marker" in requests[1][0]
     assert memory_file.exists()
     assert all(timeout == 1.5 for _, timeout in requests)
 
     restarted = build_agent(config)
-    assert asyncio.run(restarted.submit("重启后"))["status"] == "completed"
+    assert asyncio.run(restarted.submit("重启后")).status == "completed"
     assert "recent-marker" in requests[-1][0]
-    assert asyncio.run(restarted.clear_memory())["status"] == "completed"
-    assert asyncio.run(restarted.submit("重新聊天"))["status"] == "completed"
+    assert asyncio.run(restarted.clear_memory()).status == "completed"
+    assert asyncio.run(restarted.submit("重新聊天")).status == "completed"
     assert requests[-1][0] == "重新聊天"
 
 
@@ -114,7 +114,7 @@ def test_custom_actions_are_used_by_common_assembly(tmp_path, monkeypatch):
         {"memory_file": str(tmp_path / "memory.json")}, actions
     )
     result = asyncio.run(agent.submit("点头两次"))
-    assert result["status"] == "completed"
+    assert result.status == "completed"
     assert executions == ["nod", "nod"]
-    assert "测试确认" in result["reply"]
-    assert "模型承诺" not in result["reply"]
+    assert "测试确认" in result.reply
+    assert "模型承诺" not in result.reply

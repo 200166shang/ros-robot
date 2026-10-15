@@ -4,8 +4,8 @@ import asyncio
 import json
 import math
 import uuid
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from dataclasses import replace
+from typing import Optional
 
 from robot_agent.actions.execution import (
     ActionExecution,
@@ -15,18 +15,10 @@ from robot_agent.actions.registry import ActionRegistry
 from robot_agent.calls import LegacyCall
 from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import TextProvider
-from robot_agent.results import make_result
+from robot_agent.results import ModelReply, TurnResult, make_result
 
 MAX_INPUT_LENGTH = 8192
 MAX_MODEL_OUTPUT_BYTES = 64 * 1024
-
-
-@dataclass(frozen=True)
-class ModelReply:
-    """结构化模型回复，动作字符串尚未经过业务校验。"""
-
-    functions: List[str]
-    response: str
 
 
 def _unique_object(pairs):
@@ -52,7 +44,9 @@ def parse_model_reply(raw: str) -> ModelReply:
         raise ValueError("模型输出字段不兼容")
     if not isinstance(response, str) or not response.strip():
         raise ValueError("模型回复无效")
-    return ModelReply(functions, response)
+    if not isinstance(functions, list):
+        raise ValueError("动作列表无效")
+    return ModelReply(tuple(functions), response)
 
 
 class Agent:
@@ -80,7 +74,7 @@ class Agent:
         self._memory_io = LegacyCall()
         self._execution = ActionExecution(actions, action_timeout)
 
-    async def submit(self, text: str) -> Dict:
+    async def submit(self, text: str) -> TurnResult:
         """单一调用者按序提交；模型仍在途或动作未知时不重叠执行。"""
         turn_id = uuid.uuid4().hex
         if self._execution.blocked:
@@ -132,7 +126,7 @@ class Agent:
 
             # 2. 整表校验无副作用，任一失败都保证零执行。
             try:
-                commands = self._actions.validate(model_reply.functions)
+                commands = self._actions.validate(list(model_reply.functions))
             except (ValueError, TypeError, SyntaxError):
                 return make_result(
                     turn_id, "rejected", "动作参数无效，全部动作未执行。"
@@ -153,12 +147,14 @@ class Agent:
                     lambda: self._execution.execute(commands, turn_id)
                 )
             except ActionExecutionError as error:
-                return error.result
-            return await self._remember(text, result)
+                return TurnResult.from_execution(error.result)
+            return await self._remember(
+                text, TurnResult.from_execution(result)
+            )
         finally:
             self._processing = False
 
-    async def clear_memory(self) -> Dict:
+    async def clear_memory(self) -> TurnResult:
         """由同一调用者清空；模型仍在途时拒绝，避免旧摘要回写。"""
         turn_id = uuid.uuid4().hex
         if (
@@ -179,37 +175,37 @@ class Agent:
             if notices
             else "近期上下文与持久摘要已清空。",
         )
-        result["memory_warnings"] = notices
-        return result
+        return replace(result, memory_warnings=tuple(notices))
 
-    async def _remember(self, text: str, result: Dict) -> Dict:
+    async def _remember(self, text: str, result: TurnResult) -> TurnResult:
         """在回复已确定后更新记忆；摘要超时不改变当前动作与回复事实。"""
         memory = self._memory
         if memory is None:
             return result
         try:
-            result["memory_warnings"] = await self._memory_io.run(
-                lambda: memory.record(text, result["reply"], self._summarize),
+            notices = await self._memory_io.run(
+                lambda: memory.record(text, result.reply, self._summarize),
                 self._provider_timeout,
             )
         except asyncio.TimeoutError:
-            result["memory_warnings"] = ["summary_timeout"]
-        return result
+            notices = ["summary_timeout"]
+        return replace(result, memory_warnings=tuple(notices))
 
     def _summarize(self, prompt: str) -> str:
         """复用在线输出契约，摘要只取文字且禁止动作。"""
         reply = parse_model_reply(self._collect_model_output(prompt))
-        if reply.functions != []:
+        if reply.functions:
             raise ValueError("摘要不能包含动作")
         return reply.response
 
-    async def reconcile(self, turn_id: str) -> Dict:
+    async def reconcile(self, turn_id: str) -> TurnResult:
         """核对原调用的迟到回执，执行状态由动作模块维护。"""
         if self._processing or self._execution_io.pending:
             return make_result(uuid.uuid4().hex, "busy", "文本回合正在处理。")
-        return await self._execution_io.run(
+        result = await self._execution_io.run(
             lambda: self._execution.reconcile(turn_id)
         )
+        return TurnResult.from_execution(result)
 
     def _collect_model_output(self, text: str) -> str:
         """接受完整字符串或增量字符串流，并限制总输出大小。"""
