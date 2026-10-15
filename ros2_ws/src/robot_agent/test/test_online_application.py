@@ -17,13 +17,13 @@ def test_application_has_async_turn_entry_and_rejects_after_close(tmp_path):
         """从调用者的事件循环完成一次唤醒和关闭。"""
         application, speech, model, tts = make_voice(tmp_path)
         assert isinstance(application, AgentApplication)
-        assert (await application.submit_transcript("小莫小莫"))[
-            "status"
-        ] == "woken"
+        assert (
+            await application.submit_transcript("小莫小莫")
+        ).status == "woken"
         await application.aclose()
-        assert (await application.submit_transcript("点头"))[
-            "status"
-        ] == "rejected"
+        assert (
+            await application.submit_transcript("点头")
+        ).status == "rejected"
         assert speech.events == ["pause", "resume", "close"]
         assert not model.inputs
 
@@ -56,11 +56,9 @@ def test_busy_application_keeps_session_awake_until_turn_finishes(tmp_path):
         now[0] = 200
         application.tick()
         assert application.state == "processing"
-        assert (await application.submit_transcript("再点头"))[
-            "status"
-        ] == "busy"
+        assert (await application.submit_transcript("再点头")).status == "busy"
         release.set()
-        assert (await turn)["status"] == "completed"
+        assert (await turn).status == "completed"
         assert application.state == "listening"
         assert model.inputs == ["请点头"]
         await application.aclose()
@@ -88,7 +86,7 @@ def test_agent_rejects_overlap_while_actions_are_waiting():
         while not entered.is_set():
             await asyncio.sleep(0.001)
         try:
-            assert (await agent.submit("再点头"))["status"] == "busy"
+            assert (await agent.submit("再点头")).status == "busy"
         finally:
             release.set()
             await first
@@ -132,12 +130,12 @@ def test_idle_microphone_wait_expires_session_and_reports_input_failure(
         )
         results = []
         await application.run(results.append)
-        assert [result["status"] for result in results] == [
+        assert [result.status for result in results] == [
             "woken",
             "ignored",
             "failed",
         ]
-        assert results[-1]["asr_status"] == "failed"
+        assert results[-1].asr_status == "failed"
         assert application.state == "closed"
         assert speech.events[-1] == "close"
         assert not model.inputs

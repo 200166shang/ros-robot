@@ -29,11 +29,21 @@ retains the existing result JSON and simulated device behavior.
 The temporary `legacy_io.py` Adapters own the still-blocking operations. Each
 Agent owns model, execution, and memory call handles; the application owns speech
 input and output Adapters. A wait ending does not cancel an underlying operation.
-The old protocol, audio Implementation, retries, playback, and record writing are
-reused. Native network/audio I/O, typed result internals, and a total shutdown
-budget are subsequent migration steps; the accepted `aclose(deadline)` shape does
-not yet impose that total budget. The ROS edge temporarily hosts the asyncio
+The old model protocol and device receipt dictionaries remain only at temporary
+Adapters; execution, Agent, application, and output exchange named records.
+Native network/audio I/O and a total shutdown budget are subsequent migration
+steps; the accepted `aclose(deadline)` shape does not yet impose that total
+budget. The ROS edge temporarily hosts the asyncio
 loop in its managed business thread while the ROS executor delivers receipts.
+
+`robot_agent/results.py` defines `ModelReply`, `ActionReceipt`, `ActionOutcome`,
+`ExecutionResult`, `TurnResult`, and `VoiceRecord`. A voice record composes its
+`turn` with transcript, session, synthesis, playback, audio and save status.
+Records freeze nested parameters and device data as well as the action sequence.
+Reconciliation creates a new execution and turn snapshot; it never rewrites an
+old result or executes the remaining actions. Pending transcripts remain
+available even if the first record save failed. `result_to_json` runs only at saving,
+publication, and command output to preserve the existing flat JSON fields.
 
 Failures in output do not rerun model requests or actions. Expected speech and
 storage errors retain execution facts in the existing record fields. Unexpected

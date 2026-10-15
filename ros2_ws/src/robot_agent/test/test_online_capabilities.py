@@ -33,11 +33,11 @@ def test_default_music_state_belongs_to_its_own_capabilities():
     provider = FixedProvider(["play_music('夜曲')"])
     agent = Agent(provider, first.registry)
     assert not first.music_playing()
-    assert asyncio.run(agent.submit("播放"))["status"] == "completed"
+    assert asyncio.run(agent.submit("播放")).status == "completed"
     assert first.music_playing()
     assert not second.music_playing()
     provider.functions = ["stop_music"]
-    assert asyncio.run(agent.submit("停止"))["status"] == "completed"
+    assert asyncio.run(agent.submit("停止")).status == "completed"
     assert not first.music_playing()
 
 
@@ -88,23 +88,22 @@ def test_voice_filter_uses_injected_music_capability(tmp_path, monkeypatch):
     )
     try:
         assert (
-            asyncio.run(voice.submit_transcript("小莫小莫"))["status"]
-            == "woken"
+            asyncio.run(voice.submit_transcript("小莫小莫")).status == "woken"
         )
         assert (
-            asyncio.run(voice.submit_transcript("播放音乐"))["status"]
+            asyncio.run(voice.submit_transcript("播放音乐")).status
             == "completed"
         )
         assert (
-            asyncio.run(voice.submit_transcript("今天天气"))["status"]
+            asyncio.run(voice.submit_transcript("今天天气")).status
             == "filtered"
         )
         assert (
-            asyncio.run(voice.submit_transcript("停止音乐"))["status"]
+            asyncio.run(voice.submit_transcript("停止音乐")).status
             == "completed"
         )
         assert (
-            asyncio.run(voice.submit_transcript("今天天气"))["status"]
+            asyncio.run(voice.submit_transcript("今天天气")).status
             == "completed"
         )
         assert len(requests) == 3

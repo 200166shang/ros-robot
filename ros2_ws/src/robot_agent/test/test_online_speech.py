@@ -146,17 +146,15 @@ def test_reconnect_final_sentences_and_streaming_audio(tmp_path, monkeypatch):
         retry_delay=0,
     )
     result = asyncio.run(voice.submit_recording(fixture_wav(tmp_path)))
-    assert result["transcript"] == "真实句一。真实句二。"
-    assert result["reply"] == result["transcript"]
-    assert result["tts_status"] == "completed"
-    with wave.open(result["audio_path"]) as audio:
+    assert result.transcript == "真实句一。真实句二。"
+    assert result.reply == result.transcript
+    assert result.tts_status == "completed"
+    with wave.open(result.audio_path) as audio:
         assert audio.getframerate() == 16000
         assert audio.getnframes() == 2400
     assert sockets[1].frames == [b"\x01\x00" * 1600]
     assert all(socket.closed for socket in sockets)
-    assert (
-        sockets[2].commands[1]["payload"]["input"]["text"] == result["reply"]
-    )
+    assert sockets[2].commands[1]["payload"]["input"]["text"] == result.reply
     asyncio.run(voice.aclose())
 
 
@@ -194,8 +192,8 @@ def test_partial_tts_failure_has_no_success_audio(tmp_path, monkeypatch):
         tts_attempts=1,
     )
     result = asyncio.run(voice.submit_recording(fixture_wav(tmp_path)))
-    assert result["tts_status"] == "failed"
-    assert "audio_path" not in result
+    assert result.tts_status == "failed"
+    assert result.audio_path is None
     assert list(tmp_path.glob("*.tmp")) == []
     assert voice.state == "standby"
     assert all(socket.closed for socket in sockets)

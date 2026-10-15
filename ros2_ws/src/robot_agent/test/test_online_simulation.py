@@ -41,9 +41,9 @@ def test_navigation_registration_goal_cancel_and_unknown_failure():
         "cancel_navigation",
         "navigation_status",
     )
-    assert result["status"] == "completed"
-    actions = result["actions"]
-    assert actions[1]["data"]["locations"]["书房"] == {
+    assert result.status == "completed"
+    actions = result.actions
+    assert actions[1].data["locations"]["书房"] == {
         "x": 1,
         "y": 2,
         "z": 0,
@@ -52,12 +52,12 @@ def test_navigation_registration_goal_cancel_and_unknown_failure():
         "qz": 0,
         "qw": 1,
     }
-    assert actions[3]["data"]["state"] == "active"
-    assert actions[3]["data"]["current_goal"] == "书房"
-    assert actions[5]["data"]["state"] == "cancelled"
-    assert "书房" in result["reply"]
+    assert actions[3].data["state"] == "active"
+    assert actions[3].data["current_goal"] == "书房"
+    assert actions[5].data["state"] == "cancelled"
+    assert "书房" in result.reply
     failed = submit(agent, provider, "navigate_to('未知')", "head_smile")
-    assert [a["status"] for a in failed["actions"]] == [
+    assert [a.status for a in failed.actions] == [
         "failed",
         "not_executed",
     ]
@@ -80,24 +80,24 @@ def test_music_queue_alias_recommendation_and_filter_state():
         "music_status",
         "recommend_songs('青花瓷')",
     )
-    assert result["status"] == "completed"
-    assert result["actions"][4]["data"] == {
+    assert result.status == "completed"
+    assert result.actions[4].data == {
         "is_playing": True,
         "current_song": "夜曲",
-        "queue": ["夜曲"],
+        "queue": ("夜曲",),
     }
-    assert result["actions"][6]["data"]["queue"] == []
-    assert result["actions"][7]["data"]["songs"] == [
+    assert result.actions[6].data["queue"] == ()
+    assert result.actions[7].data["songs"] == (
         "小幸运",
         "稻香",
         "夜曲",
         "东风破",
-    ]
+    )
     fallback = submit(agent, provider, "next_song", "music_status")
-    assert fallback["actions"][1]["data"]["current_song"] == "小幸运"
+    assert fallback.actions[1].data["current_song"] == "小幸运"
     stopped = submit(agent, provider, "stop_music", "music_status")
-    assert stopped["actions"][1]["data"]["is_playing"] is False
-    assert "夜曲" in result["reply"]
+    assert stopped.actions[1].data["is_playing"] is False
+    assert "夜曲" in result.reply
 
 
 def test_head_pose_expression_sequence_and_repetition():
@@ -115,21 +115,21 @@ def test_head_pose_expression_sequence_and_repetition():
         "sleep",
         "wake_up",
     )
-    assert result["status"] == "completed"
-    actions = result["actions"]
-    assert actions[1]["data"]["pitch"] == 65
-    assert actions[1]["data"]["yaw"] == 110
-    assert actions[2]["data"]["steps"][0] == {
+    assert result.status == "completed"
+    actions = result.actions
+    assert actions[1].data["pitch"] == 65
+    assert actions[1].data["yaw"] == 110
+    assert actions[2].data["steps"][0] == {
         "pitch": 80,
         "yaw": 90,
         "duration": 2 / 6,
     }
-    assert actions[2]["data"]["pitch"] == 90
-    breathing = actions[3]["data"]["steps"]
+    assert actions[2].data["pitch"] == 90
+    breathing = actions[3].data["steps"]
     assert [s["pitch"] for s in breathing] == [92, 88, 92, 88, 90]
-    assert actions[4]["data"]["steps"] == breathing
-    assert actions[5]["data"]["display"] == "good_night"
-    assert actions[6]["data"]["display"] == "苏醒"
+    assert actions[4].data["steps"] == breathing
+    assert actions[5].data["display"] == "good_night"
+    assert actions[6].data["display"] == "苏醒"
 
 
 def test_volume_wifi_and_music_display_state():
@@ -154,14 +154,14 @@ def test_volume_wifi_and_music_display_state():
         "stop_music",
         "head_position(yaw=90)",
     )
-    assert result["status"] == "completed"
-    assert result["actions"][3]["data"] == {"level": 100, "is_muted": True}
-    assert result["actions"][6]["data"] == {"level": 80, "is_muted": False}
-    assert result["actions"][7]["data"]["ssid"] == "simulated-network"
-    assert result["actions"][8]["data"]["ip"] == "192.0.2.2"
-    assert result["actions"][9]["data"]["connected"] is True
-    assert result["actions"][11]["data"]["display"] == "兴奋"
-    assert result["actions"][13]["data"]["display"] == "正常"
+    assert result.status == "completed"
+    assert result.actions[3].data == {"level": 100, "is_muted": True}
+    assert result.actions[6].data == {"level": 80, "is_muted": False}
+    assert result.actions[7].data["ssid"] == "simulated-network"
+    assert result.actions[8].data["ip"] == "192.0.2.2"
+    assert result.actions[9].data["connected"] is True
+    assert result.actions[11].data["display"] == "兴奋"
+    assert result.actions[13].data["display"] == "正常"
 
 
 # 独立来源为首票动作清单，不能从实现的注册表生成期望覆盖范围。
@@ -226,23 +226,23 @@ def test_every_source_simulation_action_from_interaction():
     provider = FixedProvider()
     agent = Agent(provider, create_default_actions().registry)
     result = submit(agent, provider, *SIMULATION_CALLS)
-    assert result["status"] == "completed"
-    assert len(result["actions"]) == 52
-    for action, call in zip(result["actions"], SIMULATION_CALLS):
-        assert action["name"] == call.split("(")[0]
-        assert action["status"] == "simulated_success"
-        assert action["data"]
-        assert "模拟" in action["detail"]
-    assert result["actions"][37]["parameters"] == {"duration": 2.0}
-    assert result["actions"][44]["parameters"] == {
+    assert result.status == "completed"
+    assert len(result.actions) == 52
+    for action, call in zip(result.actions, SIMULATION_CALLS):
+        assert action.name == call.split("(")[0]
+        assert action.status == "simulated_success"
+        assert action.data
+        assert "模拟" in action.detail
+    assert result.actions[37].parameters == {"duration": 2.0}
+    assert result.actions[44].parameters == {
         "cycles": 5,
         "duration": 0.5,
     }
-    assert result["actions"][45]["parameters"] == {
+    assert result.actions[45].parameters == {
         "direction": "center",
         "duration": 1.0,
     }
-    assert result["actions"][46]["parameters"] == {
+    assert result.actions[46].parameters == {
         "emotion": "happy",
         "duration": 3.0,
     }
@@ -281,10 +281,10 @@ def test_invalid_parameters_reject_all_without_state_changes():
     ]
     for invalid in invalid_calls:
         result = submit(agent, provider, "volume_set(90)", invalid)
-        assert result["status"] == "rejected", invalid
-        assert result["actions"] == [], invalid
+        assert result.status == "rejected", invalid
+        assert result.actions == (), invalid
         query = submit(agent, provider, "volume_status")
-        assert query["actions"][0]["data"]["level"] == 50, invalid
+        assert query.actions[0].data["level"] == 50, invalid
 
 
 def test_navigation_overlap_cancel_restart_and_independent_agents():
@@ -294,7 +294,7 @@ def test_navigation_overlap_cancel_restart_and_independent_agents():
     result = submit(
         first, provider, "go_to('厨房')", "navigate_to('厨房')", "head_smile"
     )
-    assert [a["status"] for a in result["actions"]] == [
+    assert [a.status for a in result.actions] == [
         "simulated_success",
         "failed",
         "not_executed",
@@ -302,17 +302,17 @@ def test_navigation_overlap_cancel_restart_and_independent_agents():
     cancelled = submit(
         first, provider, "cancel_navigation", "cancel_navigation"
     )
-    assert cancelled["status"] == "completed"
+    assert cancelled.status == "completed"
     restarted = submit(first, provider, "navigate_to('厨房')")
-    assert restarted["actions"][0]["data"]["state"] == "active"
+    assert restarted.actions[0].data["state"] == "active"
     submit(first, provider, "add_location('私有', 1, 1)", "play_music('夜曲')")
     second = Agent(provider, create_default_actions().registry)
     result = submit(
         second, provider, "list_locations", "music_status", "navigation_status"
     )
-    assert list(result["actions"][0]["data"]["locations"]) == ["厨房"]
-    assert result["actions"][1]["data"]["is_playing"] is False
-    assert result["actions"][2]["data"]["state"] == "idle"
+    assert list(result.actions[0].data["locations"]) == ["厨房"]
+    assert result.actions[1].data["is_playing"] is False
+    assert result.actions[2].data["state"] == "idle"
 
 
 @pytest.mark.parametrize(
@@ -332,8 +332,8 @@ def test_attention_direction_parameters(direction, pitch, yaw):
     result = submit(
         agent, provider, f"head_attention(direction='{direction}', duration=4)"
     )
-    assert result["status"] == "completed"
-    data = result["actions"][0]["data"]
+    assert result.status == "completed"
+    data = result.actions[0].data
     assert data["steps"][0] == {"pitch": pitch, "yaw": yaw, "duration": 2}
     assert (data["pitch"], data["yaw"]) == (90, 90)
 
@@ -355,8 +355,8 @@ def test_emotional_combinations(emotion, pitch, yaw):
     result = submit(
         agent, provider, f"head_emotional(emotion='{emotion}', duration=4)"
     )
-    assert result["status"] == "completed"
-    data = result["actions"][0]["data"]
+    assert result.status == "completed"
+    data = result.actions[0].data
     assert data["duration"] == 4
     assert data["steps"][0]["pitch"] == pitch
     assert data["steps"][0]["yaw"] == yaw
@@ -381,8 +381,8 @@ def test_full_pose_parameters_and_volume_saturation():
         "volume_down(step=120)",
         "volume_set(-10)",
     )
-    assert result["status"] == "completed"
-    assert result["actions"][0]["data"]["locations"]["客厅"] == {
+    assert result.status == "completed"
+    assert result.actions[0].data["locations"]["客厅"] == {
         "x": -2,
         "y": 3,
         "z": 1,
@@ -391,6 +391,6 @@ def test_full_pose_parameters_and_volume_saturation():
         "qz": 0.6,
         "qw": 0.8,
     }
-    assert result["actions"][1]["data"] == result["actions"][3]["data"]
-    assert result["actions"][4]["data"] == result["actions"][5]["data"]
-    assert [a["data"]["level"] for a in result["actions"][6:]] == [100, 0, 0]
+    assert result.actions[1].data == result.actions[3].data
+    assert result.actions[4].data == result.actions[5].data
+    assert [a.data["level"] for a in result.actions[6:]] == [100, 0, 0]

@@ -13,6 +13,7 @@ from robot_agent.actions.perception import (
     perception_actions,
 )
 from robot_agent.conversation.provider import DashScopeProvider
+from robot_agent.results import result_to_json
 from robot_agent.runtime import build_application
 from robot_agent.voice.runtime import capture_turn
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
@@ -72,18 +73,16 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
     voice = build_application(config, capabilities=capabilities)
     try:
         first = asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
-        assert first["actions"][0]["status"] == "real_success"
-        assert first["actions"][1]["status"] == "simulated_success"
-        assert "模型的提前承诺" not in first["reply"]
+        assert first.actions[0].status == "real_success"
+        assert first.actions[1].status == "simulated_success"
+        assert "模型的提前承诺" not in first.reply
         assert (
-            asyncio.run(voice.submit_transcript("第二轮", direct=True))[
-                "status"
-            ]
+            asyncio.run(voice.submit_transcript("第二轮", direct=True)).status
             == "completed"
         )
         context = json.loads(inputs[1].split("\n", 1)[1])
-        assert context["recent_exchanges"][0]["user"] == first["transcript"]
-        assert context["recent_exchanges"][0]["assistant"] == first["reply"]
+        assert context["recent_exchanges"][0]["user"] == first.transcript
+        assert context["recent_exchanges"][0]["assistant"] == first.reply
         assert (
             json.loads((tmp_path / "memory.json").read_text())["summary"]
             == "用户叫小明"
@@ -94,7 +93,7 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
     try:
         asyncio.run(restarted.submit_transcript("重启后", direct=True))
         assert "用户叫小明" in inputs[-1]
-        assert asyncio.run(restarted.clear_memory())["status"] == "completed"
+        assert asyncio.run(restarted.clear_memory()).status == "completed"
         asyncio.run(restarted.submit_transcript("清空后", direct=True))
         assert inputs[-1] == "清空后"
     finally:
@@ -128,22 +127,18 @@ def test_wav_runtime_preserves_actions_reply_audio_and_record(
         asyncio.run(voice.aclose())
 
     assert model_inputs == ["真实句一。真实句二。"]
-    assert result["transcript"] == model_inputs[0]
-    assert result["actions"][0]["status"] == "simulated_success"
-    assert "模型的提前承诺" not in result["reply"]
-    assert result["tts_status"] == "completed"
-    assert (
-        sockets[1].commands[1]["payload"]["input"]["text"] == result["reply"]
-    )
-    audio_path = Path(result["audio_path"])
-    assert audio_path == directory / (result["turn_id"] + ".wav")
+    assert result.transcript == model_inputs[0]
+    assert result.actions[0].status == "simulated_success"
+    assert "模型的提前承诺" not in result.reply
+    assert result.tts_status == "completed"
+    assert sockets[1].commands[1]["payload"]["input"]["text"] == result.reply
+    audio_path = Path(result.audio_path)
+    assert audio_path == directory / (result.turn_id + ".wav")
     with wave.open(str(audio_path)) as audio:
         assert audio.getnframes() == 2400
-    record = json.loads(
-        (directory / (result["turn_id"] + ".json")).read_text()
-    )
-    assert record["transcript"] == result["transcript"]
-    assert record["reply"] == result["reply"]
-    assert record["actions"] == result["actions"]
-    assert record["audio_path"] == result["audio_path"]
+    record = json.loads((directory / (result.turn_id + ".json")).read_text())
+    assert record["transcript"] == result.transcript
+    assert record["reply"] == result.reply
+    assert record["actions"] == result_to_json(result)["actions"]
+    assert record["audio_path"] == result.audio_path
     assert all(socket.closed for socket in sockets)

@@ -16,6 +16,7 @@ from robot_agent.actions.perception import (
 )
 from robot_agent.actions.simulation import simulate_cue
 from robot_agent.application import AgentApplication
+from robot_agent.results import VoiceRecord, result_to_json
 from robot_agent.ros.perception import RosPerception
 from robot_agent.runtime import (
     DEFAULT_ACTION_TIMEOUT,
@@ -71,12 +72,12 @@ class OnlineVoiceRosNode(Node):
         asyncio.set_event_loop(self._loop)
         self._loop.run_until_complete(self._voice.run(self._publish))
 
-    def _publish(self, result: Dict) -> None:
+    def _publish(self, result: VoiceRecord) -> None:
         """只发布执行事实；输入重连耗尽明确报告，不重复提交模型。"""
-        if result["status"] == "failed":
+        if result.status == "failed":
             self.get_logger().info(simulate_cue("error")["detail"])
         message = String()
-        message.data = json.dumps(result, ensure_ascii=False)
+        message.data = json.dumps(result_to_json(result), ensure_ascii=False)
         self._publisher.publish(message)
 
     def stop(self) -> None:

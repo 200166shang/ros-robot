@@ -47,7 +47,7 @@ def test_follow_fusion_and_toggle_through_interaction():
     result = asyncio.run(
         Agent(provider, registry).submit("启动跟随，查询，然后停止")
     )
-    assert result["status"] == "completed"
+    assert result.status == "completed"
     assert interface.events == [
         ("camera", True),
         ("fusion", True),
@@ -55,7 +55,7 @@ def test_follow_fusion_and_toggle_through_interaction():
         ("follow", False),
         ("fusion", False),
     ]
-    assert "本入口最后确认" in result["reply"]
+    assert "本入口最后确认" in result.reply
     interface.failure = {
         "status": "failed",
         "detail": "waiting for camera <- laser TF",
@@ -64,11 +64,11 @@ def test_follow_fusion_and_toggle_through_interaction():
     interface.events.clear()
     result = asyncio.run(Agent(provider, registry).submit("启动然后点头"))
     assert interface.events == [("camera", True), ("fusion", True)]
-    assert [a["status"] for a in result["actions"]] == [
+    assert [a.status for a in result.actions] == [
         "failed",
         "not_executed",
     ]
-    assert "laser TF" in result["reply"]
+    assert "laser TF" in result.reply
 
 
 def test_late_fusion_does_not_start_follow_or_retry():
@@ -96,19 +96,19 @@ def test_late_fusion_does_not_start_follow_or_retry():
     )
     try:
         result = asyncio.run(agent.submit("跟随然后点头"))
-        assert [a["status"] for a in result["actions"]] == [
+        assert [a.status for a in result.actions] == [
             "unknown",
             "not_executed",
         ]
-        assert asyncio.run(agent.submit("再次跟随"))["status"] == "busy"
+        assert asyncio.run(agent.submit("再次跟随")).status == "busy"
         release.set()
         reconciled = await_reconciliation(
             agent,
-            result["turn_id"],
-            lambda reply: reply["actions"][0]["status"] == "failed",
+            result.turn_id,
+            lambda reply: reply.actions[0].status == "failed",
         )
         assert interface.events == [("camera", True), ("fusion", True)]
-        assert reconciled["actions"][1]["status"] == "not_executed"
+        assert reconciled.actions[1].status == "not_executed"
     finally:
         release.set()
 
@@ -133,11 +133,11 @@ def test_device_rejection_is_in_reply_and_stops_actions(reason):
             FixedProvider(["enable_lidar", "start_following"]), registry
         ).submit("开启融合并跟随")
     )
-    assert [a["status"] for a in result["actions"]] == [
+    assert [a.status for a in result.actions] == [
         "failed",
         "not_executed",
     ]
-    assert reason in result["reply"]
+    assert reason in result.reply
     assert interface.events == [("fusion", True)]
 
 
@@ -150,7 +150,7 @@ def test_follow_aliases_preserve_the_same_sequence(action):
     result = asyncio.run(
         Agent(FixedProvider([action]), registry).submit("启动")
     )
-    assert result["status"] == "completed"
+    assert result.status == "completed"
     assert interface.events == [
         ("camera", True),
         ("fusion", True),
@@ -175,7 +175,7 @@ def test_camera_aliases_standby_and_unknown_status():
         ]
     )
     result = asyncio.run(Agent(provider, registry).submit("操作并查询"))
-    assert result["status"] == "completed"
+    assert result.status == "completed"
     assert interface.events == [
         ("camera", True),
         ("follow", False),
@@ -183,10 +183,10 @@ def test_camera_aliases_standby_and_unknown_status():
         ("fusion", True),
         ("fusion", False),
     ]
-    assert "设备状态未确认" in result["reply"]
-    assert "相机采集状态未知" in result["reply"]
-    assert '"follow": false' in result["actions"][-1]["detail"]
-    assert "不是实时状态" in result["reply"]
+    assert "设备状态未确认" in result.reply
+    assert "相机采集状态未知" in result.reply
+    assert '"follow": false' in result.actions[-1].detail
+    assert "不是实时状态" in result.reply
 
 
 def test_unknown_toggle_and_invalid_parameters_send_nothing():
@@ -196,11 +196,9 @@ def test_unknown_toggle_and_invalid_parameters_send_nothing():
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(["toggle_following"])
     agent = Agent(provider, registry)
-    assert (
-        asyncio.run(agent.submit("切换"))["actions"][0]["status"] == "failed"
-    )
+    assert asyncio.run(agent.submit("切换")).actions[0].status == "failed"
     provider.functions = ["enable_lidar", "start_following(True)"]
-    assert asyncio.run(agent.submit("启动"))["status"] == "rejected"
+    assert asyncio.run(agent.submit("启动")).status == "rejected"
     assert interface.events == []
 
 
@@ -217,7 +215,7 @@ def test_tracking_only_and_full_stop_preserve_source_semantics():
             registry,
         ).submit("单独切换然后完整停止")
     )
-    assert result["status"] == "completed"
+    assert result.status == "completed"
     assert interface.events == [
         ("follow", True),
         ("follow", False),
@@ -235,8 +233,8 @@ def test_partial_perception_facts_survive_later_failure():
     result = asyncio.run(
         Agent(FixedProvider(["start_following"]), registry).submit("启动")
     )
-    assert "采集请求已发布" in result["reply"]
-    assert "fusion refused" in result["reply"]
+    assert "采集请求已发布" in result.reply
+    assert "fusion refused" in result.reply
 
     class MissingCamera(PerceptionInterface):
         """Follow 可以停止，但相机采集端已不再可用。"""
@@ -254,8 +252,8 @@ def test_partial_perception_facts_survive_later_failure():
             "暂停采集"
         )
     )
-    assert "Follow 已确认待机" in result["reply"]
-    assert "相机无订阅端" in result["reply"]
+    assert "Follow 已确认待机" in result.reply
+    assert "相机无订阅端" in result.reply
 
 
 def test_simulation_and_perception_share_one_turn_after_main_merge():
@@ -275,15 +273,15 @@ def test_simulation_and_perception_share_one_turn_after_main_merge():
     result = asyncio.run(
         Agent(provider, registry).submit("设置音量并开启跟随，查询后停止")
     )
-    assert result["status"] == "completed"
-    assert [action["status"] for action in result["actions"]] == [
+    assert result.status == "completed"
+    assert [action.status for action in result.actions] == [
         "simulated_success",
         "real_success",
         "real_success",
         "simulated_success",
         "real_success",
     ]
-    assert result["actions"][3]["data"]["level"] == 35
+    assert result.actions[3].data["level"] == 35
     assert interface.events == [
         ("fusion", True),
         ("follow", True),

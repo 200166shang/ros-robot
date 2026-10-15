@@ -5,8 +5,9 @@ import math
 import re
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 from robot_agent.conversation.agent import Agent
 from robot_agent.legacy_io import (
@@ -15,7 +16,7 @@ from robot_agent.legacy_io import (
     LegacyVoiceOutput,
     SpeechInput,
 )
-from robot_agent.results import make_result
+from robot_agent.results import TurnResult, VoiceRecord, make_result
 from robot_agent.voice.output import SpeechOutput, VoiceOutput
 from robot_agent.voice.session import VoiceSession
 
@@ -87,17 +88,19 @@ class AgentApplication:
         if not self._processing and not self._closed:
             self._session.tick(self._clock())
 
-    def _rejection(self) -> Optional[Dict]:
+    def _rejection(self) -> Optional[VoiceRecord]:
         """关闭或忙碌时不启动新的识别、模型或动作。"""
         if self._closed:
-            return make_result(
-                uuid.uuid4().hex, "rejected", "语音入口已关闭。"
+            return VoiceRecord(
+                make_result(uuid.uuid4().hex, "rejected", "语音入口已关闭。")
             )
         if self._processing:
-            return make_result(uuid.uuid4().hex, "busy", "语音回合正在处理。")
+            return VoiceRecord(
+                make_result(uuid.uuid4().hex, "busy", "语音回合正在处理。")
+            )
         return None
 
-    async def run(self, on_result: Callable[[Dict], None]) -> None:
+    async def run(self, on_result: Callable[[VoiceRecord], None]) -> None:
         """唯一麦克风回合循环；空闲监听推进计时，退出释放输入。"""
         try:
             while not self._closed:
@@ -110,8 +113,7 @@ class AgentApplication:
                             "failed",
                             "持续ASR不可用，监听已停止。",
                         )
-                        result["asr_status"] = "failed"
-                        on_result(result)
+                        on_result(VoiceRecord(result, asr_status="failed"))
                     return
                 if self._closed:
                     return
@@ -124,7 +126,9 @@ class AgentApplication:
         finally:
             await self.aclose()
 
-    async def submit_transcript(self, text: str, direct: bool = False) -> Dict:
+    async def submit_transcript(
+        self, text: str, direct: bool = False
+    ) -> VoiceRecord:
         """一轮主流程；有效输入暂停后才决定会话，异常仍释放处理状态。"""
         rejected = self._rejection()
         if rejected is not None:
@@ -136,7 +140,9 @@ class AgentApplication:
         try:
             # 1. 外部文本校验；空识别不延长会话期限。
             if not isinstance(text, str) or not text.strip():
-                result.update(status="rejected", reply="未识别到有效文本。")
+                result = replace(
+                    result, status="rejected", reply="未识别到有效文本。"
+                )
                 return await self._output.complete(
                     result, "", self._session.state, input_failed=True
                 )
@@ -155,7 +161,9 @@ class AgentApplication:
             if decision is None:
                 result = await self._agent.submit(text)
             else:
-                result.update(status=decision.status, reply=decision.reply)
+                result = replace(
+                    result, status=decision.status, reply=decision.reply
+                )
 
             # 3. 输出只消费执行事实，不重复模型和动作。
             return await self._output.complete(
@@ -165,7 +173,7 @@ class AgentApplication:
             try:
                 if paused and not self._closed:
                     self._input.resume()
-                if heard_input and result["status"] not in (
+                if heard_input and result.status not in (
                     "ignored",
                     "filtered",
                 ):
@@ -173,14 +181,18 @@ class AgentApplication:
             finally:
                 self._processing = False
 
-    async def submit_recording(self, path: Path, direct: bool = True) -> Dict:
+    async def submit_recording(
+        self, path: Path, direct: bool = True
+    ) -> VoiceRecord:
         """独立 WAV 先识别文件，再进入共同文本主流程。"""
         rejected = self._rejection()
         if rejected is not None:
             return rejected
         if self._recording is None:
-            return make_result(
-                uuid.uuid4().hex, "rejected", "此输入不支持WAV识别。"
+            return VoiceRecord(
+                make_result(
+                    uuid.uuid4().hex, "rejected", "此输入不支持WAV识别。"
+                )
             )
         self._processing = True
         try:
@@ -194,21 +206,26 @@ class AgentApplication:
                     "failed",
                     "在线识别不可用，本轮未发出动作。",
                 )
-                result["asr_status"] = "failed"
                 return await self._output.complete(
-                    result, "", self._session.state, input_failed=True
+                    result,
+                    "",
+                    self._session.state,
+                    input_failed=True,
+                    asr_status="failed",
                 )
         finally:
             self._processing = False
         return await self.submit_transcript(text, direct=direct)
 
-    async def reconcile(self, turn_id: str) -> Dict:
+    async def reconcile(self, turn_id: str) -> VoiceRecord:
         """只核对原回合并重新输出记录，不提交模型或重发动作。"""
         rejected = self._rejection()
         if rejected is not None:
             return rejected
         if re.fullmatch(r"[0-9a-f]{32}", turn_id) is None:
-            return make_result(uuid.uuid4().hex, "rejected", "回合标识无效。")
+            return VoiceRecord(
+                make_result(uuid.uuid4().hex, "rejected", "回合标识无效。")
+            )
         self._processing = True
         try:
             self._input.pause()
@@ -224,11 +241,11 @@ class AgentApplication:
             finally:
                 self._processing = False
 
-    async def clear_memory(self) -> Dict:
+    async def clear_memory(self) -> TurnResult:
         """空闲时由同一应用清空记忆。"""
         rejected = self._rejection()
         return (
-            rejected
+            rejected.turn
             if rejected is not None
             else await self._agent.clear_memory()
         )

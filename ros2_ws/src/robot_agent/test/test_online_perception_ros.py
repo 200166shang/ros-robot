@@ -98,15 +98,15 @@ def test_ros_confirmations_without_agent_mode_gate(ros_devices):
     device, interface, events, scenario = ros_devices
     agent = make_agent(interface, ["start_following", "disable_lidar"])
     result = asyncio.run(agent.submit("跟随后关闭融合"))
-    assert result["status"] == "completed", result
+    assert result.status == "completed", result
     assert ("fusion", True) in events and ("follow", True) in events
     device.set_parameters([Parameter("dry_run", value=False)])
     events.clear()
     result = asyncio.run(
         make_agent(interface, ["enable_lidar", "head_nod"]).submit("开启")
     )
-    assert result["status"] == "completed"
-    assert result["actions"][0]["status"] == "real_success"
+    assert result.status == "completed"
+    assert result.actions[0].status == "real_success"
     assert ("fusion", True) in events
 
 
@@ -117,22 +117,22 @@ def test_ros_rejection_and_late_receipt(ros_devices):
     result = asyncio.run(
         make_agent(interface, ["start_following", "head_nod"]).submit("跟随")
     )
-    assert [a["status"] for a in result["actions"]] == [
+    assert [a.status for a in result.actions] == [
         "failed",
         "not_executed",
     ]
-    assert "invalid camera <- laser TF" in result["reply"]
+    assert "invalid camera <- laser TF" in result.reply
     assert not any(kind == "follow" for kind, _ in events)
     events.clear()
     scenario.update(success=True, delay=0.25)
     agent = make_agent(interface, ["start_following", "head_nod"])
     result = asyncio.run(agent.submit("跟随"))
-    assert result["actions"][0]["status"] == "unknown"
+    assert result.actions[0].status == "unknown"
     reconciled = await_reconciliation(
         agent,
-        result["turn_id"],
-        lambda reply: reply["actions"][0]["status"] == "failed",
+        result.turn_id,
+        lambda reply: reply.actions[0].status == "failed",
     )
-    assert reconciled["actions"][1]["status"] == "not_executed"
+    assert reconciled.actions[1].status == "not_executed"
     assert events.count(("fusion", True)) == 1
     assert not any(kind == "follow" for kind, _ in events)
