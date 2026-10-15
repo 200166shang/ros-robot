@@ -306,3 +306,28 @@ setup.py使用find_packages安装子包；提示词资源归属conversation；
 日志在同级issue-68-microphone-refactor的
 layout-{build,pyright,pytest,installed,demo}.log。部署应干净重建以避免
 旧模块残留；本轮未重新调用云端或验证实体麦克风/扬声器。
+
+## 共享函数依赖归属修复01（2026-10-15）
+
+start_call从actions/execution原样迁至根calls，make_result原样迁至
+根results。语音传输、语音会话、语音组装、模型交互和动作执行直接
+导入实际归属；语音传输不再经conversation加载动作注册及模拟实现。
+未增加common框架或调用转发，未实施候选02/03。
+
+- AST比较两个函数与迁移前实现完全一致，线程/Future/异常和回合结果
+  快照契约保持。独立进程导入voice.speech后，sys.modules没有交互
+  模块或动作执行/注册模块。
+- 完整源码回归107项通过，12.28秒；范围与前述完整pytest命令相同。
+- 干净源码外构建robot_audio、robot_agent两包成功，14.9秒。
+- 从/tmp加载新install、不加入源码路径，确认calls/results来自新安装；
+  导入ASR/TTS后没有加载任何robot_agent.actions模块或交互模块。
+  安装版Agent全部89项测试通过，7.80秒。
+- Ruff格式及静态检查51文件通过，完整robot_agent Pyright为0错误、
+  0警告；git diff --check通过。
+- 双轴审查 `3ea2a3c...b722a38`：Standards 0项、Spec 0项。
+
+构建输出位于源码外
+`/home/orangepi/local-data/ros-robot/issue-68-imports-build/{build,install,log}`；
+同级issue-68-microphone-refactor包含
+imports-{build,pyright,pytest,installed}.log。
+本轮仅修正依赖归属，未重新调用云端或验证实体音频设备。
