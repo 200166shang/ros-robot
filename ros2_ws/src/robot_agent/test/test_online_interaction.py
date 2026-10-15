@@ -4,9 +4,11 @@ import json
 import threading
 import time
 
-import robot_agent.online_interaction as interaction
-from robot_agent.online_actions import ActionHandler, ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
+import robot_agent.actions.execution as execution
+from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.actions.registry import ActionHandler
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.memory import ConversationMemory
 
 
 class FixedProvider:
@@ -38,7 +40,7 @@ def await_reconciliation(agent, turn_id, confirmed):
 def test_chat_and_repeated_actions_across_turns():
     """普通聊天及跨回合重复动作均经公共入口得到可信结果。"""
     provider = FixedProvider()
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     assert agent.submit("你好")["reply"] == "你好"
     provider.functions = ["head_nod", "head_smile", "head_nod"]
     first = agent.submit("点头微笑点头")
@@ -64,7 +66,7 @@ def test_invalid_list_executes_nothing():
         events.append("sent")
         return {"status": "real_success"}
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("device", execute)
     for invalid in (
         "unknown",
@@ -79,7 +81,7 @@ def test_invalid_list_executes_nothing():
 
 def test_failure_stops_and_reports_remaining():
     """失败回执保留前项成功与后项未执行。"""
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
 
     def fail():
         """返回外部设备的失败回执。"""
@@ -109,9 +111,9 @@ def test_stream_fragments_execute_list_once():
             """按字符提供 JSON 片段。"""
             return iter('{"fc":["head_nod","head_nod"],"res":"已完成"}')
 
-    result = OnlineInteraction(StreamProvider(), ActionRegistry()).submit(
-        "执行"
-    )
+    result = OnlineInteraction(
+        StreamProvider(), create_default_actions().registry
+    ).submit("执行")
     assert len(result["actions"]) == 2
     assert result["status"] == "completed"
 
@@ -128,7 +130,7 @@ def test_action_timeout_is_unknown_and_busy_until_return():
         released.wait(2)
         return {"status": "real_success"}
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("slow", slow)
     agent = OnlineInteraction(
         FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
@@ -145,43 +147,35 @@ def test_action_timeout_is_unknown_and_busy_until_return():
         released.set()
 
 
-def test_provider_timeout_and_busy_rejection():
-    """模型超时不执行动作，处理中的第二回合立即拒绝。"""
-
-    entered = threading.Event()
+def test_provider_timeout_blocks_next_turn_until_call_finishes():
+    """等待已超时的调用结束，不把等待超时当作调用完成或重试动作。"""
     released = threading.Event()
 
     class SlowProvider:
-        """代表阻塞的模型连接。"""
+        """代表超出主链等待期限的模型连接。"""
 
         def complete(self, text, timeout):
-            """等待外部响应释放。"""
-            entered.set()
+            """外部释放前保持真实调用在途。"""
             released.wait(2)
             return '{"function":["head_nod"],"response":"好了"}'
 
     agent = OnlineInteraction(
-        SlowProvider(), ActionRegistry(), provider_timeout=0.1
+        SlowProvider(),
+        create_default_actions().registry,
+        provider_timeout=0.01,
     )
-    results = []
-    worker = threading.Thread(
-        target=lambda: results.append(agent.submit("你好"))
-    )
-    worker.start()
     try:
-        assert entered.wait(1)
-        assert agent.submit("第二轮")["status"] == "busy"
-        worker.join(1)
-        assert results[0]["actions"] == []
-        assert results[0]["status"] == "failed"
+        first = agent.submit("你好")
+        assert first["status"] == "failed"
+        assert first["actions"] == []
+        assert agent.submit("下一轮")["status"] == "busy"
     finally:
         released.set()
-        worker.join(1)
 
 
 def test_exception_and_invalid_receipt_cannot_be_success():
     """执行异常或非法回执不记作成功。"""
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
 
     def error():
         """模拟外部调用异常。"""
@@ -209,7 +203,7 @@ def test_parameter_validation_precedes_all_execution():
         if type(pitch) not in (int, float) or not 65 <= pitch <= 120:
             raise ValueError("pitch 越界")
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("head_position", position, validate)
     provider = FixedProvider(["head_position(70)", "head_position(pitch=200)"])
     agent = OnlineInteraction(provider, registry)
@@ -239,12 +233,12 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
             return '{"function":[],"function":["head_nod"],"response":"好了"}'
 
     assert (
-        OnlineInteraction(DuplicateProvider(), ActionRegistry()).submit(
-            "执行"
-        )["status"]
+        OnlineInteraction(
+            DuplicateProvider(), create_default_actions().registry
+        ).submit("执行")["status"]
         == "rejected"
     )
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
 
     def invalid():
         """模拟不符合设备回执契约的响应。"""
@@ -262,7 +256,7 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
 
 def test_call_syntax_defaults_and_literal_arguments_remain_compatible():
     """文本入口仍接受裸函数、空调用、位置/关键字参数与默认值。"""
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
 
     def display(message="默认", options=None):
         """设备回执携带收到的业务参数，供交互结果观察。"""
@@ -291,7 +285,7 @@ def test_call_syntax_defaults_and_literal_arguments_remain_compatible():
 
 def test_unsupported_call_forms_reject_the_whole_list():
     """展开参数、重复参数和属性调用均不能越过整表校验。"""
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     provider = FixedProvider()
     agent = OnlineInteraction(provider, registry)
     for source in (
@@ -319,7 +313,7 @@ def test_late_action_requires_explicit_reconciliation():
         returned.set()
         return {"status": "real_success", "detail": "设备确认完成"}
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("slow", slow)
     provider = FixedProvider(["head_nod", "slow", "head_smile"])
     agent = OnlineInteraction(provider, registry, action_timeout=0.02)
@@ -352,9 +346,9 @@ def test_reporting_failure_preserves_completed_action(monkeypatch):
         """在输出边界注入格式化异常。"""
         raise ValueError("private error")
 
-    monkeypatch.setattr(interaction, "confirmed_action_reply", broken_reply)
+    monkeypatch.setattr(execution, "confirmed_action_reply", broken_reply)
     result = OnlineInteraction(
-        FixedProvider(["head_nod"]), ActionRegistry()
+        FixedProvider(["head_nod"]), create_default_actions().registry
     ).submit("执行")
     assert result["status"] == "failed"
     assert result["actions"][0]["status"] == "simulated_success"
@@ -378,7 +372,7 @@ def test_uncertain_late_receipt_does_not_restore_service():
                 raise RuntimeError("private failure")
             return {"status": "unknown", "detail": "设备无法确认"}
 
-        registry = ActionRegistry()
+        registry = create_default_actions().registry
         registry.register("slow", slow)
         agent = OnlineInteraction(
             FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
@@ -413,7 +407,7 @@ def test_late_failure_reconciles_without_executing_remaining_actions():
         release.wait(2)
         return {"status": "failed", "detail": "设备确认失败"}
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("slow_failure", slow_failure)
     provider = FixedProvider(["slow_failure", "head_nod"])
     agent = OnlineInteraction(provider, registry, action_timeout=0.02)
@@ -448,7 +442,7 @@ def test_validation_exception_reports_its_stage_and_executes_nothing():
         """模拟参数校验依赖故障。"""
         raise RuntimeError("private validation failure")
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("device", execute, validate)
     result = OnlineInteraction(
         FixedProvider(["head_nod", "device"]), registry
@@ -485,7 +479,7 @@ def test_late_model_output_is_discarded_without_executing_actions():
         submitted.append("sent")
         return {"status": "real_success"}
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register("device", execute)
     agent = OnlineInteraction(
         SlowFirstProvider(), registry, provider_timeout=0.02
@@ -522,7 +516,7 @@ def test_bulk_capability_loading_preserves_validation_and_replacement():
             raise ValueError("level 必须非负")
 
     handler = ActionHandler(execute, validate)
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many({"custom": handler, "alias": handler})
     registry.register_many({"head_smile": handler})
     provider = FixedProvider(["custom(2)", "alias(level=-1)"])
@@ -532,3 +526,86 @@ def test_bulk_capability_loading_preserves_validation_and_replacement():
     provider.functions = ["custom(2)", "alias(level=3)", "head_smile"]
     assert agent.submit("执行")["status"] == "completed"
     assert calls == [2, 3, 5]
+
+
+def test_execution_flow_failure_preserves_pending_and_skips_memory(
+    monkeypatch, tmp_path
+):
+    """等待流程异常仍保留原调用供核对，异常回合不写入记忆。"""
+    calls = []
+
+    def action():
+        """记录设备已接收调用并返回确认。"""
+        calls.append("sent")
+        return {"status": "real_success", "data": {"enabled": True}}
+
+    original_wait = execution.wait
+
+    def broken_wait(calls, timeout):
+        """在设备确认之后注入等待流程异常。"""
+        assert original_wait(calls, timeout=1).done
+        raise RuntimeError("private failure")
+
+    registry = create_default_actions().registry
+    registry.register("action", action)
+    memory = ConversationMemory(tmp_path / "memory.json")
+    provider = FixedProvider(["action", "head_nod"])
+    agent = OnlineInteraction(provider, registry, memory=memory)
+    with monkeypatch.context() as patch:
+        patch.setattr(execution, "wait", broken_wait)
+        result = agent.submit("failed-turn-marker")
+    assert result["reply"] == "动作执行流程异常，请核对执行记录。"
+    assert [a["status"] for a in result["actions"]] == [
+        "unknown",
+        "not_executed",
+    ]
+    assert "private failure" not in str(result)
+    assert "failed-turn-marker" not in memory.context("next")
+    assert agent.submit("下一轮")["status"] == "busy"
+    reconciled = agent.reconcile(result["turn_id"])
+    assert reconciled["actions"][0]["data"] == {"enabled": True}
+    assert result["actions"][0]["status"] == "unknown"
+    assert calls == ["sent"]
+    provider.functions = []
+    assert agent.submit("下一轮")["status"] == "completed"
+
+
+def test_reconciled_turn_cannot_clear_later_pending_turn():
+    """多轮核对各自归属原回合，旧标识不能解除新回合的未知状态。"""
+    release = threading.Event()
+    calls = []
+
+    def slow():
+        """每轮等待明确释放后返回设备确认。"""
+        calls.append("sent")
+        release.wait(2)
+        return {"status": "real_success"}
+
+    registry = create_default_actions().registry
+    registry.register("slow", slow)
+    agent = OnlineInteraction(
+        FixedProvider(["slow", "head_nod"]), registry, action_timeout=0.02
+    )
+    try:
+        first = agent.submit("第一轮")
+        release.set()
+        await_reconciliation(
+            agent,
+            first["turn_id"],
+            lambda reply: reply["actions"][0]["status"] == "real_success",
+        )
+        release.clear()
+        second = agent.submit("第二轮")
+        assert agent.reconcile(first["turn_id"])["status"] == "rejected"
+        assert agent.submit("第三轮")["status"] == "busy"
+        release.set()
+        reconciled = await_reconciliation(
+            agent,
+            second["turn_id"],
+            lambda reply: reply["actions"][0]["status"] == "real_success",
+        )
+        assert reconciled["actions"][1]["status"] == "not_executed"
+        assert second["actions"][0]["status"] == "unknown"
+        assert calls == ["sent", "sent"]
+    finally:
+        release.set()

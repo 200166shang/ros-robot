@@ -1,27 +1,17 @@
 """真实在线记忆验收，只报告阶段结果，不输出记忆内容。"""
 
 import argparse
-import json
 import multiprocessing
 import uuid
 from pathlib import Path
 
-from robot_agent.online_actions import ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_memory import ConversationMemory
-from robot_agent.online_provider import DashScopeProvider
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.runtime import create_interaction, load_config
 
 
-def verify_restart(
-    config: dict, path: Path, marker: str, cleared: bool
-) -> None:
+def verify_restart(config: dict, marker: str, cleared: bool) -> None:
     """在新进程重新构造 provider 和交互，仅从磁盘恢复记忆。"""
-    agent = OnlineInteraction(
-        DashScopeProvider(config),
-        ActionRegistry(),
-        provider_timeout=float(config.get("provider_timeout", 60)),
-        memory=ConversationMemory(path, 2, 2),
-    )
+    agent = create_interaction(config)
     result = agent.submit("只聊天，我最喜欢的色号是什么？不知道则说明。")
     assert result["status"] == "completed", "重启在线回合未完成"
     assert not result["actions"], "验收不允许动作"
@@ -41,20 +31,18 @@ def main() -> None:
     args = parser.parse_args()
     if args.memory_file.exists():
         parser.error("验收必须使用不存在的专用记忆文件，避免清空用户记忆")
-    config = json.loads(args.config.read_text(encoding="utf-8"))
-    provider = DashScopeProvider(config)
-    timeout = float(config.get("provider_timeout", 60))
+    config = dict(
+        load_config(args.config),
+        memory_file=str(args.memory_file),
+        memory_recent_turns=2,
+        memory_summary_trigger=2,
+    )
     # 色号只含随机标识，避免模型把中文字段标签当成可省略的说明。
     marker = uuid.uuid4().hex[:12]
 
     def start() -> OnlineInteraction:
         """通过公开交互 Interface 重新加载同一专用文件。"""
-        return OnlineInteraction(
-            provider,
-            ActionRegistry(),
-            provider_timeout=timeout,
-            memory=ConversationMemory(args.memory_file, 2, 2),
-        )
+        return create_interaction(config)
 
     def submit(agent: OnlineInteraction, text: str) -> dict:
         """检查真实在线回合，不在异常报告中输出用户输入或回复。"""
@@ -76,7 +64,7 @@ def main() -> None:
     context = multiprocessing.get_context("spawn")
     restarted = context.Process(
         target=verify_restart,
-        args=(config, args.memory_file, marker, False),
+        args=(config, marker, False),
     )
     restarted.start()
     restarted.join()
@@ -86,12 +74,12 @@ def main() -> None:
     # 3. 再次独立启动，验证清空的持久效果，不输出原始回复。
     cleared = context.Process(
         target=verify_restart,
-        args=(config, args.memory_file, marker, True),
+        args=(config, marker, True),
     )
     cleared.start()
     cleared.join()
     assert cleared.exitcode == 0, "清空后的独立进程验收失败"
-    print("clear_and_process_restart: passed; dry_run=true; no actions")
+    print("clear_and_process_restart: passed; no actions")
 
 
 if __name__ == "__main__":

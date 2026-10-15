@@ -12,6 +12,7 @@ install(PROGRAMS
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_online_launch test/test_online_launch.py)
   ament_add_pytest_test(
     test_tracking_launch
     test/test_tracking_launch.py

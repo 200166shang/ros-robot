@@ -5,9 +5,9 @@ import json
 
 import pytest
 
-from robot_agent.online_actions import ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_provider import DashScopeProvider
+from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.conversation.provider import DashScopeProvider
 
 
 @pytest.fixture
@@ -31,7 +31,9 @@ def captured_requests(monkeypatch):
 
 def test_default_prompt_preserves_legacy_contract(captured_requests):
     """请求保留旧人设、格式、动作示例与目录，同时限定当前执行能力。"""
-    agent = OnlineInteraction(DashScopeProvider({}), ActionRegistry())
+    agent = OnlineInteraction(
+        DashScopeProvider({}), create_default_actions().registry
+    )
     assert agent.submit("你好")["reply"] == "你好"
     prompt = captured_requests[0]["messages"][0]["content"]
     for required in (
@@ -61,7 +63,7 @@ def test_external_prompt_file_overrides_packaged_default(
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("定制提示词，保留 JSON 契约。", encoding="utf-8")
     provider = DashScopeProvider({"system_prompt_file": str(prompt_file)})
-    agent = OnlineInteraction(provider, ActionRegistry())
+    agent = OnlineInteraction(provider, create_default_actions().registry)
     assert agent.submit("你好")["status"] == "completed"
     assert captured_requests[0]["messages"][0]["content"] == (
         "定制提示词，保留 JSON 契约。"

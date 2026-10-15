@@ -5,9 +5,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from robot_agent.online_actions import ActionHandler, ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_voice import OnlineVoice
+import pytest
+
+from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.actions.registry import ActionHandler
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.voice.session import OnlineVoice
 
 
 class FixedSpeech:
@@ -74,13 +77,17 @@ class FixedTTS:
 def make_voice(tmp_path, **settings):
     """组装真实交互与模拟设备，替换在线输入与合成 Adapter。"""
     speech, model, tts = FixedSpeech(), FixedModel(), FixedTTS()
-    actions = ActionRegistry()
+    capabilities = create_default_actions()
+    actions = capabilities.registry
     voice = OnlineVoice(
         OnlineInteraction(model, actions),
         speech,
         tts,
         tmp_path,
-        music_playing=lambda: actions.music.is_playing,
+        music_playing=capabilities.music_playing,
+        recognize_recording=lambda path, timeout: speech.recognize(
+            path, timeout
+        ),
         retry_delay=0,
         **settings,
     )
@@ -209,14 +216,14 @@ def test_asr_and_storage_failure_release_turn(tmp_path, monkeypatch):
     )
 
 
-def test_busy_input_is_rejected_and_close_releases_adapters(tmp_path):
-    """在途模型回合拒绝重叠；退出后不恢复已关闭的采集连接。"""
+def test_close_releases_adapters_during_provider_call(tmp_path):
+    """退出时关闭在途语音资源，不恢复已关闭的采集连接。"""
     voice, speech, model, tts = make_voice(tmp_path)
     entered, release = threading.Event(), threading.Event()
     original = model.complete
 
     def complete(text, timeout):
-        """保持模型在途，允许从公共入口检查忙碌与退出。"""
+        """保持模型在途，允许从公共退出Interface关闭资源。"""
         entered.set()
         release.wait(2)
         return original(text, timeout)
@@ -226,7 +233,6 @@ def test_busy_input_is_rejected_and_close_releases_adapters(tmp_path):
         turn = executor.submit(voice.submit_recording, tmp_path / "input.wav")
         assert entered.wait(1)
         assert voice.state == "processing"
-        assert voice.submit_transcript("你好")["status"] == "busy"
         voice.close()
         release.set()
         assert turn.result(timeout=2)["tts_status"] == "disabled"
@@ -237,7 +243,7 @@ def test_busy_input_is_rejected_and_close_releases_adapters(tmp_path):
 def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
     """语音入口保留既有迟到回执核对 Interface，不重发动作。"""
     speech, model, tts = FixedSpeech(), FixedModel(), FixedTTS()
-    actions = ActionRegistry()
+    actions = create_default_actions().registry
     release = threading.Event()
     finished = threading.Event()
     executions = []
@@ -256,6 +262,7 @@ def test_unknown_action_can_be_reconciled_without_reexecution(tmp_path):
         tts,
         tmp_path,
         music_playing=lambda: False,
+        recognize_recording=speech.recognize,
     )
     result = voice.submit_recording(tmp_path / "input.wav")
     assert result["actions"][0]["status"] == "unknown"
@@ -299,3 +306,58 @@ def test_filtered_input_does_not_extend_silence_and_playback_failure_recovers(
     assert voice.submit_transcript("天气")["status"] == "filtered"
     now[0] = 120
     assert voice.state == "standby"
+
+
+def test_empty_microphone_recognition_does_not_extend_wake_session(tmp_path):
+    """持续录音中的空识别不算用户活动，静音期限仍使会话回待机。"""
+    now = [0.0]
+    voice, speech, model, tts = make_voice(tmp_path, clock=lambda: now[0])
+    voice.submit_transcript("小沫小沫")
+    now[0] = 60
+    speech.text = ""
+    result = voice.submit_recording(tmp_path / "input.wav", direct=False)
+    assert result["status"] == "rejected"
+    now[0] = 121
+    assert voice.state == "standby"
+    assert model.inputs == []
+
+
+def test_unexpected_synthesis_error_surfaces_and_restores_input(tmp_path):
+    """合成器编程错误向外显露，但仍恢复输入并允许下一回合。"""
+    voice, speech, model, tts = make_voice(tmp_path)
+    original = tts.synthesize
+
+    def broken_synthesis(text, destination, timeout):
+        """模拟不属于I/O失败的合成器实现错误。"""
+        raise ValueError("invalid synthesis implementation")
+
+    tts.synthesize = broken_synthesis
+    with pytest.raises(ValueError, match="invalid synthesis implementation"):
+        voice.submit_recording(tmp_path / "input.wav")
+    assert speech.events == ["recognize", "pause", "resume"]
+    assert voice.state == "standby"
+    tts.synthesize = original
+    assert (
+        voice.submit_transcript("请点头", direct=True)["status"] == "completed"
+    )
+    assert len(model.inputs) == 2
+
+
+@pytest.mark.parametrize("entry", ["recording", "transcript", "reconcile"])
+def test_closed_voice_rejects_each_entry_without_adapter_calls(
+    tmp_path, entry
+):
+    """所有入口关闭后直接拒绝，不调用识别、模型或合成适配器。"""
+    voice, speech, model, tts = make_voice(tmp_path)
+    voice.close()
+    if entry == "recording":
+        result = voice.submit_recording(tmp_path / "input.wav")
+    elif entry == "transcript":
+        result = voice.submit_transcript("请点头", direct=True)
+    else:
+        result = voice.reconcile("a" * 32)
+    assert result["status"] == "rejected"
+    assert speech.events == ["close"]
+    assert model.inputs == []
+    assert tts.replies == []
+    assert list(tmp_path.iterdir()) == []

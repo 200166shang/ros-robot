@@ -1,137 +1,128 @@
-# 在线语音与会话（#67）
+# 在线麦克风与独立WAV验收
 
-语音入口复用 `robot_voice.audio_sources` 的 `capture(destination)` Interface，
-已有 WAV 可直接提交一回合，不需要唤醒词。输入契约仍为非空单声道 PCM16
-16kHz WAV。默认关闭麦克风和播放；ASR、模型、TTS 均真实在线，头部、导航、
-音乐、音量与 WiFi 使用 #64 的完整模拟状态，保持 `dry_run=true`。
-同步主线后，语音 ROS 入口接入 #65 的真实感知 Adapter，所有语音入口复用
-#66 的有限近期上下文与持久摘要；感知回复按真实回执区分确认与未知。
+正常 `online_voice_agent` 只有麦克风输入，自动逐轮运行：
 
-## 运行
+```text
+持续PCM → 在线ASR完整句 → 暂停真实音频、静音保活
+       → 唤醒/休眠/音乐规则 → LLM/动作 → TTS/可选播放 → 清理并恢复
+```
 
-依赖 Python 3.8+、`websocket-client>=1.6,<2` 及既有 robot_voice 包。
-DashScope SDK 不参与运行；语音 Adapter 直接使用服务端双向 WebSocket 协议。
-模型沿用现有 DashScope SSE Adapter 和提示词。
+ROS主executor处理设备回执，唯一业务线程组织交互；采集与ASR接收I/O线程持续保活。没有输入话题订阅、
+临时回合worker、接入busy调度、队列或会话锁。OnlineVoice与
+OnlineInteraction的公共Interface要求同一调用者顺序调用；处理阶段状态
+用于观测和静音计时，不作为并发输入锁。
 
-把配置保存到源码外，例如 `~/local-data/ros-robot/voice/config.json`：
+OnlineVoice内部按入口和职责组织：
+
+```text
+正常：LiveSpeechInput.listen → submit_transcript → _process_text
+独立WAV：submit_recording → _process_recording（ASR） → _process_text
+submit_transcript → _process_text
+    _decide_session → 必要时interaction.submit → _finish_turn
+reconcile → _reconcile_turn（核对原动作并关联原文本）
+```
+
+三个入口均由_run_turn统一协调处理状态、暂停后恢复和活动时间。
+临时回合记录只保存结果、文本和生命周期状态，不承担并发调度。
+会话决策返回固定回执，或以None明确表示继续模型交互；忽略、过滤、
+busy不合成，识别失败及空文本只记录。核对分支不发起新模型或动作。
+
+## 外部配置与启动
+
+依赖 Python3.8、ROS2 Foxy、`websocket-client>=1.6,<2` 与robot_audio。
+正常录音还需要 `arecord`（alsa-utils），播放可选，开启时使用 `aplay`。
+完整依赖和统一启动见[操作指南](online-agent.md)。
+
+外部JSON配置示例（路径替换为源码外绝对路径）：
 
 ```json
 {
-  "dry_run": true,
   "api_key_env": "DASHSCOPE_API_KEY",
-  "output_dir": "/home/orangepi/local-data/ros-robot/voice/results",
+  "output_dir": "/absolute/external/online-results",
+  "memory_file": "/absolute/external/conversation-summary.json",
+  "record_device": "plughw:2,0",
   "asr_model": "paraformer-realtime-v2",
-  "asr_attempts": 2,
   "tts_model": "cosyvoice-v2",
   "tts_voice": "longfeifei_v2",
-  "tts_attempts": 3,
-  "tts_failure_threshold": 5,
-  "tts_retry_delay": 1,
   "speech_timeout": 60,
   "provider_timeout": 60,
   "action_timeout": 5,
   "silence_timeout": 120,
-  "memory_file": "/home/orangepi/local-data/ros-robot/voice/conversation-summary.json",
+  "tts_attempts": 3,
+  "tts_failure_threshold": 5,
+  "tts_retry_delay": 1,
   "memory_recent_turns": 6,
   "memory_summary_trigger": 6,
-  "microphone_enabled": false,
   "playback_enabled": false
 }
 ```
 
-凭证由所指定的环境变量读取，禁止配置明文 `api_key`。可用
-`speech_endpoint` 配置所在地域的 WSS 语音端点，模型 HTTP 配置保持原契约。
-本环境 HTTP 代理建立 WSS 后未返回任务事件；验证时对
-`dashscope.aliyuncs.com` 设置 `NO_PROXY` 和 `no_proxy`，使用直连。
+`arecord -l` 查询实际麦克风；上例为当前板端USB麦克风。默认record_device
+为default。正常入口连续读取PCM，不再按record_seconds切片；ASR最终句
+决定回合。record_executable须持续输出原始单声道PCM16/16kHz，命令由
+PcmMicrophone组装。连接建立前与重连中不缓存音频，准备完成后再说话。
+Agent不再定义dry_run或microphone_enabled配置和运行参数。
+缺失设备由明确的模拟实现承担；ObjectTrack自身输出模式由其配置负责，
+当前板端继续dry_run=true。感知服务负责TF、同步数据和近期扫描前提。
 
 ```bash
 source /opt/ros/foxy/setup.bash
-source /path/to/external/install/setup.bash
-export NO_PROXY="${NO_PROXY:+$NO_PROXY,}dashscope.aliyuncs.com"
-export no_proxy="$NO_PROXY"
-online_voice_wav --config ~/local-data/ros-robot/voice/config.json \
-  --wav /path/to/existing.wav
+source /absolute/external/install/setup.bash
 ros2 run robot_agent online_voice_agent --ros-args \
-  -p dry_run:=true -p config_file:=/path/to/external/config.json
+  -p config_file:=/absolute/external/config.json
+# 观察回执，不能向正常入口提交text/WAV：
+ros2 topic echo /online_agent/result std_msgs/msg/String
 ```
 
-CLI 的 `--wav` 缺省时，仅在 `microphone_enabled=true` 才调用麦克风。
-麦克风采用既有 arecord Adapter，`record_executable`、`record_device`、
-`record_seconds` 可配置；每轮录制结束后识别，再等待回复合成/播放完成，
-然后开始下一次录制。播放启用后通过既有 aplay Adapter 输出已保存 WAV；
-`play_executable`、`play_device` 可配置。播放失败保留音频及动作事实。
-正常退出关闭 ASR/TTS 连接，取消在途 arecord/aplay 并回收子进程，
-等待有界模型调用后释放 ROS。
+凭证仅环境读取，不写配置明文api_key。默认真实在线ASR/LLM/TTS使用
+DashScope；端点与地域说明见[模型与文本测试说明](online-agent-text.md)。
+`record_executable`、`record_device`控制持续PCM录音Adapter；
+`playback_enabled=true`时，play_executable/play_device控制回复播放。
+独立WAV录音副本为临时文件；正常持续PCM不落盘。回复JSON/WAV及记忆放在源码外。
 
-## ROS Interface
+## 会话与执行生命周期
 
-仅启动一个在线入口，避免文本版与语音版竞争同名话题。
+小沫、小莫、小墨、小末、小陌、小默各重复两次唤醒；唤醒后持续交互。
+明确整句休眠或静音120秒回待机，子串不误触发。空识别和音乐过滤不刷新
+静音期限。模型、动作、TTS或播放期间不因静音改变会话状态。
+音乐状态来自同一注入能力，只接受原音乐控制关键词。
 
-| 输入话题（std_msgs/String） | 语义 |
-|---|---|
-| `/online_agent/wav` | 源码外 WAV 路径，直接单回合 |
-| `/online_agent/text` | 既有直接文本语义，加在线 TTS |
-| `/online_agent/transcript` | 最终识别文本事件，遵循唤醒和连续会话 |
-| `/online_agent/reconcile` | 原 turn_id 核对迟到回执，不重发动作 |
-| `/online_agent/clear_memory` | 内容 `clear` 清空近期上下文和持久摘要，忙时拒绝 |
-| `/online_agent/tts_enable` | 内容 `enable` 显式恢复 TTS，忙时不重置 |
+ASR仅最终句进入交互，支持有限重连；暂停时有效音频停止，活跃连接发送
+静音保活。正常ASR跨回合保持任务，暂停期间读取并丢弃麦克风数据，恢复前清理积压
+并过滤迟到旧句。独立WAV仍在单次识别结束后关闭其连接。TTS保留流式音频、有限重试与
+连续失败文本降级；不重复模型或动作。显式enable_tts供单调用者在轮间恢复；
+正常入口也可退出后重启恢复。动作回复只依据确认结果。
 
-所有回执在 `/online_agent/result` 发布。相同 `turn_id` 关联识别文本、可信
-回复、动作参数/结果、会话状态与音频路径。对应 `<turn_id>.json` 和
-`<turn_id>.wav` 保存在 `output_dir`，临时录音副本处理后删除。
-记录写入失败返回 `record_status=failed`，仍保留原 turn_id、动作事实、
-回复与已生成音频路径；ROS不会将后阶段失败改写成零动作的新回合。
-产物、记忆、凭证、录音、模型与构建输出都不进入源码提交。
+删除会话锁后仍保留实际执行约束：模型/摘要Future仍在途时，新提交返回
+busy，不重叠外部调用；动作unknown保持待核对，线程结束不等于设备确认。
+单调用者可通过reconcile(turn_id)核对迟到回执，不补执行剩余动作。
+正常入口不开放文本控制话题；未知设备状态需操作者核实后停止/重启，不能
+把自动重启当作动作成功。独立验收中可直接使用公共clear_memory、reconcile
+与enable_tts Interface；退出后可删除专用记忆文件再重新开始。
 
-## 会话状态与交接
+Ctrl+C关闭语音连接、取消并回收录制/播放子进程，等待唯一业务线程结束，
+随后销毁ROS节点。ASR、模型、TTS、文件或播放失败保留已有动作事实，
+异常不会被替换为成功。语音连接关闭使用的传输锁只协调socket生命周期，
+不承担会话或输入调度。
 
-```text
-standby --六种重复唤醒词--> listening
-listening --普通请求--> processing --回复结束--> listening
-listening --精确休眠指令/静音120秒--> standby
-standby --直接录音或文本--> processing --回复结束--> standby
-任意状态 --退出--> closed
-processing --并发输入--> busy（不排队，不打断）
+持续输入的线程、资源、失败与恢复规则见[设计说明](online-agent-streaming-input.md)。
+
+## 独立测试入口
+
+文本测试直接调用create_interaction(config).submit(text)，不启动ROS文本
+节点，详情见[模型与文本测试说明](online-agent-text.md)。
+
+WAV单回合CLI仅处理文件，必须提供--wav；免唤醒，不启动麦克风：
+
+```bash
+ros2 run robot_agent online_voice_wav \
+  --config /absolute/external/config.json --wav /absolute/path/existing.wav
 ```
 
-唤醒词为小沫、小莫、小墨、小末、小陌、小默，各重复两次；识别标点不影响
-匹配，唤醒句仅用于唤醒。连续会话不要求重复唤醒。旧休眠短语保留为整句
-匹配，去除标点和空格后比较；例如“好了”进入待机，“好了以后请点头”仍为
-普通请求。静音计时在回合完成后重新开始，处理期间不因超时改变会话。
+WAV须为非空单声道PCM16、16kHz。该CLI默认模拟设备；需要真实感知时，
+先启动tracking.launch.py，再单独运行[综合探针](online-agent.md)。
+探针复用create_ros_voice，与正常入口同一Implementation和感知Adapter，
+在自身进程顺序提交文本/WAV；不向正常麦克风节点发布输入。
 
-音乐播放状态直接读取同一个 ActionRegistry 的 MusicSimulation。
-播放中只接受原音乐控制关键词，包括停止/关闭、切歌/上一首/下一首、
-播放/恢复播放、音量/声音/静音；唤醒和明确休眠仍可使用。
-被过滤的输入不延长静音期限。直接录音/文本绕过会话过滤，供独立验收。
-
-ASR 按100毫秒 PCM 帧发送，最终句才进入交互，不把中间文本或心跳当输入。
-`pause/resume` 控制有效音频；存在活跃识别连接时暂停发送静音保活，恢复不
-丢失剩余录音。单回合结束主动关闭连接，模型/动作/TTS期间无需保留空闲
-ASR连接；下一次输入重新建立。断线整轮有限重连，失败连接的句子丢弃，
-所有尝试共享 `speech_timeout` 总期限。关闭后不再重连。
-
-LLM 保留 SSE 分片，交互收齐结构化输出并整表校验，动作确认后才合成最终
-语音；TTS 流式音频直接写临时 PCM WAV，收到 task-finished 且有音频才原子
-提交成功文件。模型的提前成功承诺不会被播报。当前普通聊天也收齐回复后
-合成，未增加提前解析 JSON 回复的通道。
-
-TTS 每轮有限重试，重试不重复模型或动作；连续失败回合达到阈值后降级为
-文本，显式 enable 可恢复。识别、合成、播放或保存异常均释放语音回合锁；
-已有交互的模型在途/设备未知结果仍保持其安全互斥契约，不自动重试动作。
-
-## 主线感知与记忆接入
-
-ROS 入口在组装处将 `RosPerception` 对应动作加入同一 ActionRegistry，
-交互仍负责整表校验和执行。Follow/融合启用沿用设备实际 dry_run参数检查、
-TF与数据前提，不从入口参数推断真实成功。独立CLI默认使用模拟设备注册表。
-
-ConversationMemory作为既有 OnlineInteraction 的依赖接入：普通回合记录
-识别文本与已确认回复，达到阈值后在线摘要并保存到源码外。重启加载摘要，
-`clear_memory` 复用主线清空契约，合成期间也保持语音回合互斥。
-
-## 协议参考
-
-- [Paraformer 客户端事件](https://www.alibabacloud.com/help/en/model-studio/paraformer-client-events)
-- [Paraformer 服务端事件](https://www.alibabacloud.com/help/en/model-studio/paraformer-server-events)
-- [CosyVoice 客户端事件](https://www.alibabacloud.com/help/en/model-studio/cosyvoice-client-events)
-- [CosyVoice 服务端事件](https://www.alibabacloud.com/help/en/model-studio/cosyvoice-server-events)
+固定回归、生成环境音与实际麦克风证据分别报告，不能相互冒充；新增验证
+见[单麦克风重构报告](online-agent-microphone-validation.md)。

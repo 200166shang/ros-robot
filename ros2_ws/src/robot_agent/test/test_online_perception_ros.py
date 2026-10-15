@@ -13,13 +13,13 @@ from rclpy.parameter import Parameter  # noqa: E402
 from std_msgs.msg import Bool  # noqa: E402
 from std_srvs.srv import SetBool  # noqa: E402
 
-from robot_agent.online_actions import ActionRegistry  # noqa: E402
-from robot_agent.online_interaction import OnlineInteraction  # noqa: E402
-from robot_agent.online_perception import (  # noqa: E402
+from robot_agent.actions.capabilities import create_default_actions  # noqa: E402
+from robot_agent.actions.perception import (  # noqa: E402
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.online_perception_ros import RosPerception  # noqa: E402
+from robot_agent.conversation.interaction import OnlineInteraction  # noqa: E402
+from robot_agent.ros.perception import RosPerception  # noqa: E402
 
 
 @pytest.fixture
@@ -83,7 +83,7 @@ def ros_devices():
 
 def make_agent(interface, functions):
     """通过现有注册表构造真实 ROS 感知交互 Interface。"""
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(
         perception_actions(PerceptionActions(interface, action_timeout=0.1))
     )
@@ -92,8 +92,8 @@ def make_agent(interface, functions):
     )
 
 
-def test_ros_confirmations_and_dry_run_gate(ros_devices):
-    """只有实际安全参数为 true 才提交启用服务。"""
+def test_ros_confirmations_without_agent_mode_gate(ros_devices):
+    """Agent直接使用设备回执，不再读取或校验设备模式参数。"""
     device, interface, events, scenario = ros_devices
     agent = make_agent(interface, ["start_following", "disable_lidar"])
     result = agent.submit("跟随后关闭融合")
@@ -102,9 +102,9 @@ def test_ros_confirmations_and_dry_run_gate(ros_devices):
     device.set_parameters([Parameter("dry_run", value=False)])
     events.clear()
     result = make_agent(interface, ["enable_lidar", "head_nod"]).submit("开启")
-    assert result["actions"][0]["status"] == "failed"
-    assert "dry_run" in result["reply"]
-    assert events == []
+    assert result["status"] == "completed"
+    assert result["actions"][0]["status"] == "real_success"
+    assert ("fusion", True) in events
 
 
 def test_ros_rejection_and_late_receipt(ros_devices):

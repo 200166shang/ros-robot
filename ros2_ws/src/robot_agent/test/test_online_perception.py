@@ -5,9 +5,12 @@ import threading
 import pytest
 from test_online_interaction import FixedProvider, await_reconciliation
 
-from robot_agent.online_actions import ActionRegistry
-from robot_agent.online_interaction import OnlineInteraction
-from robot_agent.online_perception import PerceptionActions, perception_actions
+from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.actions.perception import (
+    PerceptionActions,
+    perception_actions,
+)
+from robot_agent.conversation.interaction import OnlineInteraction
 
 
 class PerceptionInterface:
@@ -35,7 +38,7 @@ class PerceptionInterface:
 def test_follow_fusion_and_toggle_through_interaction():
     """跟随前先确认融合，切换基于本入口的最后确认状态。"""
     interface = PerceptionInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(
         ["start_following", "following_status", "toggle_following"]
@@ -81,7 +84,7 @@ def test_late_fusion_does_not_start_follow_or_retry():
             return super().set_enabled(kind, enabled, deadline)
 
     interface = LateInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(
         perception_actions(PerceptionActions(interface, action_timeout=1.0))
     )
@@ -122,7 +125,7 @@ def test_device_rejection_is_in_reply_and_stops_actions(reason):
     """保留实际失败原因，不用模型承诺替代设备回执。"""
     interface = PerceptionInterface()
     interface.failure = {"status": "failed", "detail": reason}
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     result = OnlineInteraction(
         FixedProvider(["enable_lidar", "start_following"]), registry
@@ -139,7 +142,7 @@ def test_device_rejection_is_in_reply_and_stops_actions(reason):
 def test_follow_aliases_preserve_the_same_sequence(action):
     """所有启动别名复用同一依赖顺序。"""
     interface = PerceptionInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     result = OnlineInteraction(FixedProvider([action]), registry).submit(
         "启动"
@@ -155,7 +158,7 @@ def test_follow_aliases_preserve_the_same_sequence(action):
 def test_camera_aliases_standby_and_unknown_status():
     """采集启停不等于预览状态；融合关闭确认会隐含待机。"""
     interface = PerceptionInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(
         [
@@ -186,7 +189,7 @@ def test_camera_aliases_standby_and_unknown_status():
 def test_unknown_toggle_and_invalid_parameters_send_nothing():
     """没有确认依据不猜测切换，错误参数仍整表零执行。"""
     interface = PerceptionInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(["toggle_following"])
     agent = OnlineInteraction(provider, registry)
@@ -199,7 +202,7 @@ def test_unknown_toggle_and_invalid_parameters_send_nothing():
 def test_tracking_only_and_full_stop_preserve_source_semantics():
     """单独 tracking 不自动开启融合，完整停止才依次关闭两者。"""
     interface = PerceptionInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     result = OnlineInteraction(
         FixedProvider(
@@ -219,7 +222,7 @@ def test_tracking_only_and_full_stop_preserve_source_semantics():
 def test_partial_perception_facts_survive_later_failure():
     """后阶段失败仍回复已提交采集和已确认待机，避免隐去执行事实。"""
     interface = PerceptionInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     interface.failure = {"status": "failed", "detail": "fusion refused"}
     result = OnlineInteraction(
@@ -235,7 +238,7 @@ def test_partial_perception_facts_survive_later_failure():
             """无订阅端时返回提交失败。"""
             return {"status": "failed", "detail": "相机无订阅端"}
 
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(
         perception_actions(PerceptionActions(MissingCamera()))
     )
@@ -249,7 +252,7 @@ def test_partial_perception_facts_survive_later_failure():
 def test_simulation_and_perception_share_one_turn_after_main_merge():
     """主线模拟状态与感知回执可在同一回合按序组合，保留各自结果来源。"""
     interface = PerceptionInterface()
-    registry = ActionRegistry()
+    registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(
         [

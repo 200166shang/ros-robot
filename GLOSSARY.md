@@ -62,3 +62,23 @@ The follow behavior is active and evaluates the current tracking target to deter
 
 **LiDAR fusion**:
 The association of LiDAR measurements with camera detections to estimate the tracking target's range. It is distinct from the LiDAR device acquiring measurements.
+
+## Agent actions
+
+**Action execution**:
+Carrying out a requested sequence of robot actions while retaining confirmed
+outcomes and the unexecuted remainder. A wait ending without confirmation does
+not establish whether an action occurred.
+
+**Action capability**:
+A supported robot behavior together with the observable state associated with
+that behavior. Music playback and whether music is playing belong to the same
+capability.
+
+## Voice input
+
+**ASR input pause**:
+Temporarily withholding real microphone audio from speech recognition while
+keeping its connection alive with silence. Audio captured during the pause is
+discarded, rather than submitted after listening resumes.
+_Avoid_: ASR shutdown, conversation sleep

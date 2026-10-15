@@ -11,11 +11,11 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from .audio_io import play_wav
-from .audio_sources import create_audio_source
+from robot_audio.audio_io import play_wav
+from robot_audio.audio_sources import create_audio_source
+
 from .sherpa_asr import SherpaOnnxAsr
 from .sherpa_tts import SherpaOnnxTts
-
 
 ASR_MODEL_DIR = (
     "/home/orangepi/models/voice/"
@@ -26,14 +26,17 @@ SHERPA_BIN_DIR = "/home/orangepi/venvs/sherpa-onnx/bin"
 
 
 class VoiceFrontendNode(Node):
-    """Capture one utterance, forward text, then synthesize the matching reply."""
+    """独立本地语音前端：采集一句并为对应文本回执合成语音。"""
 
     def __init__(self):
+        """读取前端配置并创建采集与本地识别、合成适配器。"""
         super().__init__("voice_frontend")
         self._record_executable = self.declare_parameter(
             "record_executable", "arecord"
         ).value
-        self._play_executable = self.declare_parameter("play_executable", "aplay").value
+        self._play_executable = self.declare_parameter(
+            "play_executable", "aplay"
+        ).value
         self._record_device = self.declare_parameter(
             "record_device", "plughw:2,0"
         ).value
@@ -57,7 +60,9 @@ class VoiceFrontendNode(Node):
             self.declare_parameter("tts_timeout_seconds", 90.0).value
         )
         self._num_threads = int(self.declare_parameter("num_threads", 2).value)
-        self._play_audio = bool(self.declare_parameter("play_audio", True).value)
+        self._play_audio = bool(
+            self.declare_parameter("play_audio", True).value
+        )
 
         asr_executable = self.declare_parameter(
             "asr_executable", SHERPA_BIN_DIR + "/sherpa-onnx"
@@ -114,7 +119,9 @@ class VoiceFrontendNode(Node):
         self._response_event = threading.Event()
 
         self._input_publisher = self.create_publisher(String, input_topic, 10)
-        self.create_subscription(String, response_topic, self._on_llm_response, 10)
+        self.create_subscription(
+            String, response_topic, self._on_llm_response, 10
+        )
         self.create_service(Trigger, capture_service, self._on_capture_request)
 
         self.get_logger().info(
@@ -128,6 +135,7 @@ class VoiceFrontendNode(Node):
         )
 
     def _on_capture_request(self, _request, response):
+        """接纳独立采集请求，已有回合进行中时拒绝新请求。"""
         with self._state_lock:
             if self._busy:
                 response.success = False
@@ -150,7 +158,9 @@ class VoiceFrontendNode(Node):
             result = json.loads(message.data)
         except (ValueError, TypeError):
             return
-        if not isinstance(result, dict) or not isinstance(result.get("reply"), str):
+        if not isinstance(result, dict) or not isinstance(
+            result.get("reply"), str
+        ):
             return
         with self._state_lock:
             if not self._waiting_for_response:
@@ -160,8 +170,11 @@ class VoiceFrontendNode(Node):
             self._response_event.set()
 
     def _run_voice_turn(self):
+        """采集、识别并等待文本回执，随后合成和可选播放。"""
         try:
-            with tempfile.TemporaryDirectory(prefix="robot-voice-") as temp_dir:
+            with tempfile.TemporaryDirectory(
+                prefix="robot-voice-"
+            ) as temp_dir:
                 recording_path = str(Path(temp_dir) / "input.wav")
                 audio_info = self._audio_source.capture(recording_path)
                 self.get_logger().info(
@@ -171,7 +184,9 @@ class VoiceFrontendNode(Node):
                 )
                 transcript = self._asr.transcribe(recording_path)
                 self.get_logger().info(
-                    "ASR transcript ready ({} characters)".format(len(transcript))
+                    "ASR transcript ready ({} characters)".format(
+                        len(transcript)
+                    )
                 )
 
                 with self._state_lock:
@@ -185,7 +200,9 @@ class VoiceFrontendNode(Node):
                 if not self._response_event.wait(self._llm_timeout):
                     with self._state_lock:
                         self._waiting_for_response = False
-                    raise RuntimeError("timed out waiting for /online_agent/result")
+                    raise RuntimeError(
+                        "timed out waiting for /online_agent/result"
+                    )
 
                 with self._state_lock:
                     response_text = self._response_text or ""
@@ -206,14 +223,21 @@ class VoiceFrontendNode(Node):
                         tts_path,
                     )
                     self.get_logger().info(
-                        "ALSA output completed ({:.2f}s); audible sound requires "
-                        "connected headphones or an amplified speaker".format(duration)
+                        "ALSA output completed ({:.2f}s); "
+                        "audible sound requires "
+                        "connected headphones or an amplified speaker".format(
+                            duration
+                        )
                     )
                 else:
-                    self.get_logger().info("play_audio=false; leaving playback disabled")
+                    self.get_logger().info(
+                        "play_audio=false; leaving playback disabled"
+                    )
         except Exception as error:
             self.get_logger().error(
-                "voice turn failed ({}): {}".format(type(error).__name__, error)
+                "voice turn failed ({}): {}".format(
+                    type(error).__name__, error
+                )
             )
         finally:
             with self._state_lock:
@@ -222,6 +246,7 @@ class VoiceFrontendNode(Node):
 
 
 def main(args=None):
+    """启动独立语音前端及ROS executor，退出时释放节点。"""
     rclpy.init(args=args)
     node = VoiceFrontendNode()
     executor = MultiThreadedExecutor(num_threads=2)

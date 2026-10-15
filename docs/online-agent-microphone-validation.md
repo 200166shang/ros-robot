@@ -1,0 +1,434 @@
+# #68 单麦克风重构验收
+
+2026-10-14，PR #75 的后续实现。基线为 `1802815`，沿用独立
+worktree `/home/orangepi/code/ros-robot-68`。本报告覆盖用户确认的
+第一、二项：简化逐轮接入、删除 Online Agent 的 `dry_run`。
+第三项功能目录迁移未实施。最初交付证据见
+[原综合验收](online-agent-integration-validation.md)。
+
+## 实现与契约
+
+正常入口仅启动一个持续麦克风线程，按以下顺序运行：
+
+```text
+录音 → 在线 ASR → 唤醒/休眠规则 → LLM/动作 → TTS → 恢复录音
+```
+
+删除正常节点的 text/WAV/transcript/文本控制订阅、每轮临时线程、
+接入忙碌分支和会话互斥锁。Interface 由单一调用者逐轮使用。
+空 ASR 不刷新活动时间，避免持续空录音阻止静音休眠。
+退出先取消语音资源并等待麦克风线程结束，再销毁 ROS 节点。
+模型仍在途、动作结果未知时的无重叠及显式核对规则继续保留。
+
+独立文本/WAV 测试进程复用同一交互实现与 ROS 设备适配器，
+正常语音运行时不开放这些入口。Online Agent 不再声明或检查
+`dry_run`，也不重复查询设备模式；未接入设备由明确的模拟实现
+承担。ObjectTrack 自身仍保持 `dry_run=true`，其设备前提由
+ObjectTrack 检查。本次没有授权硬件运动。
+
+## 自动生成环境语音
+
+实体 USB 麦克风试验未完成连续对话：多数 ASR 为空，另有一次
+无关语句。用户因此明确要求自动生成音频作为环境音跑通。
+这不是实体麦克风修复或实体录音验收。
+
+使用真实 DashScope TTS 生成下列输入，均为单声道、16kHz、
+PCM16 WAV；文件、完整 SHA256 和生成清单位于源码外证据目录。
+
+| 输入文本 | 时长 | 在线 ASR 实际回执 | 结果 |
+| --- | --- | --- | --- |
+| 小沫小沫 | 1.24秒 | 小莫小莫。 | woken，回复“我在，请说。” |
+| 请点头两次 | 1.32秒 | 请点头两次。 | completed，两个 head_nod 均模拟成功 |
+| 晚安 | 0.76秒 | 晚安。 | sleeping，恢复待机 |
+
+通过已有 `record_executable` 配置接入源码外录音适配器。
+适配器依次提供三段 WAV，正常节点仍经过麦克风采集 Interface、
+在线 ASR、LLM、动作与 TTS；没有注入 transcript 或替换在线服务。
+这次验证的是模拟环境音源，不是通过扬声器向实体麦克风播放。
+三个回复均 `tts_status=completed`，生成可核查回复 WAV。
+第三轮后下一次录音等待被正常退出取消。
+
+运行时 ROS 检查确认 Agent 只有 `config_file`、`use_sim_time`
+参数；六个旧输入/控制话题的订阅数均为0；ObjectTrack 的
+`dry_run=true`。`/cmd_vel`、`/tracking/cmd_vel_safe` 发布者为0，
+观察到的运动消息也为0。
+
+## 独立在线验收
+
+停止正常麦克风节点，单独启动固定感知 Launch 与测试进程。
+新验收入口要求 `--config`，直接复用 `create_ros_voice`，
+不向正常节点发布文本/WAV 输入。
+
+- integration：8轮 completed；真实相机、雷达、跟随启停与模拟
+  音量/点头结果按顺序核验；扫描509帧、图像569帧、运动消息0。
+- recall：3轮 completed；跨进程回忆“蓝鹭”、清除记忆、
+  清除后不再回忆均通过。
+- recording-only：3轮 completed；已有录音实际 ASR 为
+  “开始人物跟踪。”，启动图像接收及融合人物跟踪得到真实设备
+  确认，随后停止跟随；运动消息0。
+
+以上14轮中清除记忆不生成语音，其余13轮 TTS 完成。
+连同环境音流程，共核验16个回复 WAV 的格式、时长和 SHA256。
+感知验收没有真实人物目标；语音播放关闭，未验证扬声器。
+
+模型自由聊天回忆中额外声称“没有执行任何动作”，与历史记录
+不符。昵称回忆测试通过，但该自由聊天陈述不能作为动作证据；
+动作事实以回合结构化结果及设备回执为准。
+
+## 可复现入口与证据
+
+沿用原报告的源码外构建环境。正常运行示例：
+
+```bash
+source /opt/ros/foxy/setup.bash
+source /home/orangepi/local-data/ros-robot/issue-68-build/install/setup.bash
+ros2 launch robot_bringup online_agent.launch.py \
+  config_file:=/home/orangepi/local-data/ros-robot/issue-68-microphone-refactor/environment-config.json
+```
+
+独立验收需单独运行固定感知 Launch，命令见
+[当前指南](online-agent.md)。测试进程示例：
+
+```bash
+python3 ros2_ws/src/robot_agent/test/online_integration_probe.py \
+  --config /home/orangepi/local-data/ros-robot/issue-68-microphone-refactor/standalone-config.json \
+  --wav /home/orangepi/local-data/ros-robot/voice-fixtures/start_person_tracking_zh_2026-09-24.wav \
+  --evidence-dir /home/orangepi/local-data/ros-robot/issue-68-microphone-refactor/standalone \
+  --recording-only
+```
+
+凭证从源码外环境导入。当前外部环境音适配器使用单次递增索引，
+重跑前须把证据目录的 `environment-index` 重置为0。
+
+证据根目录：
+`/home/orangepi/local-data/ros-robot/issue-68-microphone-refactor/`。
+关键文件为 `environment-audio/manifest.json`、
+`environment-results.json`、`runtime-contract.json`、
+`standalone/{integration,recall,recording}.json`、
+`reply-audio-manifest.json`，以及对应 Launch/测试日志。
+录音、记忆、配置、凭证、构建输出均未进入源码提交。
+
+## 自动检查
+
+Python3.8.10、ROS2 Foxy、pytest6.2.5、Ruff0.17.0、
+Pyright1.1.414。先验证旧实现失败，再验证新行为通过：正常节点
+无多入口/Agent 参数、无需 Agent 设备模式查询、空 ASR 静音到期。
+
+- 最终 Python 全套：98 passed（11.66秒）。
+- 修改的10个模块 Pyright：0 errors、0 warnings。
+- Ruff 格式检查41个文件，lint 通过；`git diff --check` 通过。
+- 源码外增量构建 robot_agent、robot_bringup：2包成功。
+
+- 源码外8包 colcon 测试：30 tests，0 errors，0 failures，
+  0 skipped。robot_agent 的 setuptools 任务仍发现0项，
+  它的行为测试包含在上述独立 Python 全套98项中。
+
+双轴代码审查：Standards 首轮1项发现涉及2处过期契约注释，
+已修正并复审；最终 Standards 0项剩余发现、Spec 0项发现。
+
+## 设备音频工具抽离（2026-10-15）
+
+用户进一步授权抽离共享设备音频工具。以本报告上一轮提交
+`c50391e` 为基线，把 audio_io、audio_sources 和对应行为测试
+迁入 robot_audio；在线 robot_agent 与现有 robot_voice 均直接
+依赖它。robot_audio不启动ROS节点，不包含ASR/TTS或模型。
+未增加common框架，也没有实现新离线方案。旧导入路径已删除，
+安装部署需重新构建新包及两个调用包。
+
+```text
+robot_agent（在线ASR/TTS） → robot_audio ← robot_voice（本地ASR/TTS）
+                            录音 / WAV / 播放
+```
+
+保留采集/播放的取消、超时、子进程回收及WAV格式契约。
+现有离线前端仅更新导入并按根Ruff配置整理格式与说明。
+在线感知、模型和语音流程未改变，没有新增topic或进程。
+
+- 迁移后最终Python回归98 passed（11.58秒），其中设备音频
+  工具5项测试迁入新包；在线麦克风相关单项先检查16项通过。
+- Ruff45文件格式和lint、`git diff --check`通过。
+- 新音频包与在线组装模块Pyright零错误/警告。
+- 离线前端存在27项旧ROS参数类型诊断；对迁移前后独立检查，
+  诊断内容完全相同，没有新增。未借本次迁移重构其参数逻辑。
+- 全新源码外构建目录
+  `/home/orangepi/local-data/ros-robot/issue-68-audio-build/`：
+  robot_audio、robot_agent、robot_voice三包构建成功（23.2秒）。
+
+- 从/tmp加载全新安装环境，确认在线/离线引用同一份
+  robot_audio.create_audio_source；安装版音频测试5 passed。
+- 三包colcon test任务成功：robot_audio执行3项文件源测试，
+  robot_voice执行3项识别解析测试；robot_agent的setuptools任务
+  发现0项，其实际行为包含在完整98项pytest中。新构建目录的
+  setuptools任务未生成JUnit XML，不使用test-result的0项作为
+  行为覆盖证据。日志为audio-clean-test.log。
+
+上述检查日志位于同一源码外证据目录，文件名前缀audio-。
+联合收集时曾观察到两个名为test的Python包冲突，已把新包测试
+目录命名为tests；最终98项回归包含该修正。运行Interface未改变。
+双轴审查首轮及目录修正后复审：Standards/Spec均0项剩余发现。
+
+## OnlineVoice流程组织重构（2026-10-15）
+
+基线f672899。用户确认将多用途_submit拆为明确的录音、文本与
+动作核对流程，会话规则集中，生命周期统一协调。
+
+```text
+submit_recording → _process_recording → _process_text
+submit_transcript → _process_text
+    _decide_session → 必要时interaction.submit → _finish_turn
+reconcile → _reconcile_turn
+所有入口 → _run_turn统一暂停后的恢复、活动时间与处理标记收尾
+```
+
+私有_VoiceTurn只保存一轮结果、文本、暂停与有效输入状态。
+不引入会话锁、队列或新的执行调度。公共参数和默认值、唤醒/休眠、
+音乐过滤、静音计时、ASR失败、busy不合成、TTS重试/降级、原动作
+核对及JSON/WAV记录契约保持。未知编程错误继续显露，已关闭入口
+不调用外部适配器。未改变固定录音方式，没有重跑真实在线服务。
+
+- 重构前既有语音测试10项通过；新增4项合成异常/关闭入口行为
+  检查在旧实现也通过，用于保护既有生命周期契约。
+- 重构后语音与麦克风节点15项通过；完整Python回归102 passed
+  （13.73秒）。
+- Pyright修改模块0错误/警告；Ruff45文件格式与lint通过，
+  git diff --check通过。
+- robot_agent源码外增量构建成功（8.51秒）。
+
+从/tmp加载安装版执行相同语音/麦克风回归：15 passed（3.35秒）。
+双轴审查Standards/Spec均0项发现。日志沿用源码外证据目录，
+前缀voice-flow-。
+
+## 统一交互组装与删除文本节点（2026-10-15）
+
+基线95c451e。用户确认正常只有麦克风→ASR→text→LLM，文本只作为
+ASR输出或测试数据；删除正式ROS文本入口，不兼容现有旧离线前端。
+后续离线方案重新开发，本轮没有实现新离线能力。
+
+新增online_runtime：load_config统一读取UTF-8 JSON对象并支持~路径；
+create_interaction集中模型、动作注册表、记忆与共同期限的组装及默认值。
+语音组装继续负责ASR/TTS、录音播放和语音专属配置；ROS参数仍由节点声明。
+文件及语法错误直接显露，配置顶层不是JSON对象时在输入边缘明确拒绝。
+不添加配置框架、队列或进程。模型/动作的执行和未知回执规则保持。
+
+```text
+正常麦克风 / 独立WAV → create_voice → create_interaction
+直接文本 / 记忆测试                 → create_interaction
+```
+
+删除online_ros_node、online_agent console script、两个依赖旧话题的
+文本/感知探针及旧ROS文本记忆测试。以共同组装Interface直接验证文本记忆；
+真实ROS接线仍由麦克风节点与感知Adapter集成测试覆盖，综合探针保留。
+当前操作文档已更新，历史验收报告中的旧命令仅作为历史证据保留。
+
+- 新组装测试先观察到缺少module失败，实施后相关6项通过。
+  测试覆盖配置驱动的HTTPS调用期限、近期上下文、摘要、重新组装召回、
+  清空、错误JSON形状/共同设置、显式动作Adapter及有意重复。
+- 完整回归首次104 passed、1项ROS感知确认超时；当时并行执行构建和
+  类型检查。保持0.1秒测试期限不变，单独感知测试2项通过，随后完整
+  复验105 passed（11.40秒）。这是观察到的时序限度，不能抹去首次失败。
+- 全新源码外issue-68-assembly-build目录：robot_audio与robot_agent
+  两包构建成功。安装版相关6项通过（3.08秒）。
+- 安装环境ros2 pkg executables仅列出online_voice_agent、
+  online_voice_wav；旧文本module不存在。部署须使用干净安装目录，
+  旧增量安装可能遗留已删除可执行文件。
+- 修改的5个模块Pyright零错误/警告，Ruff43文件及git diff --check通过。
+  记忆探针--help在安装环境可运行；本轮未重跑真实云端或实体麦克风。
+
+日志位于同一源码外证据目录，前缀assembly-；双轴审查
+Standards/Spec均0项发现。
+
+## 动作执行与核对状态集中（2026-10-15）
+
+本轮在共同组装重构后继续实施用户确认的候选02。`online_execution`
+中的 `ActionExecution` 独占动作Future、全表执行记录、未知状态与迟到
+回执核对；`OnlineInteraction` 保留模型、整表校验及记忆编排，通过
+`blocked`、`execute`、`reconcile` 使用执行事实。执行流程异常携带
+原执行快照返回，仍不写入记忆。结果字段、期限、失败停止、显式核对、
+无自动重试/重叠、不补执行余项与已返回快照语义保持。
+
+验证使用 ROS 2 Foxy / Python 3.8，工具沿用源码外 issue-67-venv。
+
+- 交互与记忆定向回归：27项通过，1.15秒。新增检查覆盖执行等待流程
+  异常后的原调用核对、异常不写记忆、设备数据保留，以及旧回合标识
+  不能解除新回合阻塞；原有输出格式异常注入迁到执行模块。
+- 完整源码回归：107项通过，12.07秒。命令：加载Foxy及本轮install，
+  将robot_audio、robot_agent、robot_voice源码与pytest依赖加入
+  PYTHONPATH，ROS_DOMAIN_ID=195，执行
+  `python3 -m pytest -q tests ros2_ws/src/robot_audio/tests ros2_ws/src/robot_agent/test ros2_ws/src/robot_voice/test ros2_ws/src/robot_bringup/test`。
+- 全新目录构建robot_audio、robot_agent：两包成功，15.4秒。
+  使用 `colcon build --base-paths ros2_ws/src --packages-select robot_audio robot_agent --executor sequential`，
+  build/install/log均指定在源码外issue-68-execution-build目录。
+- 安装版：从/tmp加载新install，不加入源码路径，打印确认执行模块位于
+  install/robot_agent/lib/python3.8/site-packages。执行整个
+  robot_agent/test目录，89项通过，7.18秒。
+- Ruff格式及静态检查44文件通过；online_execution、online_interaction
+  的Pyright为0错误、0警告；git diff --check通过。
+- 双轴审查范围 `0008369...714906f`：Standards 0项、Spec 0项。
+
+证据位于源码外 `/home/orangepi/local-data/ros-robot/`：
+`issue-68-microphone-refactor/execution-{build,pytest,installed}.log`；
+全新构建目录为 `issue-68-execution-build/{build,install,log}`。
+本轮为行为保持重构，未重跑云端在线音频或实体麦克风；此前真实在线
+证据与实体硬件验证限度保持，不将本轮固定测试当作新增在线验收。
+
+## 按功能目录管理（2026-10-15）
+
+用户授权执行此前延后的目录整理。本轮仅迁移文件与导入：
+conversation保存模型交互/记忆/provider及提示词，actions保存动作契约/
+注册/执行/设备行为，voice保存会话/ASR/TTS/语音组装，ros保存正常
+麦克风节点及ROS感知Adapter；共同runtime保留根目录。完整目录及
+阅读索引见[统一指南](online-agent.md#代码目录与阅读入口)。
+
+所有调用者、探针、测试同步使用新Python导入路径，不保留旧模块转发。
+setup.py使用find_packages安装子包；提示词资源归属conversation；
+语音输出目录保护的父目录层级随文件迁移调整。ROS命令、参数、话题与
+动作/记忆/语音行为保持。历史验收报告中的旧路径记录原验证时结构。
+
+验证结果：
+
+- 源码相关组装/provider/语音集成/正常麦克风10项通过，3.64秒。
+- 全部源码回归107项通过，12.53秒，范围与上一节完整pytest命令相同。
+- 干净源码外目录构建robot_audio、robot_agent两包成功，15.7秒。
+- 从/tmp加载本轮新install，不加入源码路径：确认16个迁移模块可导入，
+  默认提示词可从conversation读取，两个console entry point可加载；
+  抽查6个旧模块路径均不存在。实际ROS可执行列表仍仅有
+  online_voice_agent、online_voice_wav，WAV命令--help通过。
+- 同一安装环境运行robot_agent/test全部测试：89项通过，7.55秒；
+  模拟演示通过新路径 `python3 -m robot_agent.actions.demo` 运行。
+- 手动通过create_voice检查源码内输出路径仍被拒绝，无文件生成。
+- Ruff格式及静态检查49文件通过。加载Foxy与源码/工具依赖后，对整个
+  robot_agent Python目录运行Pyright：0错误、0警告；首次未加载依赖
+  环境时的9项缺失导入不作为源码错误。git diff --check通过。
+- 双轴审查范围 `018d0e0...29543b7`：Standards 0项、Spec 0项。
+
+本轮构建目录为源码外
+`/home/orangepi/local-data/ros-robot/issue-68-layout-build/{build,install,log}`。
+日志在同级issue-68-microphone-refactor的
+layout-{build,pyright,pytest,installed,demo}.log。部署应干净重建以避免
+旧模块残留；本轮未重新调用云端或验证实体麦克风/扬声器。
+
+## 共享函数依赖归属修复01（2026-10-15）
+
+start_call从actions/execution原样迁至根calls，make_result原样迁至
+根results。语音传输、语音会话、语音组装、模型交互和动作执行直接
+导入实际归属；语音传输不再经conversation加载动作注册及模拟实现。
+未增加common框架或调用转发，未实施候选02/03。
+
+- AST比较两个函数与迁移前实现完全一致，线程/Future/异常和回合结果
+  快照契约保持。独立进程导入voice.speech后，sys.modules没有交互
+  模块或动作执行/注册模块。
+- 完整源码回归107项通过，12.28秒；范围与前述完整pytest命令相同。
+- 干净源码外构建robot_audio、robot_agent两包成功，14.9秒。
+- 从/tmp加载新install、不加入源码路径，确认calls/results来自新安装；
+  导入ASR/TTS后没有加载任何robot_agent.actions模块或交互模块。
+  安装版Agent全部89项测试通过，7.80秒。
+- Ruff格式及静态检查51文件通过，完整robot_agent Pyright为0错误、
+  0警告；git diff --check通过。
+- 双轴审查 `3ea2a3c...b722a38`：Standards 0项、Spec 0项。
+
+构建输出位于源码外
+`/home/orangepi/local-data/ros-robot/issue-68-imports-build/{build,install,log}`；
+同级issue-68-microphone-refactor包含
+imports-{build,pyright,pytest,installed}.log。
+本轮仅修正依赖归属，未重新调用云端或验证实体音频设备。
+
+## 动作能力组装重构02（2026-10-15）
+
+ActionRegistry构造空注册表，仅保留动作契约、整表校验与调用。
+actions/capabilities中的create_default_actions持有默认导航、头部、
+音乐、音量及共享LCD关系，返回ActionCapabilities：registry与同一
+音乐能力的music_playing查询。语音组装接收完整capabilities，ROS在
+其registry追加感知动作；共同交互缺省使用默认能力的registry。
+注册表不再公开head/music/navigation/volume，未保留旧actions参数。
+自定义音乐能力必须同时注入动作和状态查询。未引入插件或common框架，
+未改候选03输入生命周期。
+
+验证结果：
+
+- 新增行为检查先因缺少capabilities模块失败；实现后覆盖空注册表、
+  默认音乐动作与状态隔离，以及完全替代音乐能力时语音过滤/停止恢复。
+  定向回归36项通过，1.57秒；包含既有共享LCD、完整模拟及语音行为。
+  首次新音乐测试未解析记忆上下文导致固定响应未停止音乐，修正测试
+  provider按current_input响应后通过；未为此改动产品记忆或会话规则。
+- 完整源码回归110项通过，11.85秒；范围与前述完整pytest命令相同。
+- 全新源码外目录构建robot_audio、robot_agent两包成功，19.4秒。
+- 从/tmp加载新install、不加入源码路径，确认能力模块来自新安装；
+  单独加载registry不导入模拟设备实现。安装版Agent92项测试通过，
+  7.25秒；安装版模拟演示仍可运行。
+- Ruff格式及静态检查53文件通过，完整robot_agent Pyright为0错误、
+  0警告；git diff --check通过。源码独立加载也确认registry不创建或
+  暴露默认设备对象。
+- 双轴审查 `dafcc42...1affdf5`：Standards 0项、Spec 0项。
+
+构建目录位于源码外
+`/home/orangepi/local-data/ros-robot/issue-68-capabilities-build/{build,install,log}`；
+同级issue-68-microphone-refactor包含
+capabilities-{build,pyright,pytest,installed,demo}.log。
+本轮未重新调用云端或验证实体音频设备。默认运行行为与ROS命令保持；
+直接构造注册表的外部调用者需显式选择默认能力或注册自定义动作。
+
+## 持续ASR、暂停丢弃与静音保活（2026-10-15）
+
+用户确认旧robot的ASR保活是业务需求，撤回删除pause/resume的建议。
+设计与职责见[持续输入设计](online-agent-streaming-input.md)。正常入口
+从固定WAV切片改为持续PCM与持久ASR任务，最终句交接前自动暂停真实
+音频；LLM/动作/TTS/播放期间持续消费并丢弃麦克风数据、发送静音。
+恢复时清理积压，按已发送PCM时轴与begin_time过滤迟到句，不补发旧
+录音。WAV仅独立单次识别，识别函数显式注入，不要求持续输入实现它。
+
+正常ROS节点顺序listen→submit_transcript；采集、接收线程仅做持续I/O，
+无业务请求队列、临时回合线程或多入口调度锁。设备EOF及连续ASR失败
+明确停止监听；关闭取消并回收PCM进程、连接与两个I/O线程。原会话、
+模型/动作在途与未知回执约束保持，ObjectTrack安全模式未修改。
+
+### 真实在线环境音验证
+
+使用此前真实TTS生成的wake/request/sleep WAV，由源码外PCM采集程序
+按16kHz实时输出，进入正常PcmMicrophone/LiveSpeechInput/ROS节点。
+生成源等待真实ASR task-started后才开始播入，下一句等待上一轮落盘。
+没有固定识别文本或替换在线ASR/LLM/TTS结果，所有录音与凭证均在源码外。
+
+| 阶段 | 实际ASR最终句 | 回合结果 | TTS |
+| --- | --- | --- | --- |
+| 唤醒 | 小莫小莫。 | woken | completed |
+| 请求 | 请点头两次。 | completed；两次head_nod均simulated_success | completed |
+| 休眠 | 晚安。 | sleeping | completed |
+
+记录真实WSS连接创建共4次：持续ASR一个、三次独立TTS各一个；ASR跨
+三轮保持任务。核验3份新回复WAV均非空、单声道PCM16/16kHz。
+实体麦克风与可闻播放仍未证明；真实在线验证playback_enabled=false，
+播放期间暂停由固定外部播放器及正常ROS集成回归单独验证。
+
+正式命令为加载Foxy并将本worktree两个源码包与既有工具依赖加入
+PYTHONPATH，ROS_DOMAIN_ID=196，运行源码外live-cloud-probe.py。
+仅该进程NO_PROXY/no_proxy追加dashscope.aliyuncs.com，未改全局代理。
+之前代理环境下两次握手超时的失败日志保留；未用固定测试代替此失败。
+云端验证在关闭异常补强前运行，补强后以完整源码及安装回归验证退出。
+
+### 最终检查与审查
+
+- 新持续输入检查覆盖最终句/中间句/心跳、暂停持续读与静音、恢复清理、
+  迟到旧句、有界重连、设备失败、空闲取消、关闭时迟到socket及关闭
+  异常仍释放其余资源。正常ROS测试三轮复用一个任务，实际假播放器
+  运行期间也禁止发送真实音频；三轮playback_status均completed。
+- 修复前完整117项通过；审查发现某关闭步骤抛错会跳过后续资源，已用
+  finally保证连接、设备、通知、两个Future与ROS退出步骤继续执行，
+  编程错误仍显露。补充两项资源关闭异常检查；核心10项通过，2.62秒。
+- 最终完整源码119项通过，12.22秒。范围与前述完整pytest命令相同，
+  加载本轮install并将robot_audio/robot_agent/robot_voice源码和工具
+  依赖加入PYTHONPATH，ROS_DOMAIN_ID=195。
+- 全新目录两包构建成功，20.3秒；关闭补强后重建成功，21.3秒。
+- 从/tmp加载最终install，不加入源码路径，确认live_input与pcm_input
+  均来自安装目录；Agent与robot_audio全部106项通过，8.29秒。
+- Ruff格式/静态检查57文件通过；完整robot_agent及新增PCM模块Pyright
+  0错误、0警告；git diff --check通过。
+- 双轴最终范围805c73e...5294fc6：Standards 0项、Spec 0项剩余发现。
+
+源码外证据根目录：
+`/home/orangepi/local-data/ros-robot/issue-68-microphone-refactor/`。
+live-cloud-results.json包含结果与连接次数；live-cloud-audio.json为回复
+音频清单，live-cloud-turns为三轮JSON/WAV，live-cloud.log为成功日志，
+live-cloud-proxy.log及live-cloud-before-ready.log保留早期尝试。
+固定验证日志为live-{build-final,pyright-final,pytest-final,installed}.log，
+构建输出在同级issue-68-live-build/{build,install,log}。全部探针与外部
+PCM子进程已结束，未输出真实运动命令。

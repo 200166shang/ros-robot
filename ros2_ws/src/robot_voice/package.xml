@@ -6,6 +6,7 @@
   <maintainer email="robot@example.com">robot</maintainer>
   <license>MIT</license>
   <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>robot_audio</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>

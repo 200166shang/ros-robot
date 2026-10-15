@@ -1,0 +1,113 @@
+"""在线语音组装与独立录音验收入口，所有运行产物保存在源码外。"""
+
+import argparse
+import json
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Callable, Dict, Optional
+
+from robot_agent.actions.capabilities import (
+    ActionCapabilities,
+    create_default_actions,
+)
+from robot_agent.results import make_result
+from robot_agent.runtime import create_interaction, load_config
+from robot_agent.voice.session import OnlineVoice, SpeechInput
+from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
+from robot_audio.audio_io import play_wav
+from robot_audio.audio_sources import create_audio_source
+
+
+def create_voice(
+    config: Dict,
+    capabilities: Optional[ActionCapabilities] = None,
+    speech_input: Optional[SpeechInput] = None,
+) -> OnlineVoice:
+    """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
+    directory = Path(config["output_dir"]).expanduser().resolve()
+    checkout = Path(__file__).resolve().parents[5]
+    if directory == checkout or checkout in directory.parents:
+        raise ValueError("output_dir 必须在源码目录外")
+    if capabilities is None:
+        capabilities = create_default_actions()
+    playback: Optional[Callable[[Path], None]] = None
+    if config.get("playback_enabled", False):
+
+        def play_reply(path: Path) -> None:
+            """播放已保存的完整回复音频，设备异常不影响回合释放。"""
+            play_wav(
+                config.get("play_executable", "aplay"),
+                config.get("play_device", "default"),
+                path,
+                cancelled=lambda: voice.state == "closed",
+            )
+
+        playback = play_reply
+
+    recognize = None
+    if speech_input is None:
+        recording_input = DashScopeASR(config)
+        speech_input = recording_input
+        recognize = recording_input.recognize
+
+    voice = OnlineVoice(
+        create_interaction(config, capabilities.registry),
+        speech_input,
+        DashScopeTTS(config),
+        directory,
+        music_playing=capabilities.music_playing,
+        playback=playback,
+        silence_timeout=float(config.get("silence_timeout", 120)),
+        speech_timeout=float(config.get("speech_timeout", 60)),
+        tts_attempts=int(config.get("tts_attempts", 3)),
+        failure_threshold=int(config.get("tts_failure_threshold", 5)),
+        retry_delay=float(config.get("tts_retry_delay", 1)),
+        recognize_recording=recognize,
+    )
+
+    return voice
+
+
+def capture_turn(voice: OnlineVoice, wav_path: str) -> Dict:
+    """独立WAV验收使用文件Adapter，不进入正常持续麦克风链路。"""
+    source = create_audio_source("wav_file", input_wav_path=wav_path)
+    # 临时目录属于外部运行数据，capture 和在线识别完成后立即删除副本。
+    with tempfile.TemporaryDirectory(prefix="online-voice-") as directory:
+        path = Path(directory) / "input.wav"
+        try:
+            source.capture(path)
+        except (OSError, ValueError, RuntimeError):
+            result = make_result(
+                uuid.uuid4().hex, "failed", "录音输入不可用，本轮未发出动作。"
+            )
+            result["input_status"] = "failed"
+            return result
+        return voice.submit_recording(path, direct=True)
+
+
+def main() -> None:
+    """执行一轮真实录音链路，输出结构化回执并关闭在线连接。"""
+    parser = argparse.ArgumentParser(description="独立在线WAV验收")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--wav", required=True)
+    args = parser.parse_args()
+    # 1. 外部配置和凭证由组装入口/provider 分别负责。
+    config = load_config(args.config)
+    voice = create_voice(config)
+    try:
+        # 2. 真实输入与动作确认后输出，单回合无需唤醒词。
+        result = capture_turn(voice, args.wav)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if (
+            result["status"] != "completed"
+            or result.get("tts_status") != "completed"
+        ):
+            raise SystemExit(1)
+    finally:
+        # 3. 即使合成失败或 Ctrl-C，也关闭语音资源。
+        voice.close()
+
+
+if __name__ == "__main__":
+    main()

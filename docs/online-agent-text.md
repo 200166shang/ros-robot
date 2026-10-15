@@ -1,122 +1,79 @@
-# 在线文本交互（#63）
+# 在线模型与直接文本测试
 
-ROS 2 Foxy / Python 3.8，使用 Python 标准库，不需要 OpenAI 或 DashScope SDK。
-用户已确认弃用本地桥接。robot_agent 仅保留 Online Agent；本地模型节点、客户端、校验器和专用探针均已移除。模型输出解析仍接受 `fc/res`，这仅是响应契约兼容，不再提供本地桥接进程。
+正常运行只有麦克风入口：录音→在线ASR→文本→交互→在线TTS。
+已删除独立ROS文本节点、online_agent可执行入口及text/clear_memory/
+reconcile输入话题。文本只作为ASR输出或测试数据进入交互Interface。
+旧离线前端依赖的文本话题不再提供，后续离线方案独立设计。
 
-网页相机/Follow 控制由 web_video_server 的 tracking_control 入口独立提供，使用 /web/control 和 /web/control_result；它不调用模型，也不是 Online Agent 的真实设备 Adapter（#65）。
-本入口保持 `dry_run=true`，完整模拟头部/LCD、导航、音乐、音量和WiFi的52项动作及别名，无硬件输出。详见 [模拟演示与契约](online-agent-simulation.md)。
-完整迁移范围、参数和后续票见 [动作与业务清单](online-agent-inventory.md)。
+## 共同组装与配置
 
-## 外部配置与启动
+runtime.load_config读取外部UTF-8 JSON对象，支持路径中的~；
+文件、JSON语法或顶层形状错误直接显露，不静默回退。
+create_interaction集中创建模型、动作注册表和记忆；语音组装也调用它。
+ROS参数声明、ASR/TTS、录音与播放仍由对应入口负责。
 
-凭证放在环境变量（不要输入 shell 历史，不要放进仓库），非敏感配置另存源码外，例如 `$HOME/.config/ros-robot/online.json`：
+非敏感模型配置示例，追加到[完整配置](online-agent.md)：
 
 ```json
 {
   "model": "qwen-plus",
   "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
   "api_key_env": "DASHSCOPE_API_KEY",
-  "provider_timeout": 60.0,
-  "action_timeout": 5.0
+  "provider_timeout": 60,
+  "action_timeout": 5
 }
 ```
 
-默认 system prompt 保存在包内 `robot_agent/online_system_prompt.txt`，随安装包发布，通过 Python 3.8 的 importlib.resources 读取，不依赖启动目录。
-它完整保留旧 `LLMAgent.agent_sys_prompt` 的人设、格式要求、示例和动作目录，末尾添加当前部署约束，避免把未实现动作或模拟动作当成真实成功。会话记忆的摘要任务由记忆职责构造，配置及清空见 [在线会话记忆](online-agent-memory.md)。
+凭证仅从环境读取，不允许明文api_key。端点必须HTTPS，模型/端点
+须与Key地域授权匹配；不会输出Key或HTTP错误正文。
+provider_timeout/action_timeout单位秒，必须为正有限数。
+语音识别与合成另用speech_timeout，配置见[语音说明](online-agent-voice.md)。
 
-需要自定义时，在外部配置中添加 `"system_prompt_file": "/absolute/path/prompt.txt"`。文件为 UTF-8，启动时读取一次；指定文件为空或不存在则启动失败，不静默回退。自定义文件负责保留 JSON 契约，实际执行仍受动作注册表限制。
+默认system prompt为随包安装的online_system_prompt.txt，保留旧人设、
+动作目录及当前部署约束，不依赖运行目录。自定义时指定源码外
+system_prompt_file；UTF-8文件为空或不存在时启动失败，不自动回退。
 
-若本机 HTTPS 代理出现间歇性超时、且网络允许直连北京端点，可只对 DashScope 域名绕过代理。启动节点前在该终端设置（不修改全局代理配置）：
+## 测试直接调用Interface
 
-```bash
-export NO_PROXY="${NO_PROXY:+${NO_PROXY},}dashscope.aliyuncs.com"
-export no_proxy="$NO_PROXY"
+加载ROS及源码外安装环境，导入共同组装；不启动额外文本节点：
+
+```python
+from robot_agent.runtime import create_interaction, load_config
+
+config = load_config("/absolute/external/test-config.json")
+agent = create_interaction(config)
+result = agent.submit("你好，请只聊天")
+print(result)
+# 独立测试可在每轮完整返回后调用：
+# agent.clear_memory()
+# agent.reconcile(result["turn_id"])
 ```
 
-已验证安装版本在此设置下完成真实在线聊天、顺序模拟动作与 ROS 回执。使用其他 endpoint 时替换成对应主机名；需要代理的环境保持自身路由配置。
+默认动作注册表为明确模拟；需要真实感知时运行[独立综合探针](online-agent.md)，
+由其复用ROS感知组装，不恢复文本话题。测试需专用外部记忆路径，避免
+污染日常对话。单一调用者逐项提交，不并发接入。
 
-端点/模型需要匹配 Key 地域与授权；不会输出 Key 或 HTTP 错误正文。`api_key` 明文字段禁止使用。
-provider_timeout/action_timeout 单位秒，必须是正有限数。网络和模型访问失败返回失败回合，不能用模拟 provider 冒充真实通过。
+## 结果和恢复契约
 
-```bash
-source /opt/ros/foxy/setup.bash
-read -rs 'DASHSCOPE_API_KEY?API Key: '; echo
-export DASHSCOPE_API_KEY
-cd ros2_ws
-colcon build --packages-select robot_agent
-source install/setup.bash
-ros2 run robot_agent online_agent --ros-args \
-  -p config_file:="$HOME/.config/ros-robot/online.json" -p dry_run:=true
-```
+submit返回turn_id、status、reply、actions；语音模块进一步补充
+transcript、音频与会话状态后，由正常节点发布/online_agent/result。
+交互状态为completed/failed/rejected/busy；动作保持原顺序和绑定参数，
+状态为simulated_success/real_success/failed/unknown/not_executed。
 
-上面 `read` 是 zsh 语法；bash 使用 `read -rs -p 'API Key: ' DASHSCOPE_API_KEY`。
-另一终端先监听结果，再提交文本：
+模型接受function/response或fc/res；动作字符串只解析字面量参数，
+不使用eval。完整动作列表先校验，全部有效后才顺序执行；失败停止余项，
+有意重复不去重。动作回复只依据确认回执，不采用模型提前成功承诺。
+完整动作与模拟范围见[业务清单](online-agent-inventory.md)。
 
-```bash
-source /opt/ros/foxy/setup.bash
-ros2 topic echo /online_agent/result std_msgs/msg/String
-ros2 topic pub --once /online_agent/text std_msgs/msg/String '{data: "你好，请只聊天"}'
-ros2 topic pub --once /online_agent/text std_msgs/msg/String '{data: "请依次点头、微笑、再点头"}'
-```
+模型等待超时不取消仍在途调用，其结束前拒绝新回合。动作unknown须用
+原turn_id调用reconcile；迟到回执确认成功或失败后才能解除阻塞，不补执行
+后续动作。迟到回执仍未知或异常时继续阻塞，需操作者核实设备后恢复。
+正常麦克风没有文本控制入口，恢复规则见[语音说明](online-agent-voice.md)。
 
-Ctrl+C 退出。节点先停止接入/发布再释放 ROS 资源；后台 HTTP 请求受连接与回合超时限制，无自动重试。超时动作不能安全取消，线程退出后也不自动解除 busy。模型超时只保留在途 Future，结束后可接入新回合。
+## 验证与历史
 
-动作超时、异常或回执 unknown 后，按原 turn_id 显式核对迟到回执：
-
-```bash
-ros2 topic pub --once /online_agent/reconcile std_msgs/msg/String '{data: "原动作回合的turn_id"}'
-```
-
-结果仍发布到 `/online_agent/result`，关联原 turn_id。调用未结束时保持 unknown；迟到回执明确成功或失败后解除 busy，后续未执行项不补执行。迟到回执仍未知或异常则继续阻塞，需要操作者核实设备实际状态后重新启动入口，不能以线程退出代替设备确认。
-已发布的超时记录是快照，核对生成新的回执，不改写旧记录。
-
-## Interface 与回复契约
-
-`OnlineInteraction.submit(text)` 返回 `turn_id`、`status`、`reply`、`actions`；ROS 将同一对象 JSON 发布到 `/online_agent/result`。
-模拟动作回执的 `data` 携带独立状态快照，`detail` 包含查询结果并进入确认后的回复。
-状态为 completed/failed/rejected/busy；每项动作保留原顺序、名称、绑定参数及 simulated_success/real_success/failed/unknown/not_executed。
-日志使用同一 turn_id 关联。未实现动作整表拒绝，不静默忽略。
-
-provider 支持旧 `function/response` 与现有本地 `fc/res`，函数字符串可为 `head_nod` 或 `head_nod()`，参数只接受 Python 字面量，不使用 eval。
-流式 JSON 片段先完整收集后解析一次；普通聊天目前完整回复输出，未新增逐字话题。动作回复由确认结果生成，不采用模型提前承诺，故混合聊天的自由文本不纳入动作结果回复。
-
-动作模块分为三个职责：`parse_action` 只把函数字符串解析为位置/关键字参数；注册表按设备签名和参数含义完成全表校验；设备回执只在执行出口检查一次。
-`ActionHandler.execute/validate` 明确表达设备契约，`ActionCommand.name/parameters` 明确表达已绑定动作。ActionCommand 保留原返回元组的解包和相等比较兼容性。
-`submit` 集中展示收齐模型回复、全表校验、顺序执行和确认回复，I/O 隔离只用标准 Future 交还结果；回合互斥、模型在途与动作待核对分别管理，保留不可取消语义。
-
-设备 Adapter 用 `ActionRegistry.register(name, execute, validate)` 注册，配置阶段可显式替换同名契约，处理回合时不修改注册表。execute 必须返回明确状态字典；validate 不得有副作用，整表执行前完成校验。当前 #64 模拟与 #65 感知复用此 Interface，设备异常保守报告 unknown 并保持待核对；明确失败回执报告 failed。Adapter 必须按设备实际完成状态返回，排队接受不能作为成功。配置的 action_timeout 仅限制主链路等待，不取消已提交操作。
-持久摘要与有限近期上下文见 [在线会话记忆](online-agent-memory.md)；真实感知接入见 [感知接口](online-agent-perception.md)，语音由 #67 交付。
-
-## 检查与真实在线验收
-
-```bash
-PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" python3 -m pytest -q ros2_ws/src/robot_agent/test
-ruff check .
-ruff format --check .
-# 需要 ROS 环境、外部 Key 与配置，真实在线探针通过公开话题验证两轮
-PYTHONPATH="ros2_ws/src/robot_agent:$PYTHONPATH" python3 ros2_ws/src/robot_agent/test/online_ros_probe.py \
-  --ros-args -p config_file:="$HOME/.config/ros-robot/online.json"
-```
-
-Ruff 固定验证版本 0.9.10、目标 py38，启用 E/W/F/I，代码79列、注释/docstring72列，仅覆盖在线迁移模块/探针和行为测试，不一次性重排旧 Python 代码。报告见 [验收记录](online-agent-text-validation.md) 和 [PEP 8 审查](online-agent-pep8-review.md)。
-
-在线 SSE 与 JSON 输出依据阿里云官方文档：
-[流式输出](https://www.alibabacloud.com/help/en/model-studio/stream)、
-[结构化输出](https://www.alibabacloud.com/help/en/model-studio/qwen-structured-output)。
-
-
-## Tracking/web demo after local bridge retirement
-
-`./scripts/run-demo.sh` now delegates directly to the standard ROS launch;
-it no longer starts llama-server or local model weights. The default starts
-tracking and web controls. To include Online Agent, pass:
-
-```bash
-./scripts/run-demo.sh with_online_agent:=true \
-  online_config_file:="$HOME/.config/ros-robot/online.json"
-```
-
-Credentials must already be in the environment. Local ASR/TTS can be launched
-separately using robot_voice; the retired local-LLM voice acceptance probe is
-removed. Fresh builds are required: an incremental install can leave obsolete
-executables behind after their source entry points are removed.
+共同组装行为见test_online_runtime.py；正常ROS接线由
+test_online_microphone_ros.py覆盖；网络适配器见test_online_provider.py。
+测试不替代真实在线验收，最新范围和结果见[验收报告](online-agent-microphone-validation.md)。
+最初文本节点的历史证据保留在[原文本验收](online-agent-text-validation.md)，
+其中旧启动命令不再适用于当前实现。

@@ -1,14 +1,16 @@
 """robot_agent 包安装配置与在线入口声明。"""
 
-from setuptools import setup
+from setuptools import find_packages, setup
 
 package_name = "robot_agent"
 
 setup(
     name=package_name,
     version="0.1.0",
-    packages=[package_name],
-    package_data={package_name: ["online_system_prompt.txt"]},
+    packages=find_packages(include=[package_name, package_name + ".*"]),
+    package_data={
+        package_name + ".conversation": ["online_system_prompt.txt"]
+    },
     data_files=[
         (
             "share/ament_index/resource_index/packages",
@@ -20,13 +22,12 @@ setup(
     zip_safe=True,
     maintainer="robot",
     maintainer_email="robot@example.com",
-    description="Hardware-safe ROS 2 online text agent",
+    description="Online microphone Agent and independent WAV tests",
     license="MIT",
     entry_points={
         "console_scripts": [
-            "online_agent = robot_agent.online_ros_node:main",
-            "online_voice_agent = robot_agent.online_voice_ros_node:main",
-            "online_voice_wav = robot_agent.online_voice_runtime:main",
+            "online_voice_agent = robot_agent.ros.voice_node:main",
+            "online_voice_wav = robot_agent.voice.runtime:main",
         ]
     },
 )
