@@ -37,24 +37,22 @@ def test_context_summary_restart_and_clear(tmp_path):
         create_default_actions().registry,
         memory=ConversationMemory(path, recent_turns=2, summary_trigger=2),
     )
-    assert asyncio.run(agent.submit("我喜欢蓝色"))["status"] == "completed"
-    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
+    assert asyncio.run(agent.submit("我喜欢蓝色")).status == "completed"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？")).reply == "蓝色"
     restarted = Agent(
         provider,
         create_default_actions().registry,
         memory=ConversationMemory(path),
     )
-    assert asyncio.run(restarted.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
-    assert asyncio.run(restarted.clear_memory())["status"] == "completed"
-    assert (
-        asyncio.run(restarted.submit("我喜欢什么颜色？"))["reply"] == "记住了"
-    )
+    assert asyncio.run(restarted.submit("我喜欢什么颜色？")).reply == "蓝色"
+    assert asyncio.run(restarted.clear_memory()).status == "completed"
+    assert asyncio.run(restarted.submit("我喜欢什么颜色？")).reply == "记住了"
     again = Agent(
         provider,
         create_default_actions().registry,
         memory=ConversationMemory(path),
     )
-    assert asyncio.run(again.submit("我喜欢什么颜色？"))["reply"] == "记住了"
+    assert asyncio.run(again.submit("我喜欢什么颜色？")).reply == "记住了"
 
 
 def test_summary_failure_keeps_context_bounded(tmp_path):
@@ -77,8 +75,8 @@ def test_summary_failure_keeps_context_bounded(tmp_path):
     )
     asyncio.run(agent.submit("old-marker"))
     result = asyncio.run(agent.submit("second-marker"))
-    assert result["status"] == "completed"
-    assert result["memory_warnings"] == ["summary_failed"]
+    assert result.status == "completed"
+    assert result.memory_warnings == ("summary_failed",)
     asyncio.run(agent.submit("third-marker"))
     asyncio.run(agent.submit("fourth-marker"))
     assert "old-marker" not in provider.inputs[-1]
@@ -96,13 +94,13 @@ def test_save_failure_and_clear_failure_are_observable(tmp_path):
         memory=ConversationMemory(parent / "memory", 1, 1),
     )
     result = asyncio.run(agent.submit("我喜欢蓝色"))
-    assert result["status"] == "completed"
-    assert result["memory_warnings"] == ["load_failed", "save_failed"]
-    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
+    assert result.status == "completed"
+    assert result.memory_warnings == ("load_failed", "save_failed")
+    assert asyncio.run(agent.submit("我喜欢什么颜色？")).reply == "蓝色"
     cleared = asyncio.run(agent.clear_memory())
-    assert cleared["status"] == "failed"
-    assert cleared["memory_warnings"] == ["clear_save_failed"]
-    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "记住了"
+    assert cleared.status == "failed"
+    assert cleared.memory_warnings == ("clear_save_failed",)
+    assert asyncio.run(agent.submit("我喜欢什么颜色？")).reply == "记住了"
 
 
 def test_clear_also_removes_recent_context(tmp_path):
@@ -114,9 +112,9 @@ def test_clear_also_removes_recent_context(tmp_path):
         memory=ConversationMemory(tmp_path / "memory"),
     )
     asyncio.run(agent.submit("我喜欢蓝色"))
-    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
-    assert asyncio.run(agent.clear_memory())["status"] == "completed"
-    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "记住了"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？")).reply == "蓝色"
+    assert asyncio.run(agent.clear_memory()).status == "completed"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？")).reply == "记住了"
 
 
 def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
@@ -142,10 +140,10 @@ def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
     )
     try:
         result = asyncio.run(agent.submit("我喜欢蓝色"))
-        assert result["status"] == "completed"
-        assert result["memory_warnings"] == ["summary_timeout"]
-        assert asyncio.run(agent.clear_memory())["status"] == "busy"
-        assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
+        assert result.status == "completed"
+        assert result.memory_warnings == ("summary_timeout",)
+        assert asyncio.run(agent.clear_memory()).status == "busy"
+        assert asyncio.run(agent.submit("下一轮")).status == "busy"
     finally:
         released.set()
     assert finished.wait(1)
@@ -153,10 +151,10 @@ def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
     deadline = time.monotonic() + 1
     while time.monotonic() < deadline:
         result = asyncio.run(agent.clear_memory())
-        if result["status"] != "busy":
+        if result.status != "busy":
             break
         time.sleep(0.005)
-    assert result["status"] == "completed"
+    assert result.status == "completed"
 
 
 def test_invalid_memory_file_is_reported_without_content(tmp_path):
@@ -169,9 +167,9 @@ def test_invalid_memory_file_is_reported_without_content(tmp_path):
         memory=ConversationMemory(path),
     )
     result = asyncio.run(agent.submit("你好"))
-    assert result["status"] == "completed"
-    assert result["memory_warnings"] == ["load_failed"]
-    assert "private-invalid-data" not in json.dumps(result)
+    assert result.status == "completed"
+    assert result.memory_warnings == ("load_failed",)
+    assert "private-invalid-data" not in str(result)
 
 
 def test_summary_actions_are_rejected_without_execution(tmp_path):
@@ -203,7 +201,7 @@ def test_summary_actions_are_rejected_without_execution(tmp_path):
         memory=ConversationMemory(tmp_path / "memory", 1, 1),
     )
     result = asyncio.run(agent.submit("我喜欢蓝色"))
-    assert result["status"] == "completed"
-    assert result["memory_warnings"] == ["summary_failed"]
+    assert result.status == "completed"
+    assert result.memory_warnings == ("summary_failed",)
     assert not events
-    assert asyncio.run(agent.submit("我喜欢什么颜色？"))["reply"] == "蓝色"
+    assert asyncio.run(agent.submit("我喜欢什么颜色？")).reply == "蓝色"

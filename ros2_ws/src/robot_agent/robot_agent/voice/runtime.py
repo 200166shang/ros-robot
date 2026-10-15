@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Dict
 
 from robot_agent.application import AgentApplication
-from robot_agent.results import make_result
+from robot_agent.results import VoiceRecord, make_result, result_to_json
 from robot_agent.runtime import build_application, load_config
 from robot_audio.audio_sources import create_audio_source
 
 
-async def capture_turn(voice: AgentApplication, wav_path: str) -> Dict:
+async def capture_turn(voice: AgentApplication, wav_path: str) -> VoiceRecord:
     """独立WAV验收使用文件Adapter，不进入正常持续麦克风链路。"""
     source = create_audio_source("wav_file", input_wav_path=wav_path)
     # 临时目录属于外部运行数据，capture 和在线识别完成后立即删除副本。
@@ -26,8 +26,7 @@ async def capture_turn(voice: AgentApplication, wav_path: str) -> Dict:
             result = make_result(
                 uuid.uuid4().hex, "failed", "录音输入不可用，本轮未发出动作。"
             )
-            result["input_status"] = "failed"
-            return result
+            return VoiceRecord(result, input_status="failed")
         return await voice.submit_recording(path, direct=True)
 
 
@@ -45,11 +44,8 @@ async def _run_recording(config: Dict, wav_path: str) -> None:
     voice = build_application(config)
     try:
         result = await capture_turn(voice, wav_path)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if (
-            result["status"] != "completed"
-            or result.get("tts_status") != "completed"
-        ):
+        print(json.dumps(result_to_json(result), ensure_ascii=False, indent=2))
+        if result.status != "completed" or result.tts_status != "completed":
             raise SystemExit(1)
     finally:
         await voice.aclose()

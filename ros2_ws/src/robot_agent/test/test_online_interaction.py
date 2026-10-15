@@ -42,20 +42,18 @@ def test_chat_and_repeated_actions_across_turns():
     """普通聊天及跨回合重复动作均经公共入口得到可信结果。"""
     provider = FixedProvider()
     agent = Agent(provider, create_default_actions().registry)
-    assert asyncio.run(agent.submit("你好"))["reply"] == "你好"
+    assert asyncio.run(agent.submit("你好")).reply == "你好"
     provider.functions = ["head_nod", "head_smile", "head_nod"]
     first = asyncio.run(agent.submit("点头微笑点头"))
     second = asyncio.run(agent.submit("再做一次"))
-    assert [a["name"] for a in first["actions"]] == [
+    assert [a.name for a in first.actions] == [
         "head_nod",
         "head_smile",
         "head_nod",
     ]
-    assert [a["status"] for a in second["actions"]] == [
-        "simulated_success"
-    ] * 3
-    assert first["turn_id"] != second["turn_id"]
-    assert "模拟" in first["reply"]
+    assert [a.status for a in second.actions] == ["simulated_success"] * 3
+    assert first.turn_id != second.turn_id
+    assert "模拟" in first.reply
 
 
 def test_invalid_list_executes_nothing():
@@ -76,7 +74,7 @@ def test_invalid_list_executes_nothing():
         "head_nod(__import__('os'))",
     ):
         agent = Agent(FixedProvider(["device", invalid]), registry)
-        assert asyncio.run(agent.submit("执行"))["status"] == "rejected"
+        assert asyncio.run(agent.submit("执行")).status == "rejected"
     assert events == []
 
 
@@ -94,12 +92,12 @@ def test_failure_stops_and_reports_remaining():
         registry,
     )
     result = asyncio.run(agent.submit("执行"))
-    assert [a["status"] for a in result["actions"]] == [
+    assert [a.status for a in result.actions] == [
         "simulated_success",
         "failed",
         "not_executed",
     ]
-    assert "已经全成功" not in result["reply"]
+    assert "已经全成功" not in result.reply
 
 
 def test_stream_fragments_execute_list_once():
@@ -117,8 +115,8 @@ def test_stream_fragments_execute_list_once():
             "执行"
         )
     )
-    assert len(result["actions"]) == 2
-    assert result["status"] == "completed"
+    assert len(result.actions) == 2
+    assert result.status == "completed"
 
 
 def test_action_timeout_is_unknown_and_busy_until_return():
@@ -141,11 +139,11 @@ def test_action_timeout_is_unknown_and_busy_until_return():
     try:
         result = asyncio.run(agent.submit("执行"))
         assert sent.is_set()
-        assert [a["status"] for a in result["actions"]] == [
+        assert [a.status for a in result.actions] == [
             "unknown",
             "not_executed",
         ]
-        assert asyncio.run(agent.submit("再次执行"))["status"] == "busy"
+        assert asyncio.run(agent.submit("再次执行")).status == "busy"
     finally:
         released.set()
 
@@ -169,9 +167,9 @@ def test_provider_timeout_blocks_next_turn_until_call_finishes():
     )
     try:
         first = asyncio.run(agent.submit("你好"))
-        assert first["status"] == "failed"
-        assert first["actions"] == []
-        assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
+        assert first.status == "failed"
+        assert first.actions == ()
+        assert asyncio.run(agent.submit("下一轮")).status == "busy"
     finally:
         released.set()
 
@@ -188,7 +186,7 @@ def test_exception_and_invalid_receipt_cannot_be_success():
     result = asyncio.run(
         Agent(FixedProvider(["error", "head_nod"]), registry).submit("执行")
     )
-    assert result["actions"][0]["status"] == "unknown"
+    assert result.actions[0].status == "unknown"
     assert "internal secret" not in str(result)
 
 
@@ -210,16 +208,16 @@ def test_parameter_validation_precedes_all_execution():
     registry.register("head_position", position, validate)
     provider = FixedProvider(["head_position(70)", "head_position(pitch=200)"])
     agent = Agent(provider, registry)
-    assert asyncio.run(agent.submit("执行"))["status"] == "rejected"
+    assert asyncio.run(agent.submit("执行")).status == "rejected"
     assert events == []
     provider.functions = ["head_position(70)", "head_position(pitch=80)"]
     result = asyncio.run(agent.submit("执行"))
     assert events == [70, 80]
-    assert [a["parameters"] for a in result["actions"]] == [
+    assert [a.parameters for a in result.actions] == [
         {"pitch": 70},
         {"pitch": 80},
     ]
-    assert [a["status"] for a in result["actions"]] == [
+    assert [a.status for a in result.actions] == [
         "real_success",
         "real_success",
     ]
@@ -240,7 +238,7 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
             Agent(
                 DuplicateProvider(), create_default_actions().registry
             ).submit("执行")
-        )["status"]
+        ).status
         == "rejected"
     )
     registry = create_default_actions().registry
@@ -253,7 +251,7 @@ def test_duplicate_json_and_unconfirmed_receipt_rejected():
     result = asyncio.run(
         Agent(FixedProvider(["invalid", "head_nod"]), registry).submit("执行")
     )
-    assert [a["status"] for a in result["actions"]] == [
+    assert [a.status for a in result.actions] == [
         "unknown",
         "not_executed",
     ]
@@ -278,12 +276,12 @@ def test_call_syntax_defaults_and_literal_arguments_remain_compatible():
         ]
     )
     result = asyncio.run(Agent(provider, registry).submit("按顺序显示"))
-    assert result["status"] == "completed"
-    assert [action["parameters"] for action in result["actions"]] == [
+    assert result.status == "completed"
+    assert [action.parameters for action in result.actions] == [
         {},
         {"message": "默认", "options": None},
         {"message": "默认", "options": None},
-        {"message": "你好", "options": {"colors": ["red"], "enabled": True}},
+        {"message": "你好", "options": {"colors": ("red",), "enabled": True}},
         {"message": "关键字", "options": None},
     ]
 
@@ -302,8 +300,8 @@ def test_unsupported_call_forms_reject_the_whole_list():
     ):
         provider.functions = ["head_smile", source]
         result = asyncio.run(agent.submit("执行"))
-        assert result["status"] == "rejected"
-        assert result["actions"] == []
+        assert result.status == "rejected"
+        assert result.actions == ()
 
 
 def test_late_action_requires_explicit_reconciliation():
@@ -326,20 +324,20 @@ def test_late_action_requires_explicit_reconciliation():
         result = asyncio.run(agent.submit("执行"))
         release.set()
         assert returned.wait(1)
-        assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
+        assert asyncio.run(agent.submit("下一轮")).status == "busy"
         reconciled = await_reconciliation(
             agent,
-            result["turn_id"],
-            lambda reply: reply["actions"][1]["status"] == "real_success",
+            result.turn_id,
+            lambda reply: reply.actions[1].status == "real_success",
         )
-        assert [a["status"] for a in reconciled["actions"]] == [
+        assert [a.status for a in reconciled.actions] == [
             "simulated_success",
             "real_success",
             "not_executed",
         ]
         provider.functions = []
-        assert asyncio.run(agent.submit("你好"))["status"] == "completed"
-        assert result["actions"][1]["status"] == "unknown"
+        assert asyncio.run(agent.submit("你好")).status == "completed"
+        assert result.actions[1].status == "unknown"
     finally:
         release.set()
 
@@ -357,10 +355,10 @@ def test_reporting_failure_preserves_completed_action(monkeypatch):
             FixedProvider(["head_nod"]), create_default_actions().registry
         ).submit("执行")
     )
-    assert result["status"] == "failed"
-    assert result["actions"][0]["status"] == "simulated_success"
-    assert "未发出动作" not in result["reply"]
-    assert "模型不可用" not in result["reply"]
+    assert result.status == "failed"
+    assert result.actions[0].status == "simulated_success"
+    assert "未发出动作" not in result.reply
+    assert "模型不可用" not in result.reply
     assert "private error" not in str(result)
 
 
@@ -387,21 +385,20 @@ def test_uncertain_late_receipt_does_not_restore_service():
         try:
             result = asyncio.run(agent.submit("执行"))
             assert (
-                asyncio.run(agent.reconcile("wrong-id"))["status"]
-                == "rejected"
+                asyncio.run(agent.reconcile("wrong-id")).status == "rejected"
             )
             release.set()
             reconciled = await_reconciliation(
                 agent,
-                result["turn_id"],
-                lambda reply: "最终状态仍未知" in reply["reply"],
+                result.turn_id,
+                lambda reply: "最终状态仍未知" in reply.reply,
             )
-            assert "最终状态仍未知" in reconciled["reply"]
-            assert [a["status"] for a in reconciled["actions"]] == [
+            assert "最终状态仍未知" in reconciled.reply
+            assert [a.status for a in reconciled.actions] == [
                 "unknown",
                 "not_executed",
             ]
-            assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
+            assert asyncio.run(agent.submit("下一轮")).status == "busy"
             assert calls == ["sent"]
         finally:
             release.set()
@@ -426,15 +423,15 @@ def test_late_failure_reconciles_without_executing_remaining_actions():
         release.set()
         reconciled = await_reconciliation(
             agent,
-            result["turn_id"],
-            lambda reply: reply["actions"][0]["status"] == "failed",
+            result.turn_id,
+            lambda reply: reply.actions[0].status == "failed",
         )
-        assert [a["status"] for a in reconciled["actions"]] == [
+        assert [a.status for a in reconciled.actions] == [
             "failed",
             "not_executed",
         ]
         provider.functions = []
-        assert asyncio.run(agent.submit("聊天"))["status"] == "completed"
+        assert asyncio.run(agent.submit("聊天")).status == "completed"
     finally:
         release.set()
 
@@ -457,9 +454,9 @@ def test_validation_exception_reports_its_stage_and_executes_nothing():
     result = asyncio.run(
         Agent(FixedProvider(["head_nod", "device"]), registry).submit("执行")
     )
-    assert result["status"] == "failed"
-    assert result["actions"] == []
-    assert "校验异常" in result["reply"]
+    assert result.status == "failed"
+    assert result.actions == ()
+    assert "校验异常" in result.reply
     assert calls == []
 
 
@@ -494,16 +491,16 @@ def test_late_model_output_is_discarded_without_executing_actions():
     agent = Agent(SlowFirstProvider(), registry, provider_timeout=0.02)
     try:
         first = asyncio.run(agent.submit("请求动作"))
-        assert first["status"] == "failed" and not first["actions"]
+        assert first.status == "failed" and not first.actions
         release.set()
         deadline = time.monotonic() + 1
         while time.monotonic() < deadline:
             next_turn = asyncio.run(agent.submit("聊天"))
-            if next_turn["status"] != "busy":
+            if next_turn.status != "busy":
                 break
             time.sleep(0.005)
-        assert next_turn["reply"] == "新的聊天"
-        assert not next_turn["actions"]
+        assert next_turn.reply == "新的聊天"
+        assert not next_turn.actions
         assert submitted == []
     finally:
         release.set()
@@ -529,10 +526,10 @@ def test_bulk_capability_loading_preserves_validation_and_replacement():
     registry.register_many({"head_smile": handler})
     provider = FixedProvider(["custom(2)", "alias(level=-1)"])
     agent = Agent(provider, registry)
-    assert asyncio.run(agent.submit("执行"))["status"] == "rejected"
+    assert asyncio.run(agent.submit("执行")).status == "rejected"
     assert calls == []
     provider.functions = ["custom(2)", "alias(level=3)", "head_smile"]
-    assert asyncio.run(agent.submit("执行"))["status"] == "completed"
+    assert asyncio.run(agent.submit("执行")).status == "completed"
     assert calls == [2, 3, 5]
 
 
@@ -562,20 +559,20 @@ def test_execution_flow_failure_preserves_pending_and_skips_memory(
     with monkeypatch.context() as patch:
         patch.setattr(execution, "wait", broken_wait)
         result = asyncio.run(agent.submit("failed-turn-marker"))
-    assert result["reply"] == "动作执行流程异常，请核对执行记录。"
-    assert [a["status"] for a in result["actions"]] == [
+    assert result.reply == "动作执行流程异常，请核对执行记录。"
+    assert [a.status for a in result.actions] == [
         "unknown",
         "not_executed",
     ]
     assert "private failure" not in str(result)
     assert "failed-turn-marker" not in memory.context("next")
-    assert asyncio.run(agent.submit("下一轮"))["status"] == "busy"
-    reconciled = asyncio.run(agent.reconcile(result["turn_id"]))
-    assert reconciled["actions"][0]["data"] == {"enabled": True}
-    assert result["actions"][0]["status"] == "unknown"
+    assert asyncio.run(agent.submit("下一轮")).status == "busy"
+    reconciled = asyncio.run(agent.reconcile(result.turn_id))
+    assert reconciled.actions[0].data == {"enabled": True}
+    assert result.actions[0].status == "unknown"
     assert calls == ["sent"]
     provider.functions = []
-    assert asyncio.run(agent.submit("下一轮"))["status"] == "completed"
+    assert asyncio.run(agent.submit("下一轮")).status == "completed"
 
 
 def test_reconciled_turn_cannot_clear_later_pending_turn():
@@ -599,24 +596,21 @@ def test_reconciled_turn_cannot_clear_later_pending_turn():
         release.set()
         await_reconciliation(
             agent,
-            first["turn_id"],
-            lambda reply: reply["actions"][0]["status"] == "real_success",
+            first.turn_id,
+            lambda reply: reply.actions[0].status == "real_success",
         )
         release.clear()
         second = asyncio.run(agent.submit("第二轮"))
-        assert (
-            asyncio.run(agent.reconcile(first["turn_id"]))["status"]
-            == "rejected"
-        )
-        assert asyncio.run(agent.submit("第三轮"))["status"] == "busy"
+        assert asyncio.run(agent.reconcile(first.turn_id)).status == "rejected"
+        assert asyncio.run(agent.submit("第三轮")).status == "busy"
         release.set()
         reconciled = await_reconciliation(
             agent,
-            second["turn_id"],
-            lambda reply: reply["actions"][0]["status"] == "real_success",
+            second.turn_id,
+            lambda reply: reply.actions[0].status == "real_success",
         )
-        assert reconciled["actions"][1]["status"] == "not_executed"
-        assert second["actions"][0]["status"] == "unknown"
+        assert reconciled.actions[1].status == "not_executed"
+        assert second.actions[0].status == "unknown"
         assert calls == ["sent", "sent"]
     finally:
         release.set()

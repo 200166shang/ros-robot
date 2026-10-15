@@ -1,9 +1,10 @@
 """迁移期阻塞 I/O Adapter；调用所有权不暴露给业务调用者。"""
 
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from robot_agent.calls import LegacyCall
+from robot_agent.results import TurnResult, VoiceRecord
 from robot_agent.voice.output import VoiceOutput
 
 
@@ -75,13 +76,14 @@ class LegacyVoiceOutput:
 
     async def complete(
         self,
-        result: Dict,
+        result: TurnResult,
         text: str,
         session_state: str,
         *,
         reconcile_id: Optional[str] = None,
         input_failed: bool = False,
-    ) -> Dict:
+        asr_status: Optional[str] = None,
+    ) -> VoiceRecord:
         """等待完整语音记录，不重新执行 Agent。"""
         return await self._completion.run(
             lambda: self._output.complete(
@@ -90,6 +92,7 @@ class LegacyVoiceOutput:
                 session_state,
                 reconcile_id=reconcile_id,
                 input_failed=input_failed,
+                asr_status=asr_status,
             )
         )
 

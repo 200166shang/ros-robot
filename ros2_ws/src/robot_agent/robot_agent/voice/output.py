@@ -2,8 +2,11 @@
 
 import json
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, Optional, Protocol
+
+from robot_agent.results import TurnResult, VoiceRecord, result_to_json
 
 
 class SpeechOutput(Protocol):
@@ -43,31 +46,36 @@ class VoiceOutput:
         self._closed = threading.Event()
         self._failures = 0
         self._tts_enabled = True
+        self._transcripts: Dict[str, str] = {}
 
     def complete(
         self,
-        result: Dict,
+        result: TurnResult,
         text: str,
         session_state: str,
         *,
         reconcile_id: Optional[str] = None,
         input_failed: bool = False,
-    ) -> Dict:
+        asr_status: Optional[str] = None,
+    ) -> VoiceRecord:
         """按入口资格输出并保存；核对从原记录恢复文本，不提交动作。"""
         excluded = (
             ("busy",)
             if reconcile_id is not None
             else ("ignored", "filtered", "busy")
         )
-        if not input_failed and result["status"] not in excluded:
-            self._speak(result)
         if reconcile_id is not None:
-            record = self._directory / (reconcile_id + ".json")
-            if record.is_file():
-                text = json.loads(record.read_text(encoding="utf-8"))[
-                    "transcript"
-                ]
-        return self._save(result, text, session_state)
+            text = self._transcripts.get(reconcile_id, text)
+        record = VoiceRecord(
+            result, text, session_state, asr_status=asr_status
+        )
+        if any(action.status == "unknown" for action in result.actions):
+            self._transcripts[result.turn_id] = text
+        else:
+            self._transcripts.pop(result.turn_id, None)
+        if not input_failed and result.status not in excluded:
+            record = self._speak(record)
+        return self._save(record)
 
     def enable_tts(self) -> None:
         """显式清除连续失败并恢复后续回合合成，不重放既有回合。"""
@@ -83,52 +91,55 @@ class VoiceOutput:
         self.cancel()
         self._output.close()
 
-    def _speak(self, result: Dict) -> None:
+    def _speak(self, record: VoiceRecord) -> VoiceRecord:
         """有限合成重试，连续回合失败后降级为文本；播放失败保留音频。"""
-        result["tts_status"] = "disabled"
+        record = replace(record, tts_status="disabled")
         if not self._tts_enabled or self._closed.is_set():
-            return
-        audio_path = self._directory / (result["turn_id"] + ".wav")
+            return record
+        audio_path = self._directory / (record.turn_id + ".wav")
         for attempt in range(self._tts_attempts):
             try:
                 self._output.synthesize(
-                    result["reply"], audio_path, self._speech_timeout
+                    record.reply, audio_path, self._speech_timeout
                 )
             except (OSError, TimeoutError):
                 if attempt + 1 < self._tts_attempts:
                     if self._closed.wait(self._retry_delay):
-                        return
+                        return record
                     continue
                 self._failures += 1
                 self._tts_enabled = self._failures < self._failure_threshold
-                result["tts_status"] = (
-                    "failed" if self._tts_enabled else "degraded"
+                return replace(
+                    record,
+                    tts_status="failed" if self._tts_enabled else "degraded",
                 )
-                return
             self._failures = 0
-            result.update(tts_status="completed", audio_path=str(audio_path))
+            record = replace(
+                record, tts_status="completed", audio_path=str(audio_path)
+            )
             if self._playback is not None and not self._closed.is_set():
                 try:
                     self._playback(audio_path)
                 except (OSError, RuntimeError):
-                    result["playback_status"] = "failed"
+                    record = replace(record, playback_status="failed")
                 else:
-                    result["playback_status"] = "completed"
-            return
+                    record = replace(record, playback_status="completed")
+            return record
+        return record
 
-    def _save(self, result: Dict, text: str, session_state: str) -> Dict:
-        """按 turn_id 关联识别、动作、回复和音频，原子保存记录。"""
-        result["transcript"] = text
-        result["session_state"] = session_state
-        destination = self._directory / (result["turn_id"] + ".json")
+    def _save(self, record: VoiceRecord) -> VoiceRecord:
+        """按 turn_id 原子保存兼容 JSON，磁盘失败独立于执行事实。"""
+        destination = self._directory / (record.turn_id + ".json")
         temporary = destination.with_suffix(".json.tmp")
-        result["record_status"] = "completed"
+        record = replace(record, record_status="completed")
         try:
             temporary.write_text(
-                json.dumps(result, ensure_ascii=False, indent=2),
+                json.dumps(
+                    result_to_json(record), ensure_ascii=False, indent=2
+                ),
                 encoding="utf-8",
             )
             temporary.replace(destination)
         except OSError:
-            result["record_status"] = "failed"
-        return result
+            return replace(record, record_status="failed")
+        return record
