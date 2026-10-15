@@ -29,10 +29,10 @@ from robot_audio.async_pcm_input import AsyncPcmMicrophone
 from robot_audio.async_playback import AsyncWavPlayer
 
 
-@pytest.mark.parametrize("prior_output", [False, True])
+@pytest.mark.parametrize("local_output", ["none", "before", "after"])
 @pytest.mark.parametrize("record_failure", [False, True])
 def test_shutdown_saves_confirmed_turn_after_summary_programming_error(
-    tmp_path, monkeypatch, prior_output, record_failure
+    tmp_path, monkeypatch, local_output, record_failure
 ):
     """摘要错误保持原样传播；退出必须保存尚未进入语音输出的动作事实。"""
 
@@ -59,7 +59,9 @@ def test_shutdown_saves_confirmed_turn_after_summary_programming_error(
             agent, None, tts, tmp_path, capabilities.music_playing
         )
         local = (
-            await app.submit_transcript("小莫小莫") if prior_output else None
+            await app.submit_transcript("小莫小莫")
+            if local_output == "before"
+            else None
         )
         with pytest.raises(
             RuntimeError, match="summary implementation failure"
@@ -67,7 +69,12 @@ def test_shutdown_saves_confirmed_turn_after_summary_programming_error(
             await app.submit_transcript("点头", direct=True)
         original = agent.last_result
         assert original.actions[0].status == "simulated_success"
-        assert len(tts.replies) == int(prior_output)
+        if local_output == "after":
+            local = await app.submit_transcript("小莫小莫")
+        if local is not None:
+            assert local.status == "woken"
+            assert local.transcript == "小莫小莫"
+        assert len(tts.replies) == int(local_output != "none")
         destination = tmp_path / (original.turn_id + ".json")
         assert not destination.exists()
         if record_failure:
