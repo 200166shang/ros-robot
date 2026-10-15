@@ -47,10 +47,21 @@ Unexpected action/report errors carry `ActionExecutionError.result` and preserve
 the original exception as the cause. `Agent.last_result` also retains confirmed
 or submitted facts when later memory or programming errors propagate.
 
-The temporary `legacy_io.py` Adapters still own blocking speech operations.
-`AgentApplication.aclose` closes speech and the Agent's model client. Native audio
-I/O and the total shutdown budget remain subsequent migration steps; the accepted
-application `aclose(deadline)` shape does not yet impose that total budget.
+Speech input, WAV recognition, TTS and playback use native async I/O.
+`VoiceOutput.complete` alone retries transient synthesis failures; all attempts
+and retry delays share `speech_timeout`. Permanent protocol/authentication and
+storage failures do not retry. Consecutive failed turns disable synthesis at the
+configured threshold; `enable_tts` explicitly enables later turns without replay.
+Only a matching finish event and nonempty PCM16 commit a WAV atomically. Playback
+failure retains complete audio and action facts. Output cancellation or programming
+errors persist those facts before propagating; ordinary recording failures are
+reported separately in `VoiceRecord`. The async player owns and reaps its child.
+Standalone WAV recognition validates first, retries the entire file with a fresh
+task after transient failure, then calls the application's direct text entry.
+The obsolete blocking speech connection and worker Adapters have been removed.
+`AgentApplication.aclose` closes owned speech resources and the Agent's model
+client. The accepted `aclose(deadline)` shape does not yet impose the total
+shutdown budget; that supervision remains the next migration step.
 The model Adapter owns bounded JSON/SSE assembly and returns a complete `ModelReply`.
 It exposes one native `execute_actions` tool; ordinary chat is plain model text.
 Summaries explicitly disable tools and use one attempt with a separate phase

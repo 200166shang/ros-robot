@@ -24,7 +24,7 @@ when recreating the environment: plain `uv sync` creates an environment without
 system site packages. Remove an obsolete `.venv` before recreating it, and
 rebuild the workspace after changing the interpreter or repository location.
 
-Runtime dependencies are Flask, websocket-client, and sherpa-onnx-bin. The
+Runtime dependencies include Flask, websockets, HTTPX, Pydantic, and sherpa-onnx-bin. The
 latter pulls in the matching sherpa-onnx-core dynamic libraries. The Python
 `sherpa-onnx` wrapper alone does not provide the required native executables.
 The lock contains the PyPI ARM64 manylinux2014 wheels for version 1.13.8,

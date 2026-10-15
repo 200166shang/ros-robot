@@ -1,22 +1,26 @@
 """语音回合输出：集中合成恢复、播放与原回合产物关联。"""
 
+import asyncio
 import json
-import threading
+import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Dict, Optional, Protocol
+from typing import Awaitable, Callable, Dict, Optional, Protocol
 
 from robot_agent.results import TurnResult, VoiceRecord, result_to_json
+from robot_agent.voice._async_speech_task import SpeechTransportError
 
 
 class SpeechOutput(Protocol):
     """流式合成 Adapter；完整成功才提交可试听 WAV 文件。"""
 
-    def synthesize(self, text: str, destination: Path, timeout: float) -> None:
+    async def synthesize(
+        self, text: str, destination: Path, timeout: float
+    ) -> None:
         """按期限合成，失败抛出 I/O 异常，不能留下成功文件。"""
         ...
 
-    def close(self) -> None:
+    async def aclose(self) -> None:
         """释放合成连接。"""
         ...
 
@@ -28,7 +32,7 @@ class VoiceOutput:
         self,
         speech_output: SpeechOutput,
         output_dir: Path,
-        playback: Optional[Callable[[Path], None]],
+        playback: Optional[Callable[[Path], Awaitable[None]]],
         speech_timeout: float,
         tts_attempts: int,
         failure_threshold: int,
@@ -43,12 +47,14 @@ class VoiceOutput:
         self._tts_attempts = tts_attempts
         self._failure_threshold = failure_threshold
         self._retry_delay = retry_delay
-        self._closed = threading.Event()
+        self._closed = False
+        self._active: Optional[asyncio.Task] = None
+        self._closing: Optional[asyncio.Task] = None
         self._failures = 0
         self._tts_enabled = True
         self._transcripts: Dict[str, str] = {}
 
-    def complete(
+    async def complete(
         self,
         result: TurnResult,
         text: str,
@@ -74,7 +80,7 @@ class VoiceOutput:
         else:
             self._transcripts.pop(result.turn_id, None)
         if not input_failed and result.status not in excluded:
-            record = self._speak(record)
+            record = await self._speak(record)
         return self._save(record)
 
     def enable_tts(self) -> None:
@@ -83,49 +89,96 @@ class VoiceOutput:
         self._tts_enabled = True
 
     def cancel(self) -> None:
-        """终止合成重试等待并禁止后续播放，连接由关闭阶段释放。"""
-        self._closed.set()
+        """停止新重试与播放，取消输出正在持有的本地I/O。"""
+        self._closed = True
+        if self._active is not None:
+            self._active.cancel()
 
-    def close(self) -> None:
-        """关闭合成 Adapter，取消状态在输入清理前设置。"""
-        self.cancel()
-        self._output.close()
+    async def aclose(self) -> None:
+        """回收合成、播放器和延迟任务，再释放语音连接。"""
+        if self._closing is None:
+            self.cancel()
+            self._closing = asyncio.create_task(self._close_resources())
+        await asyncio.shield(self._closing)
 
-    def _speak(self, record: VoiceRecord) -> VoiceRecord:
-        """有限合成重试，连续回合失败后降级为文本；播放失败保留音频。"""
-        record = replace(record, tts_status="disabled")
-        if not self._tts_enabled or self._closed.is_set():
-            return record
-        audio_path = self._directory / (record.turn_id + ".wav")
-        for attempt in range(self._tts_attempts):
-            try:
-                self._output.synthesize(
-                    record.reply, audio_path, self._speech_timeout
-                )
-            except (OSError, TimeoutError):
-                if attempt + 1 < self._tts_attempts:
-                    if self._closed.wait(self._retry_delay):
-                        return record
-                    continue
-                self._failures += 1
-                self._tts_enabled = self._failures < self._failure_threshold
-                return replace(
-                    record,
-                    tts_status="failed" if self._tts_enabled else "degraded",
-                )
-            self._failures = 0
-            record = replace(
-                record, tts_status="completed", audio_path=str(audio_path)
-            )
-            if self._playback is not None and not self._closed.is_set():
+    async def _close_resources(self) -> None:
+        """清理过程独立于外部关闭等待者的取消。"""
+        try:
+            if self._active is not None:
                 try:
-                    self._playback(audio_path)
-                except (OSError, RuntimeError):
+                    await self._active
+                except (asyncio.CancelledError, OSError):
+                    pass
+        finally:
+            await self._output.aclose()
+
+    async def _wait(
+        self, operation: Awaitable[None], timeout: Optional[float] = None
+    ) -> None:
+        """保留原始本地操作，取消等待必须等待其资源清理。"""
+        active = asyncio.ensure_future(operation)
+        self._active = active
+        try:
+            if timeout is None:
+                await active
+            else:
+                await asyncio.wait_for(active, timeout)
+        finally:
+            self._active = None
+
+    async def _speak(self, record: VoiceRecord) -> VoiceRecord:
+        """合成重试共享绝对期限，播放一次，失败回合才累计降级。"""
+        if not self._tts_enabled or self._closed:
+            return replace(record, tts_status="disabled")
+        audio_path = self._directory / (record.turn_id + ".wav")
+        deadline = time.monotonic() + self._speech_timeout
+        record = replace(record, tts_status="failed")
+        try:
+            for attempt in range(self._tts_attempts):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self._closed:
+                    break
+                try:
+                    await self._wait(
+                        self._output.synthesize(
+                            record.reply, audio_path, remaining
+                        ),
+                        remaining,
+                    )
+                except (OSError, asyncio.TimeoutError) as error:
+                    if (
+                        not isinstance(error, SpeechTransportError)
+                        or attempt + 1 == self._tts_attempts
+                    ):
+                        break
+                    delay = min(
+                        self._retry_delay, max(0, deadline - time.monotonic())
+                    )
+                    if delay:
+                        await self._wait(asyncio.sleep(delay))
+                    continue
+                self._failures = 0
+                record = replace(
+                    record, tts_status="completed", audio_path=str(audio_path)
+                )
+                if self._playback is not None and not self._closed:
                     record = replace(record, playback_status="failed")
-                else:
-                    record = replace(record, playback_status="completed")
-            return record
-        return record
+                    try:
+                        await self._wait(self._playback(audio_path))
+                    except OSError:
+                        pass
+                    else:
+                        record = replace(record, playback_status="completed")
+                return record
+        except BaseException:
+            # 取消与编程错误仍向外显露；先保存当时已知的回合和输出事实。
+            self._save(record)
+            raise
+        self._failures += 1
+        self._tts_enabled = self._failures < self._failure_threshold
+        return replace(
+            record, tts_status="failed" if self._tts_enabled else "degraded"
+        )
 
     def _save(self, record: VoiceRecord) -> VoiceRecord:
         """按 turn_id 原子保存兼容 JSON，磁盘失败独立于执行事实。"""
@@ -142,4 +195,10 @@ class VoiceOutput:
             temporary.replace(destination)
         except OSError:
             return replace(record, record_status="failed")
+        finally:
+            if temporary.exists():
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
         return record

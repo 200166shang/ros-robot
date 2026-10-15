@@ -14,7 +14,7 @@ from websockets.exceptions import (
     InvalidStatus,
 )
 
-from robot_agent.voice._speech_task import DEFAULT_SPEECH_ENDPOINT
+DEFAULT_SPEECH_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 
 
 class SpeechTransportError(OSError):

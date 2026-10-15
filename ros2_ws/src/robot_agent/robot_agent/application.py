@@ -7,17 +7,25 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional, Protocol
 
 from robot_agent.conversation.agent import Agent
-from robot_agent.legacy_io import (
-    LegacyRecordingInput,
-    LegacyVoiceOutput,
-)
 from robot_agent.results import TurnResult, VoiceRecord, make_result
 from robot_agent.voice.live_input import SpeechInput
 from robot_agent.voice.output import SpeechOutput, VoiceOutput
 from robot_agent.voice.session import VoiceSession
+
+
+class RecordingInput(Protocol):
+    """独立文件识别Seam，不要求持续监听能力。"""
+
+    async def recognize(self, path: Path, timeout: float) -> str:
+        """验证并识别完整文件，输入失败不能启动Agent。"""
+        ...
+
+    async def aclose(self) -> None:
+        """取消文件识别并释放连接。"""
+        ...
 
 
 class AgentApplication:
@@ -26,20 +34,20 @@ class AgentApplication:
     def __init__(
         self,
         agent: Agent,
-        speech_input: SpeechInput,
+        speech_input: Optional[SpeechInput],
         speech_output: SpeechOutput,
         output_dir: Path,
         music_playing: Callable[[], bool],
-        playback: Optional[Callable[[Path], None]] = None,
+        playback: Optional[Callable[[Path], Awaitable[None]]] = None,
         silence_timeout: float = 120.0,
         speech_timeout: float = 60.0,
         tts_attempts: int = 3,
         failure_threshold: int = 5,
         retry_delay: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
-        recognize_recording: Optional[Callable[[Path, float], str]] = None,
+        recording_input: Optional[RecordingInput] = None,
     ) -> None:
-        """接管 Agent、会话及迁移期音频 Adapter 的资源所有权。"""
+        """接管Agent、会话、持续输入和独立文件识别的资源所有权。"""
         if not math.isfinite(speech_timeout) or speech_timeout <= 0:
             raise ValueError("超时必须为正有限秒数")
         if tts_attempts < 1 or failure_threshold < 1:
@@ -48,21 +56,15 @@ class AgentApplication:
             raise ValueError("重试间隔必须为非负有限秒数")
         self._agent = agent
         self._input = speech_input
-        self._recording = (
-            LegacyRecordingInput(recognize_recording)
-            if recognize_recording is not None
-            else None
-        )
-        self._output = LegacyVoiceOutput(
-            VoiceOutput(
-                speech_output,
-                output_dir,
-                playback,
-                speech_timeout,
-                tts_attempts,
-                failure_threshold,
-                retry_delay,
-            )
+        self._recording = recording_input
+        self._output = VoiceOutput(
+            speech_output,
+            output_dir,
+            playback,
+            speech_timeout,
+            tts_attempts,
+            failure_threshold,
+            retry_delay,
         )
         self._session = VoiceSession(silence_timeout)
         self._music_playing = music_playing
@@ -101,6 +103,7 @@ class AgentApplication:
 
     async def run(self, on_result: Callable[[VoiceRecord], None]) -> None:
         """唯一麦克风回合循环；空闲监听推进计时，退出释放输入。"""
+        assert self._input is not None, "持续运行需要麦克风输入"
         try:
             while not self._closed:
                 try:
@@ -147,7 +150,8 @@ class AgentApplication:
                 )
             heard_input = True
             paused = True
-            self._input.pause()
+            if self._input is not None:
+                self._input.pause()
 
             # 2. 会话只接收观察值，普通请求由 Agent 组织模型和动作。
             decision = (
@@ -170,7 +174,7 @@ class AgentApplication:
             )
         finally:
             try:
-                if paused and not self._closed:
+                if paused and not self._closed and self._input is not None:
                     self._input.resume()
                 if heard_input and result.status not in (
                     "ignored",
@@ -227,14 +231,15 @@ class AgentApplication:
             )
         self._processing = True
         try:
-            self._input.pause()
+            if self._input is not None:
+                self._input.pause()
             result = await self._agent.reconcile(turn_id)
             return await self._output.complete(
                 result, "", self._session.state, reconcile_id=turn_id
             )
         finally:
             try:
-                if not self._closed:
+                if not self._closed and self._input is not None:
                     self._input.resume()
                 self._session.mark_activity(self._clock())
             finally:
@@ -264,9 +269,14 @@ class AgentApplication:
     async def _close_resources(self) -> None:
         """应用持有唯一清理任务，所有退出等待者共同等待资源释放。"""
         try:
-            await self._input.aclose()
+            if self._input is not None:
+                await self._input.aclose()
         finally:
             try:
-                await self._output.aclose()
+                try:
+                    if self._recording is not None:
+                        await self._recording.aclose()
+                finally:
+                    await self._output.aclose()
             finally:
                 await self._agent.aclose()
