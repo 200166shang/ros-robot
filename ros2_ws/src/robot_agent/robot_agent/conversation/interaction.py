@@ -10,12 +10,12 @@ from typing import Dict, List, Optional
 from robot_agent.actions.execution import (
     ActionExecution,
     ActionExecutionError,
-    make_result,
-    start_call,
 )
 from robot_agent.actions.registry import ActionRegistry
+from robot_agent.calls import start_call
 from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import TextProvider
+from robot_agent.results import make_result
 
 MAX_INPUT_LENGTH = 8192
 MAX_MODEL_OUTPUT_BYTES = 64 * 1024

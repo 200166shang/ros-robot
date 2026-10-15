@@ -1,16 +1,17 @@
 """动作执行与核对：集中持有调用、期限、执行事实和未知状态。"""
 
-import threading
 import time
 from concurrent.futures import Future, wait
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from robot_agent.actions.registry import (
     CONFIRMED_SUCCESS,
     ActionCommand,
     ActionRegistry,
 )
+from robot_agent.calls import start_call
+from robot_agent.results import make_result
 
 
 @dataclass(frozen=True)
@@ -20,40 +21,6 @@ class _PendingAction:
     call: Future
     turn_id: str
     actions: List[Dict]
-
-
-def make_result(
-    turn_id: str,
-    status: str,
-    reply: str,
-    actions: Optional[List[Dict]] = None,
-) -> Dict:
-    """统一回合结构，返回记录快照，核对迟到回执不改写已发布结果。"""
-    return {
-        "turn_id": turn_id,
-        "status": status,
-        "reply": reply,
-        "actions": [dict(action) for action in actions]
-        if actions is not None
-        else [],
-    }
-
-
-def start_call(operation: Callable[[], Any]) -> Future:
-    """隔离阻塞 I/O；Future 传回结果，不取消已提交的调用。"""
-    call = Future()
-
-    def run() -> None:
-        """把 I/O 的结果或异常交给标准 Future，不操作回合业务状态。"""
-        try:
-            result = operation()
-        except Exception as error:
-            call.set_exception(error)
-        else:
-            call.set_result(result)
-
-    threading.Thread(target=run, daemon=True, name="online-agent-io").start()
-    return call
 
 
 def confirmed_action_reply(actions: List[Dict]) -> str:

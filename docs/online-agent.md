@@ -16,6 +16,8 @@ robot_audio没有ROS节点或模型，在线Agent不再依赖robot_voice。
 ```text
 robot_agent/
 ├── runtime.py                 # 配置读取与共同交互组装
+├── calls.py                   # 阻塞I/O隔离，传回Future结果/异常
+├── results.py                 # 共同回合结果与动作记录快照
 ├── conversation/
 │   ├── interaction.py         # 模型→整表校验→动作→记忆
 │   ├── memory.py              # 近期上下文与持久摘要

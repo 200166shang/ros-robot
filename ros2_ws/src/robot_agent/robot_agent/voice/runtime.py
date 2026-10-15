@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from robot_agent.actions.registry import ActionRegistry
-from robot_agent.conversation.interaction import make_result
+from robot_agent.results import make_result
 from robot_agent.runtime import create_interaction, load_config
 from robot_agent.voice.session import OnlineVoice
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS

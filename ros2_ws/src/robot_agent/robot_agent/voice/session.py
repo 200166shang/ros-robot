@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Protocol
 
-from robot_agent.conversation.interaction import OnlineInteraction, make_result
+from robot_agent.conversation.interaction import OnlineInteraction
+from robot_agent.results import make_result
 
 WAKE_WORDS = tuple(
     name * 2 for name in ("小沫", "小莫", "小墨", "小末", "小陌", "小默")
