@@ -30,7 +30,7 @@ class MemoryProvider:
             None,
         )
 
-    async def aclose(self):
+    async def aclose(self, deadline=None):
         """固定模型没有本地连接资源。"""
         pass
 
@@ -82,7 +82,7 @@ def test_summary_failure_keeps_context_bounded(tmp_path):
                     raise ModelTransportError("network", transient=True)
                 return await super().complete(text, deadline, tools=tools)
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -169,7 +169,7 @@ def test_summary_timeout_keeps_clear_and_new_turn_busy(tmp_path):
                     finished.set()
                 return await super().complete(text, deadline, tools=tools)
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -246,7 +246,7 @@ def test_summary_actions_are_rejected_without_execution(tmp_path):
                     )
                 return await super().complete(text, deadline, tools=tools)
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 

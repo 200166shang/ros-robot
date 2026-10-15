@@ -15,7 +15,6 @@ from std_msgs.msg import String
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.perception import (
     PerceptionActions,
-    perception_actions,
 )
 from robot_agent.actions.simulation import simulate_cue
 from robot_agent.application import AgentApplication
@@ -25,6 +24,7 @@ from robot_agent.runtime import (
     DEFAULT_ACTION_TIMEOUT,
     build_application,
     load_config,
+    shutdown_timeout,
 )
 
 
@@ -42,7 +42,7 @@ def create_ros_application(
         RosPerception(node) if perception is None else perception,
         float(config.get("action_timeout", DEFAULT_ACTION_TIMEOUT)),
     )
-    actions.register_many(perception_actions(perception_capability))
+    actions.register_perception(perception_capability)
     return build_application(
         config, capabilities=capabilities, input_mode=input_mode
     )
@@ -58,6 +58,9 @@ class OnlineVoiceRosNode(Node):
         if not isinstance(filename, str) or not filename:
             raise ValueError("必须指定外部 config_file 路径")
         self._config = load_config(filename)
+        self._shutdown_timeout = shutdown_timeout(self._config)
+        self._shutdown_deadline: Optional[float] = None
+        self._closing: Optional[asyncio.Task] = None
         self._perception = RosPerception(self)
         self._voice: Optional[AgentApplication] = None
         self._publisher = self.create_publisher(
@@ -84,8 +87,38 @@ class OnlineVoiceRosNode(Node):
         message.data = json.dumps(result_to_json(result), ensure_ascii=False)
         self._publisher.publish(message)
 
-    async def aclose(self, deadline: float) -> None:
-        """应用收尾期间持续接收回执，最后才断开本地 ROS 桥接。"""
+    @property
+    def shutdown_deadline(self) -> Optional[float]:
+        """executor最后使用同一个已经建立的绝对退出期限。"""
+        return self._shutdown_deadline
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
+        """节点和应用共享第一次退出期限，保留回执交接直到应用保存事实。"""
+        if self._closing is None:
+            existing = (
+                self._voice.shutdown_deadline
+                if self._voice is not None
+                else None
+            )
+            self._shutdown_deadline = (
+                existing
+                if existing is not None
+                else (
+                    time.monotonic() + self._shutdown_timeout
+                    if deadline is None
+                    else deadline
+                )
+            )
+            if self._voice is not None:
+                self._voice.stop()
+            self._perception.stop()
+            self._closing = asyncio.create_task(
+                self._close_resources(self._shutdown_deadline)
+            )
+        await asyncio.shield(self._closing)
+
+    async def _close_resources(self, deadline: float) -> None:
+        """应用资源收尾后才断开原ROS回执桥接。"""
         try:
             if self._voice is not None:
                 await self._voice.aclose(deadline)
@@ -187,10 +220,14 @@ async def _run(args: Optional[List[str]]) -> None:
         for task in done:
             task.result()
     finally:
-        deadline = time.monotonic() + 5.0
+        deadline: Optional[float] = None
         try:
             if node is not None:
-                await node.aclose(deadline)
+                try:
+                    await node.aclose()
+                finally:
+                    assert node.shutdown_deadline is not None
+                    deadline = node.shutdown_deadline
         finally:
             for task in tasks:
                 task.cancel()
@@ -198,6 +235,7 @@ async def _run(args: Optional[List[str]]) -> None:
                 await asyncio.gather(*tasks, return_exceptions=True)
             try:
                 if executor is not None:
+                    assert deadline is not None
                     await executor.aclose(deadline)
             finally:
                 if node is not None:

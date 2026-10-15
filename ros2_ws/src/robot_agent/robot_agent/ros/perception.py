@@ -3,7 +3,7 @@
 import asyncio
 import threading
 import time
-from typing import Dict
+from typing import Dict, Optional
 
 from rclpy.node import Node
 from std_msgs.msg import Bool
@@ -18,6 +18,7 @@ class RosPerception:
         self._pending = {}
         self._handoff = threading.Lock()
         self._closed = False
+        self._admitting = True
         self._camera = node.create_publisher(Bool, "/enable_camera", 10)
         self._clients = {
             "follow": node.create_client(SetBool, "/tracking/set_enabled"),
@@ -28,6 +29,8 @@ class RosPerception:
 
     def camera(self, enabled: bool) -> Dict:
         """没有采集端订阅时拒绝；发布完成不确认设备状态。"""
+        if not self._admitting:
+            return {"status": "failed", "detail": "入口退出，未发布相机请求"}
         if self._camera.get_subscription_count() == 0:
             return {
                 "status": "failed",
@@ -77,12 +80,19 @@ class RosPerception:
         original.add_done_callback(receive)
         return await asyncio.shield(destination)
 
-    async def aclose(self, deadline: float) -> None:
+    def stop(self) -> None:
+        """停止新请求，原ROS Future及线程回执交接保持有效。"""
+        self._admitting = False
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """收尾期间保留回执；期限后仅断开本地桥接，不撤回 ROS 调用。"""
+        self.stop()
         if self._pending:
             await asyncio.wait(
                 set(self._pending.values()),
-                timeout=max(0, deadline - time.monotonic()),
+                timeout=0
+                if deadline is None
+                else max(0, deadline - time.monotonic()),
             )
         with self._handoff:
             self._closed = True
@@ -94,8 +104,8 @@ class RosPerception:
         self, kind: str, enabled: bool, deadline: float
     ) -> Dict:
         """直接调用设备Interface；仅最终服务回执可报告确认。"""
-        if self._closed:
-            raise RuntimeError("ROS 回执桥接已经关闭")
+        if not self._admitting:
+            return {"status": "failed", "detail": "入口退出，未提交设备请求"}
         client = self._clients[kind]
         if not client.service_is_ready():
             return {

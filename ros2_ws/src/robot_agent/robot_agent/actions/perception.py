@@ -10,6 +10,10 @@ from robot_agent.actions.contracts import ActionHandler
 class PerceptionInterface(Protocol):
     """相机发布与已确认的跟随服务，传输在边缘变化。"""
 
+    async def aclose(self, deadline: Optional[float]) -> None:
+        """原回执等待结束后释放设备Adapter。"""
+        ...
+
     def camera(self, enabled: bool) -> Dict:
         """提交采集请求；成功只代表发布完成。"""
         ...
@@ -29,9 +33,19 @@ class PerceptionActions:
     ) -> None:
         """启动时不猜测其他入口控制的状态。"""
         self._interface = interface
+        self._closed = False
         self._action_timeout = action_timeout
         self._follow: Optional[bool] = None
         self._fusion: Optional[bool] = None
+
+    def stop(self) -> None:
+        """立即禁止新步骤，但保留已提交请求的原回执等待。"""
+        self._closed = True
+
+    async def aclose(self, deadline: Optional[float]) -> None:
+        """设备接收桥接由能力持有，执行收尾后才释放。"""
+        self.stop()
+        await self._interface.aclose(deadline)
 
     def _deadline(self, deadline: Optional[float]) -> float:
         """独立调用使用配置预算，组合动作逐步传递同一绝对期限。"""
@@ -43,7 +57,7 @@ class PerceptionActions:
 
     def start_camera(self, *, deadline: Optional[float] = None) -> Dict:
         """恢复采集，不把发布完成当作设备开启确认。"""
-        if time.monotonic() >= self._deadline(deadline):
+        if self._closed or time.monotonic() >= self._deadline(deadline):
             return {
                 "status": "failed",
                 "detail": "动作期限已过，未提交采集请求，不补执行",
@@ -58,10 +72,12 @@ class PerceptionActions:
         if receipt["status"] != "real_success":
             return receipt
         # 2. 只报告采集请求提交，不能声称相机硬件已停机。
-        if time.monotonic() >= deadline:
+        if self._closed or time.monotonic() >= deadline:
             return {
                 "status": "failed",
-                "detail": "Follow 已确认待机，但回执迟到；未提交相机暂停请求",
+                "detail": (
+                    "Follow 已确认待机；入口退出或回执迟到，未提交相机暂停请求"
+                ),
             }
         receipt = self._interface.camera(False)
         return {
@@ -82,6 +98,11 @@ class PerceptionActions:
         """成功服务回执更新记录，失败不推断设备当前状态。"""
         if deadline is None:
             deadline = self._deadline(deadline)
+        if self._closed:
+            return {
+                "status": "failed",
+                "detail": "入口退出，未提交后续设备请求",
+            }
         receipt = await self._interface.set_enabled(kind, enabled, deadline)
         confirmed = enabled if receipt["status"] == "real_success" else None
         if kind == "follow":
@@ -106,7 +127,7 @@ class PerceptionActions:
         """采集请求、融合确认、Follow 确认按序执行，不重试。"""
         # 1. 恢复相机采集，成功仅代表请求已发布。
         deadline = self._deadline(deadline)
-        if time.monotonic() >= deadline:
+        if self._closed or time.monotonic() >= deadline:
             return {
                 "status": "failed",
                 "detail": "动作期限已过，未提交采集或跟随请求",
@@ -123,10 +144,12 @@ class PerceptionActions:
                 + receipt["detail"],
             }
         # 3. 服务端检查同步数据和近期扫描，不做相机跟随降级。
-        if time.monotonic() >= deadline:
+        if self._closed or time.monotonic() >= deadline:
             return {
                 "status": "failed",
-                "detail": "融合回执迟到：已确认融合，未提交 Follow，不补执行",
+                "detail": (
+                    "已确认融合；入口退出或回执迟到，未提交 Follow，不补执行"
+                ),
             }
         fusion_detail = receipt["detail"]
         receipt = await self._set_state("follow", True, deadline)
@@ -161,10 +184,12 @@ class PerceptionActions:
             return receipt
         # 2. 同一截止时间内关闭融合，不重试或补执行。
         follow_detail = receipt["detail"]
-        if time.monotonic() >= deadline:
+        if self._closed or time.monotonic() >= deadline:
             return {
                 "status": "failed",
-                "detail": "Follow 已确认待机，但回执迟到；未提交融合关闭请求",
+                "detail": (
+                    "Follow 已确认待机；入口退出或回执迟到，未提交融合关闭请求"
+                ),
             }
         receipt = await self._set_state("fusion", False, deadline)
         return {

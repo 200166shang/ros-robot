@@ -34,7 +34,7 @@ class PcmFixture:
         """回执恢复时丢弃源积压。"""
         self.discards += 1
 
-    async def aclose(self):
+    async def aclose(self, deadline=None):
         """关闭实际设备。"""
         self.closed = True
 
@@ -408,7 +408,7 @@ def test_programming_errors_surface_after_resource_cleanup(
                     await programming_error()
                 return await super().read(size, timeout)
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """先完成设备回收再暴露关闭异常。"""
                 await super().aclose()
                 if operation == "close":

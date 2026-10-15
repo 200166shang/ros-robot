@@ -1,11 +1,13 @@
 """通过真实 ROS 传输与固定服务事件验证交互结果，不替代在线验收。"""
 
 import asyncio
+import json
 import threading
 import time
 
 import pytest
 from test_online_interaction import FixedProvider, await_reconciliation
+from test_online_voice import FixedModel, FixedSpeech, FixedTTS
 
 rclpy = pytest.importorskip("rclpy")
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
@@ -20,8 +22,8 @@ from robot_agent.actions.capabilities import (  # noqa: E402
 )
 from robot_agent.actions.perception import (  # noqa: E402
     PerceptionActions,
-    perception_actions,
 )
+from robot_agent.application import AgentApplication  # noqa: E402
 from robot_agent.conversation.agent import Agent  # noqa: E402
 from robot_agent.ros.perception import RosPerception  # noqa: E402
 from robot_agent.ros.voice_node import RosExecutor  # noqa: E402
@@ -49,6 +51,9 @@ def ros_devices():
     def follow(request, response):
         """固定 Follow 回执代表设备确认或拒绝。"""
         events.append(("follow", request.data))
+        if scenario.get("gate_kind") == "follow":
+            scenario["entered"].set()
+            assert scenario["release"].wait(2), "follow gate not released"
         if scenario["delay_kind"] == "follow":
             time.sleep(scenario["delay"])
         response.success = scenario["success"]
@@ -58,6 +63,9 @@ def ros_devices():
     def fusion(request, response):
         """模拟迟到融合回执，实际通过 ROS service 返回。"""
         events.append(("fusion", request.data))
+        if scenario.get("gate_kind") == "fusion":
+            scenario["entered"].set()
+            assert scenario["release"].wait(2), "fusion gate not released"
         if scenario["delay_kind"] == "fusion":
             time.sleep(scenario["delay"])
         response.success = scenario["success"]
@@ -87,6 +95,8 @@ def ros_devices():
             time.sleep(0.02)
         yield device, interface, events, scenario
     finally:
+        if "release" in scenario:
+            scenario["release"].set()
         executor.shutdown()
         worker.join(2)
         agent_node.destroy_node()
@@ -105,8 +115,8 @@ async def run_with_receipts(interface, operation):
 def make_agent(interface, functions):
     """通过现有注册表构造真实 ROS 感知交互 Interface。"""
     registry = create_default_actions().registry
-    registry.register_many(
-        perception_actions(PerceptionActions(interface, action_timeout=0.1))
+    registry.register_perception(
+        PerceptionActions(interface, action_timeout=0.1)
     )
     return Agent(FixedProvider(functions), registry, action_timeout=0.1)
 
@@ -449,5 +459,83 @@ def test_missing_ros_devices_reject_without_following_steps(action):
             await interface.aclose(deadline)
             node.destroy_node()
             rclpy.shutdown()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "action,kind",
+    [
+        ("start_following", "fusion"),
+        ("stop_following", "follow"),
+        ("stop_camera", "follow"),
+    ],
+)
+def test_application_close_stops_compound_steps_before_original_deadline(
+    ros_devices, tmp_path, action, kind
+):
+    """关闭立即停止组合设备步骤，期限内原回执仍保存已确认部分事实。"""
+
+    async def run():
+        """真实ROS服务门控首个回执，在原动作尚有预算时开始退出。"""
+        _, interface, events, response = ros_devices
+        response.update(
+            gate_kind=kind,
+            entered=threading.Event(),
+            release=threading.Event(),
+        )
+        capabilities = create_default_actions()
+        capabilities.registry.register_perception(PerceptionActions(interface))
+        model, speech = FixedModel(), FixedSpeech()
+        model.actions = [
+            {"name": action, "arguments": {}},
+            {"name": "head_nod", "arguments": {}},
+        ]
+        agent = Agent(model, capabilities.registry, action_timeout=5)
+        app = AgentApplication(
+            agent,
+            speech,
+            FixedTTS(),
+            tmp_path,
+            music_playing=capabilities.music_playing,
+            shutdown_timeout=0.5,
+        )
+        turn = asyncio.create_task(app.submit_transcript("请求", direct=True))
+        try:
+
+            async def entered():
+                """异步观察外部设备收到原始请求。"""
+                while not response["entered"].is_set():
+                    await asyncio.sleep(0.001)
+
+            await asyncio.wait_for(entered(), 2)
+            closing = asyncio.create_task(app.aclose())
+            await asyncio.sleep(0)
+            assert app.state == "closed"
+            response["release"].set()
+            await closing
+            await asyncio.gather(turn, return_exceptions=True)
+            result = agent.last_result
+            assert result is not None
+            assert [item.status for item in result.actions] == [
+                "failed",
+                "not_executed",
+            ]
+            assert (
+                "已确认融合" if kind == "fusion" else "Follow 已确认待机"
+            ) in result.reply
+            assert events == (
+                [("camera", True), ("fusion", True)]
+                if kind == "fusion"
+                else [("follow", False)]
+            )
+            saved = json.loads(
+                (tmp_path / (result.turn_id + ".json")).read_text()
+            )
+            assert saved["actions"][0]["detail"] == result.actions[0].detail
+            assert "resume" not in speech.events
+        finally:
+            response["release"].set()
+            await app.aclose()
 
     asyncio.run(run())

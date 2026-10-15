@@ -6,6 +6,7 @@ import wave
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from robot_agent.shutdown import finish_tasks
 from robot_agent.voice._async_speech_task import (
     AsyncSpeechConnection,
     AsyncSpeechTask,
@@ -31,6 +32,7 @@ class DashScopeASR:
         self._paused = False
         self._closed = False
         self._active: Optional[asyncio.Task] = None
+        self._closing: Optional[asyncio.Task] = None
 
     async def recognize(self, path: Path, timeout: float) -> str:
         """先验证外部WAV，再在共享总期限内识别；取消释放所有本地任务。"""
@@ -58,6 +60,8 @@ class DashScopeASR:
     async def _recognize(self, path: Path, deadline: float) -> str:
         """每轮句子独立，永久协议错误不自动重试。"""
         for attempt in range(self._attempts):
+            if self._closed:
+                raise SpeechTransportError("语音入口已关闭")
             try:
                 return await self._attempt(path, deadline)
             except SpeechTransportError:
@@ -113,7 +117,7 @@ class DashScopeASR:
     async def _send_audio(self, path: Path, task: AsyncSpeechTask) -> None:
         """暂停不消费源文件，只发送静音；各尝试均从文件起点发送。"""
         with wave.open(str(path), "rb") as audio:
-            while True:
+            while not self._closed:
                 frame = (
                     SILENCE_FRAME
                     if self._paused
@@ -165,17 +169,28 @@ class DashScopeASR:
         """恢复后继续读取本轮文件。"""
         self._paused = False
 
-    async def aclose(self) -> None:
-        """停止重试，取消识别并回收连接、发送与接收。"""
+    def stop(self) -> None:
+        """停止新语音任务与重试，原连接由关闭操作回收。"""
+        self._connection.stop()
         self._closed = True
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
+        """停止重试，取消识别并回收连接、发送与接收。"""
+        if self._closing is None:
+            self.stop()
+            self._closing = asyncio.create_task(self._close(deadline))
+        await asyncio.shield(self._closing)
+
+    async def _close(self, deadline: Optional[float]) -> None:
+        """所有关闭等待者共享原始连接与任务清理。"""
+        self.stop()
         active = self._active
-        if active is not None:
+        if active is not None and not active.done():
             active.cancel()
-            try:
-                await active
-            except asyncio.CancelledError:
-                pass
-        await self._connection.aclose()
+        tasks = [asyncio.create_task(self._connection.aclose(deadline))]
+        if active is not None:
+            tasks.append(active)
+        await finish_tasks(tasks, deadline)
 
 
 class DashScopeTTS:
@@ -187,6 +202,7 @@ class DashScopeTTS:
         self._model = config.get("tts_model", "cosyvoice-v2")
         self._voice = config.get("tts_voice", "longfeifei_v2")
         self._active: Optional[asyncio.Task] = None
+        self._closing: Optional[asyncio.Task] = None
 
     async def synthesize(
         self, text: str, destination: Path, timeout: float
@@ -250,13 +266,24 @@ class DashScopeTTS:
                 if temporary.exists():
                     temporary.unlink()
 
-    async def aclose(self) -> None:
+    def stop(self) -> None:
+        """停止新语音任务与重试，原连接由关闭操作回收。"""
+        self._connection.stop()
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """永久关闭入口，取消合成并等待临时产物清理。"""
+        if self._closing is None:
+            self.stop()
+            self._closing = asyncio.create_task(self._close(deadline))
+        await asyncio.shield(self._closing)
+
+    async def _close(self, deadline: Optional[float]) -> None:
+        """所有关闭等待者共享原始连接与任务清理。"""
+        self.stop()
         active = self._active
-        if active is not None:
+        if active is not None and not active.done():
             active.cancel()
-            try:
-                await active
-            except asyncio.CancelledError:
-                pass
-        await self._connection.aclose()
+        tasks = [asyncio.create_task(self._connection.aclose(deadline))]
+        if active is not None:
+            tasks.append(active)
+        await finish_tasks(tasks, deadline)

@@ -67,7 +67,7 @@ def test_voice_failures_keep_execution_and_flat_json(tmp_path, monkeypatch):
                 raise ModelTransportError("network", transient=True)
             return await super().complete(text, deadline, tools=tools)
 
-        async def aclose(self):
+        async def aclose(self, deadline=None):
             """固定模型没有本地连接资源。"""
             pass
 

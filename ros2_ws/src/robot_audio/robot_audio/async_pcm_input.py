@@ -3,6 +3,7 @@
 import asyncio
 import os
 import subprocess
+import time
 from typing import Optional
 
 
@@ -92,14 +93,14 @@ class AsyncPcmMicrophone:
             if not data:
                 raise OSError("麦克风PCM输入已结束")
 
-    async def aclose(self) -> None:
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """有界停止并回收录音；所有等待者共享原始清理操作。"""
         if self._closing is None:
             self._closed = True
-            self._closing = asyncio.create_task(self._close())
+            self._closing = asyncio.create_task(self._close(deadline))
         await asyncio.shield(self._closing)
 
-    async def _close(self) -> None:
+    async def _close(self, deadline: Optional[float]) -> None:
         """启动完成后终止进程，最终总是释放管道描述符。"""
         try:
             if self._spawning is not None:
@@ -112,7 +113,12 @@ class AsyncPcmMicrophone:
                     # EOF可先于子进程观察器回执到达；仍须await回收。
                     pass
                 try:
-                    await asyncio.wait_for(process.wait(), 1)
+                    await asyncio.wait_for(
+                        process.wait(),
+                        1
+                        if deadline is None
+                        else max(0, (deadline - time.monotonic()) / 2),
+                    )
                 except asyncio.TimeoutError:
                     try:
                         process.kill()

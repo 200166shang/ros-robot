@@ -29,7 +29,7 @@ class FixedProvider:
             else None,
         )
 
-    async def aclose(self):
+    async def aclose(self, deadline=None):
         """固定模型没有本地连接资源。"""
         pass
 
