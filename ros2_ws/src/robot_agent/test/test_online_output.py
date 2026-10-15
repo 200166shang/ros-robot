@@ -5,7 +5,12 @@ import json
 import time
 
 import pytest
+from async_speech_fixture import acknowledge, event, speech_server
+from test_online_voice import FixedModel, FixedSpeech
 
+from robot_agent.actions.capabilities import create_default_actions
+from robot_agent.application import AgentApplication
+from robot_agent.conversation.agent import Agent
 from robot_agent.results import (
     ActionOutcome,
     ExecutionResult,
@@ -14,6 +19,7 @@ from robot_agent.results import (
 )
 from robot_agent.voice._async_speech_task import SpeechTransportError
 from robot_agent.voice.output import VoiceOutput
+from robot_agent.voice.speech import DashScopeTTS
 
 
 def test_synthesis_retries_share_total_stage_budget(tmp_path):
@@ -118,5 +124,74 @@ def test_cancel_retry_delay_saves_confirmed_turn_before_propagating(tmp_path):
         saved = json.loads((tmp_path / (turn.turn_id + ".json")).read_text())
         assert saved["actions"][0]["status"] == "real_success"
         assert saved["tts_status"] == "failed"
+
+    asyncio.run(scenario())
+
+
+def test_native_tts_permanent_failure_degrades_by_turn_and_recovers_explicitly(
+    tmp_path, monkeypatch
+):
+    """永久错误不重试，降级按失败回合计数，恢复只影响新回合。"""
+
+    async def scenario():
+        """保持真实TTS传输与完整应用，不通过输出Seam重新提交动作。"""
+        requests, executions = [], []
+        fail = True
+
+        async def handler(socket):
+            """固定任务失败或返回完整PCM，响应不访问云端。"""
+            command = await acknowledge(socket)
+            requests.append(command)
+            await socket.recv()
+            await socket.recv()
+            if fail:
+                await event(socket, command, "task-failed")
+            else:
+                await socket.send(bytes(3200))
+                await event(socket, command, "task-finished")
+            await socket.wait_closed()
+
+        async def nod():
+            """动作Seam确认一次调用，检测输出失败是否重跑动作。"""
+            executions.append("nod")
+            return {"status": "simulated_success"}
+
+        async with speech_server(monkeypatch, handler):
+            capabilities = create_default_actions()
+            capabilities.registry.register("head_nod", nod)
+            model = FixedModel()
+            voice = AgentApplication(
+                Agent(model, capabilities.registry),
+                FixedSpeech(),
+                DashScopeTTS({}),
+                tmp_path,
+                lambda: False,
+                tts_attempts=3,
+                failure_threshold=2,
+                retry_delay=0,
+            )
+            records = [
+                await voice.submit_transcript("点头", direct=True)
+                for _ in range(3)
+            ]
+            assert [record.tts_status for record in records] == [
+                "failed",
+                "degraded",
+                "disabled",
+            ]
+            assert len(requests) == 2
+            assert executions == ["nod"] * 3
+            assert all(
+                record.actions[0].status == "simulated_success"
+                for record in records
+            )
+            voice.enable_tts()
+            fail = False
+            recovered = await voice.submit_transcript("再点头", direct=True)
+            assert recovered.tts_status == "completed"
+            assert len(requests) == 3
+            assert executions == ["nod"] * 4
+            assert model.inputs == ["点头"] * 3 + ["再点头"]
+            await voice.aclose()
 
     asyncio.run(scenario())

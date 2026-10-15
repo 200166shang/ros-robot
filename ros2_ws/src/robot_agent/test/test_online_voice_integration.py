@@ -5,6 +5,7 @@ import json
 import wave
 from pathlib import Path
 
+import pytest
 from async_speech_fixture import acknowledge, event, final, speech_server
 from test_online_speech import fixture_wav
 
@@ -115,8 +116,9 @@ def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("output_failure", [None, "playback", "save"])
 def test_wav_runtime_preserves_actions_reply_audio_and_record(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, output_failure
 ):
     """独立 WAV 通过真实语音任务协议进入模型和动作主线并关联产物。"""
 
@@ -164,8 +166,24 @@ def test_wav_runtime_preserves_actions_reply_audio_and_record(
 
         monkeypatch.setattr(DashScopeProvider, "complete", complete)
         directory = tmp_path / "output"
+        config = {"output_dir": str(directory)}
+        if output_failure == "playback":
+            player = tmp_path / "failing-player"
+            player.write_text("#!/bin/sh\nexit 7\n")
+            player.chmod(0o755)
+            config.update(playback_enabled=True, play_executable=str(player))
+        if output_failure == "save":
+            replace = Path.replace
+
+            def failing_save(path, destination):
+                """仅JSON存储失败，完整音频仍应保留。"""
+                if path.suffixes == [".json", ".tmp"]:
+                    raise OSError("disk unavailable")
+                return replace(path, destination)
+
+            monkeypatch.setattr(Path, "replace", failing_save)
         async with speech_server(monkeypatch, handler):
-            voice = build_application({"output_dir": str(directory)})
+            voice = build_application(config)
             try:
                 result = await capture_turn(voice, str(fixture_wav(tmp_path)))
             finally:
@@ -181,13 +199,18 @@ def test_wav_runtime_preserves_actions_reply_audio_and_record(
         assert audio_path == directory / (result.turn_id + ".wav")
         with wave.open(str(audio_path)) as audio:
             assert audio.getnframes() == 2400
-        record = json.loads(
-            (directory / (result.turn_id + ".json")).read_text()
+        assert result.playback_status == (
+            "failed" if output_failure == "playback" else None
         )
-        assert record["transcript"] == result.transcript
-        assert record["reply"] == result.reply
-        assert record["actions"] == result_to_json(result)["actions"]
-        assert record["audio_path"] == result.audio_path
+        assert result.record_status == (
+            "failed" if output_failure == "save" else "completed"
+        )
+        if output_failure != "save":
+            record = json.loads(
+                (directory / (result.turn_id + ".json")).read_text()
+            )
+            assert record == result_to_json(result)
+        assert list(directory.glob("*.tmp")) == []
         assert closed == [True, True]
 
     asyncio.run(scenario())

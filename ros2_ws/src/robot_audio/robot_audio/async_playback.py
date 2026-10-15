@@ -37,14 +37,22 @@ class AsyncWavPlayer:
         process: Optional[asyncio.subprocess.Process] = None
         try:
             try:
-                process = await asyncio.shield(spawning)
+                started: asyncio.subprocess.Process = await asyncio.shield(
+                    spawning
+                )
+                process = started
             except asyncio.CancelledError:
-                # 取消等待不放弃迟到子进程的所有权。
-                process = await spawning
+                # 重复取消也不能放弃迟到子进程的所有权。
+                while not spawning.done():
+                    try:
+                        await asyncio.shield(spawning)
+                    except asyncio.CancelledError:
+                        pass
+                process = spawning.result()
                 raise
             try:
                 code = await asyncio.wait_for(
-                    process.wait(), duration + self._timeout_margin
+                    started.wait(), duration + self._timeout_margin
                 )
             except asyncio.TimeoutError as error:
                 raise OSError("播放超时") from error
@@ -52,7 +60,16 @@ class AsyncWavPlayer:
                 raise OSError(f"播放失败，退出码{code}")
         finally:
             if process is not None:
-                await self._reap(process)
+                reaping = asyncio.create_task(self._reap(process))
+                interrupted = False
+                while not reaping.done():
+                    try:
+                        await asyncio.shield(reaping)
+                    except asyncio.CancelledError:
+                        interrupted = True
+                reaping.result()
+                if interrupted:
+                    raise asyncio.CancelledError
 
     async def _reap(self, process: asyncio.subprocess.Process) -> None:
         """正常终止后仍等待原子进程；忽略已退出时的信号竞争。"""

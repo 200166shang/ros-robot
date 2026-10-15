@@ -59,8 +59,8 @@ Standalone WAV recognition validates first, retries the entire file with a fresh
 task after transient failure, then calls the application's direct text entry.
 The obsolete blocking speech connection and worker Adapters have been removed.
 `AgentApplication.aclose(deadline)` closes owned speech resources and the Agent,
-retaining action receipt delivery within the remaining deadline. The accepted `aclose(deadline)` shape does not yet impose the total
-shutdown budget; that supervision remains the next migration step.
+retaining action receipt delivery within the remaining deadline. The accepted
+`aclose(deadline)` shape does not yet impose the total shutdown budget; that supervision remains the next migration step.
 The model Adapter owns bounded JSON/SSE assembly and returns a complete `ModelReply`.
 It exposes one native `execute_actions` tool; ordinary chat is plain model text.
 Summaries explicitly disable tools and use one attempt with a separate phase
