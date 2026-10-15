@@ -2,6 +2,7 @@
 
 import json
 import sys
+import time
 
 import online_integration_probe
 import pytest
@@ -38,7 +39,7 @@ def test_reporting_failure_preserves_acceptance_error_and_closes_ros(
             str(target),
         ],
     )
-    now = 0.0
+    now = time.monotonic()
 
     def expired_clock() -> float:
         """外部时钟直接越过期限，使真实ROS无服务场景立即失败。"""
@@ -46,9 +47,7 @@ def test_reporting_failure_preserves_acceptance_error_and_closes_ros(
         now += 20
         return now
 
-    monkeypatch.setattr(
-        online_integration_probe.time, "monotonic", expired_clock
-    )
+    monkeypatch.setattr(online_integration_probe, "monotonic", expired_clock)
     try:
         with pytest.raises(AssertionError, match="安全参数服务未发现"):
             online_integration_probe.main()

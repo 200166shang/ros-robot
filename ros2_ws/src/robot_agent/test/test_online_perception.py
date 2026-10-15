@@ -1,7 +1,6 @@
 """从交互输入验证感知动作、真实回执与后续动作停止。"""
 
 import asyncio
-import threading
 
 import pytest
 from test_online_interaction import FixedProvider, await_reconciliation
@@ -30,7 +29,7 @@ class PerceptionInterface:
             "detail": "采集请求已发布，设备状态未确认",
         }
 
-    def set_enabled(self, kind, enabled, deadline):
+    async def set_enabled(self, kind, enabled, deadline):
         """返回明确的服务结果。"""
         self.events.append((kind, enabled))
         return self.failure or {"status": "real_success", "detail": "服务确认"}
@@ -90,16 +89,16 @@ def test_late_fusion_does_not_start_follow_or_retry():
 
     async def scenario():
         """同一循环持有回合、连接与迟到回执。"""
-        release = threading.Event()
+        release = asyncio.Event()
 
         class LateInterface(PerceptionInterface):
             """融合服务等待外部回执。"""
 
-            def set_enabled(self, kind, enabled, deadline):
+            async def set_enabled(self, kind, enabled, deadline):
                 """记录请求，并在融合阶段阻塞。"""
                 if kind == "fusion":
-                    release.wait(2)
-                return super().set_enabled(kind, enabled, deadline)
+                    await release.wait()
+                return await super().set_enabled(kind, enabled, deadline)
 
         interface = LateInterface()
         registry = create_default_actions().registry
@@ -376,3 +375,75 @@ def test_simulation_and_perception_share_one_turn_after_main_merge():
         ]
 
     asyncio.run(scenario())
+
+
+def test_camera_publication_respects_explicit_expired_deadline():
+    """单独采集动作也不得在期限后发布请求。"""
+
+    async def run():
+        """通过注册表 Interface 显式传入已经过期的动作期限。"""
+        interface = PerceptionInterface()
+        registry = create_default_actions().registry
+        registry.register_many(
+            perception_actions(PerceptionActions(interface))
+        )
+        plan = registry.bind_plan(
+            {"actions": [{"name": "start_camera", "arguments": {}}]}
+        )
+        result = await registry.invoke(plan.commands[0], 0.0)
+        assert result.status == "failed"
+        assert interface.events == []
+
+    asyncio.run(run())
+
+
+def test_close_during_original_wait_records_receipt_without_later_actions():
+    """应用退出接纳后仍确认已提交动作，但关闭时不能提交计划余项。"""
+
+    async def run():
+        """外部服务在关闭已开始后才交付原请求的成功回执。"""
+        submitted = asyncio.Event()
+        release = asyncio.Event()
+
+        class ClosingDevice(PerceptionInterface):
+            """只控制设备回执时机，不替换应用或执行状态。"""
+
+            async def set_enabled(self, kind, enabled, deadline):
+                """设备请求已提交，退出不能把它当作设备取消。"""
+                submitted.set()
+                await release.wait()
+                return await super().set_enabled(kind, enabled, deadline)
+
+        interface = ClosingDevice()
+        registry = create_default_actions().registry
+        registry.register_many(
+            perception_actions(PerceptionActions(interface))
+        )
+        agent = Agent(
+            FixedProvider(
+                [
+                    {"name": "enable_lidar", "arguments": {}},
+                    {"name": "head_nod", "arguments": {}},
+                ]
+            ),
+            registry,
+            action_timeout=1,
+        )
+        original = asyncio.create_task(agent.submit("融合后点头"))
+        await submitted.wait()
+        closing = asyncio.create_task(
+            agent.aclose(asyncio.get_running_loop().time() + 1)
+        )
+        await asyncio.sleep(0)
+        release.set()
+        result = await original
+        await closing
+        assert [a.status for a in result.actions] == [
+            "real_success",
+            "not_executed",
+        ]
+        assert agent.last_result.turn_id == result.turn_id
+        assert agent.last_result.actions[0].status == "real_success"
+        assert interface.events == [("fusion", True)]
+
+    asyncio.run(run())
