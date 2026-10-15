@@ -247,11 +247,16 @@ class Agent:
         self.last_result = TurnResult.from_execution(result)
         return self.last_result
 
-    async def aclose(self) -> None:
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """停止接纳和重试，取消本地模型 I/O 并释放连接池。"""
         self._closed = True
         task = self._model_task
         try:
+            action_result = await self._execution.aclose(
+                time.monotonic() if deadline is None else deadline
+            )
+            if action_result is not None:
+                self.last_result = TurnResult.from_execution(action_result)
             if task is not None and not task.done():
                 task.cancel()
                 try:

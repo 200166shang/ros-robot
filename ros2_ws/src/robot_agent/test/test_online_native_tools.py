@@ -367,7 +367,7 @@ def test_registry_passes_one_explicit_deadline_through_compound_action():
             """发布请求但不假称相机硬件确认。"""
             return {"status": "real_success", "detail": "请求已发布"}
 
-        def set_enabled(self, kind, enabled, deadline):
+        async def set_enabled(self, kind, enabled, deadline):
             """两步服务共同消费调用者预算。"""
             deadlines.append((kind, deadline))
             return {"status": "real_success", "detail": "已确认"}

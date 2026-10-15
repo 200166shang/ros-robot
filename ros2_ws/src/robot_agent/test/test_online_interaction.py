@@ -879,3 +879,21 @@ def test_reconciled_turn_cannot_clear_later_pending_turn():
             release.set()
 
     asyncio.run(scenario())
+
+
+def test_close_keeps_latest_chat_result_after_an_earlier_action():
+    """没有在途动作时，关闭不能用旧执行快照覆盖最后一轮聊天事实。"""
+
+    async def run():
+        """动作、聊天和关闭使用同一 Agent 生命周期。"""
+        provider = FixedProvider([{"name": "head_nod", "arguments": {}}])
+        registry = create_default_actions().registry
+        agent = Agent(provider, registry)
+        first = await agent.submit("点头")
+        provider.actions = []
+        latest = await agent.submit("聊天")
+        assert first.turn_id != latest.turn_id
+        await agent.aclose()
+        assert agent.last_result.turn_id == latest.turn_id
+
+    asyncio.run(run())

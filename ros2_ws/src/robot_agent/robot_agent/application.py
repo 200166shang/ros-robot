@@ -263,10 +263,12 @@ class AgentApplication:
         if self._closing is None:
             self._closed = True
             self._output.cancel()
-            self._closing = asyncio.create_task(self._close_resources())
+            self._closing = asyncio.create_task(
+                self._close_resources(deadline)
+            )
         await asyncio.shield(self._closing)
 
-    async def _close_resources(self) -> None:
+    async def _close_resources(self, deadline: Optional[float]) -> None:
         """应用持有唯一清理任务，所有退出等待者共同等待资源释放。"""
         try:
             if self._input is not None:
@@ -279,4 +281,4 @@ class AgentApplication:
                 finally:
                     await self._output.aclose()
             finally:
-                await self._agent.aclose()
+                await self._agent.aclose(deadline)
