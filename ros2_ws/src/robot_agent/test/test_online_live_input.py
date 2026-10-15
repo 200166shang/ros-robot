@@ -389,6 +389,14 @@ def test_programming_errors_surface_after_resource_cleanup(
         original_send = ClientConnection.send
         original_recv = ClientConnection.recv
         sockets = []
+        error_ready = asyncio.Event()
+        release_error = asyncio.Event()
+
+        async def programming_error():
+            """就绪后门控注入，隔离启动耗时与错误传播期限。"""
+            error_ready.set()
+            await release_error.wait()
+            raise RuntimeError("fixture programming error")
 
         class BrokenPcm(PcmFixture):
             """在外部设备操作中注入确定性的编程错误。"""
@@ -397,7 +405,7 @@ def test_programming_errors_surface_after_resource_cleanup(
                 """在网络握手完成后才触发采集错误。"""
                 await until(lambda: bool(sockets))
                 if operation == "capture":
-                    raise RuntimeError("fixture programming error")
+                    await programming_error()
                 return await super().read(size, timeout)
 
             async def aclose(self):
@@ -409,13 +417,13 @@ def test_programming_errors_surface_after_resource_cleanup(
         async def send(socket, message, *args, **kwargs):
             """握手控制消息不变，音频发送可注入编程错误。"""
             if operation == "send" and isinstance(message, bytes):
-                raise RuntimeError("fixture programming error")
+                await programming_error()
             return await original_send(socket, message, *args, **kwargs)
 
         async def recv(socket, *args, **kwargs):
             """握手之后接收可以暴露编程错误。"""
             if operation == "receive" and sockets:
-                raise RuntimeError("fixture programming error")
+                await programming_error()
             return await original_recv(socket, *args, **kwargs)
 
         async def handler(socket):
@@ -432,7 +440,10 @@ def test_programming_errors_surface_after_resource_cleanup(
             if operation == "close":
                 assert await live.listen(0.03) is None
             else:
+                assert await live.listen(0.03) is None
+                await asyncio.wait_for(error_ready.wait(), 2)
                 with pytest.raises(RuntimeError, match="programming error"):
+                    release_error.set()
                     await live.listen(1)
             with pytest.raises(RuntimeError, match="programming error"):
                 await live.aclose()
