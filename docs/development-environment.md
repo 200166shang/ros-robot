@@ -77,7 +77,9 @@ Do not override `PYTHON_EXECUTABLE` or `Python3_EXECUTABLE`. The existing
 `colcon.sh`, `run-demo.sh`, and `run-tracking.sh` entries share this environment.
 Only `sync` installs dependencies; ordinary commands neither synchronize nor
 change the lockfile. Missing environments report `./scripts/dev.sh sync`.
-`lint` checks formatting and Ruff rules; `format` applies formatting. C++
+`test-ros` explicitly selects pytest so colcon includes function-style Python
+tests as well as unittest cases. `lint` checks formatting and Ruff rules;
+`format` applies formatting. C++
 formatting still uses `scripts/format-cpp.sh`.
 
 `verify` imports system ROS/OpenCV and project web/speech dependencies, loads

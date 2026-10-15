@@ -63,7 +63,7 @@ case "$command_name" in
     project_environment workspace
     cd "$PROJECT_ROOT/ros2_ws"
     if [[ "$command_name" == test-ros ]]; then
-      exec "$PROJECT_PYTHON" -m colcon test --return-code-on-test-failure "$@"
+      exec "$PROJECT_PYTHON" -m colcon test --python-testing pytest --return-code-on-test-failure "$@"
     fi
     exec "$PROJECT_PYTHON" -m colcon test-result "$@"
     ;;
@@ -73,10 +73,14 @@ case "$command_name" in
     exec "$PROJECT_PYTHON" /opt/ros/foxy/bin/ros2 "$@"
     ;;
   colcon)
-    if [[ "${1:-}" == build ]]; then
-      shift
-      exec "$SCRIPT_DIR/dev.sh" build "$@"
-    fi
+    case "${1:-}" in
+      build|test|test-result)
+        colcon_command="$1"
+        shift
+        if [[ "$colcon_command" == test ]]; then colcon_command=test-ros; fi
+        exec "$SCRIPT_DIR/dev.sh" "$colcon_command" "$@"
+        ;;
+    esac
     project_environment base
     cd "$PROJECT_ROOT/ros2_ws"
     exec "$PROJECT_PYTHON" -m colcon "$@"

@@ -164,3 +164,28 @@ def test_local_voice_defaults_use_the_project_speech_executables():
     assert str(REPO_ROOT / ".venv/bin/sherpa-onnx-offline-tts") in (
         result.stdout.splitlines()
     )
+
+
+@pytest.mark.parametrize(
+    "entry_point", [("dev.sh", "test-ros"), ("colcon.sh", "test")]
+)
+def test_ros_workspace_discovers_pytest_function_cases(entry_point):
+    """ROS测试入口执行函数式音频测试，不能只发现unittest类。"""
+    result = subprocess.run(
+        [
+            str(REPO_ROOT / "scripts" / entry_point[0]),
+            entry_point[1],
+            "--packages-select",
+            "robot_audio",
+            "--executor",
+            "sequential",
+            "--event-handlers",
+            "console_direct+",
+            "--pytest-args",
+            "-q",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "7 passed" in result.stdout
