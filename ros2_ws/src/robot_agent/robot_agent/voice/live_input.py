@@ -186,11 +186,19 @@ class LiveSpeechInput:
         except OSError as error:
             self._error = error
         finally:
-            self._closed.set()
+            self._cancel_io()
+
+    def _cancel_io(self) -> None:
+        """任一关闭失败也继续释放其余资源，并唤醒业务调用者。"""
+        self._closed.set()
+        try:
             self._connection.close()
-            self._source.close()
-            with self._condition:
-                self._condition.notify_all()
+        finally:
+            try:
+                self._source.close()
+            finally:
+                with self._condition:
+                    self._condition.notify_all()
 
     def _accept(self, event: Dict) -> bool:
         """只交付完整非心跳句；时间戳排除暂停期间及恢复前迟到结果。"""
@@ -219,17 +227,21 @@ class LiveSpeechInput:
             self._condition.notify_all()
             return True
 
+    @staticmethod
+    def _join_call(call: Optional[Future]) -> None:
+        """回收传输线程；取消I/O可失败，编程异常继续显露。"""
+        if call is not None:
+            try:
+                call.result(timeout=6)
+            except (OSError, websocket.WebSocketException):
+                pass
+
     def close(self) -> None:
-        """先取消设备和在线I/O，再回收两个传输线程。"""
-        self._closed.set()
-        self._connection.close()
-        self._source.close()
-        with self._condition:
-            self._condition.notify_all()
-        for call in (self._reader, self._receiver):
-            if call is not None:
-                try:
-                    call.result(timeout=6)
-                except (OSError, websocket.WebSocketException):
-                    # 设备和网络取消可失败，编程异常仍显露。
-                    pass
+        """所有关闭和等待步骤均执行，编程异常在资源回收后显露。"""
+        try:
+            self._cancel_io()
+        finally:
+            try:
+                self._join_call(self._reader)
+            finally:
+                self._join_call(self._receiver)

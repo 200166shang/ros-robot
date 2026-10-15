@@ -188,3 +188,37 @@ def test_close_during_connection_creation_releases_late_socket(monkeypatch):
         live.close()
     assert socket.closed
     assert socket.commands == []
+
+
+@pytest.mark.parametrize("failing_resource", ["socket", "source"])
+def test_close_failure_still_releases_other_resources(
+    monkeypatch, failing_resource
+):
+    """关闭步骤出现编程异常时，其余设备回收仍必须执行并显露错误。"""
+
+    class ClosingSocket(SpeechSocket):
+        """在传输资源Seam注入关闭异常。"""
+
+        def close(self, timeout=None):
+            """标记真实关闭后抛出可观察的编程错误。"""
+            super().close(timeout)
+            if failing_resource == "socket":
+                raise RuntimeError("cleanup failure")
+
+    class ClosingSource(PcmFixture):
+        """在设备资源Seam注入关闭异常。"""
+
+        def close(self):
+            """设备仍需取消读取，再向调用者显露错误。"""
+            super().close()
+            if failing_resource == "source":
+                raise RuntimeError("cleanup failure")
+
+    socket, source = ClosingSocket(), ClosingSource()
+    transport(monkeypatch, [socket])
+    live = LiveSpeechInput({}, source)
+    live.listen(0.02)
+    until(lambda: bool(socket.frames))
+    with pytest.raises(RuntimeError, match="cleanup failure"):
+        live.close()
+    assert socket.closed and source.closed.is_set()

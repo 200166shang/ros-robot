@@ -107,8 +107,10 @@ class OnlineVoiceRosNode(Node):
     def stop(self) -> None:
         """关闭语音连接并取消录制/播放，回收业务线程后才销毁节点。"""
         self._stop.set()
-        self._voice.close()
-        self._microphone.join()
+        try:
+            self._voice.close()
+        finally:
+            self._microphone.join()
 
 
 def main(args: Optional[List[str]] = None) -> None:
@@ -123,8 +125,12 @@ def main(args: Optional[List[str]] = None) -> None:
         pass
     finally:
         # 2. 录音/播放取消及业务线程回收完成后再销毁publisher。
-        if node is not None:
-            node.stop()
-            node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        try:
+            if node is not None:
+                try:
+                    node.stop()
+                finally:
+                    node.destroy_node()
+        finally:
+            if rclpy.ok():
+                rclpy.shutdown()

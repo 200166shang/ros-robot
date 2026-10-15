@@ -89,12 +89,16 @@ class PcmMicrophone:
             process = self._process
             if process is None:
                 return
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-            if process.stdout is not None:
-                process.stdout.close()
+            try:
+                if process.poll() is None:
+                    try:
+                        process.terminate()
+                    finally:
+                        try:
+                            process.wait(timeout=1)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+            finally:
+                if process.stdout is not None:
+                    process.stdout.close()
