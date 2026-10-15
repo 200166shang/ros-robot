@@ -22,6 +22,7 @@ from robot_agent.conversation.provider import (
     ModelTransportError,
 )
 from robot_agent.results import ModelReply, TurnResult, make_result
+from robot_agent.shutdown import ShutdownError, finish_tasks
 
 MAX_INPUT_LENGTH = 8192
 DEFAULT_MODEL_ATTEMPTS = 3
@@ -56,6 +57,7 @@ class Agent:
         self._model_task: Optional[asyncio.Task] = None
         self.last_result: Optional[TurnResult] = None
         self._execution = ActionExecution(actions, action_timeout)
+        self._closing: Optional[asyncio.Task] = None
 
     async def submit(self, text: str) -> TurnResult:
         """单一调用者按序提交；模型仍在途或动作未知时不重叠执行。"""
@@ -83,6 +85,9 @@ class Agent:
             return make_result(turn_id, "rejected", "文本为空或过长。")
 
         self._processing = True
+        self.last_result = make_result(
+            turn_id, "failed", "回合尚未完成，未提交动作。"
+        )
         try:
             # 1. 模型调用与解析失败均发生在提交任何动作之前。
             try:
@@ -92,17 +97,26 @@ class Agent:
                     attempts=self._model_attempts,
                 )
             except asyncio.TimeoutError:
-                return make_result(
+                self.last_result = make_result(
                     turn_id, "failed", "在线模型超时，本轮未发出动作。"
                 )
+                return self.last_result
             except ModelProtocolError:
-                return make_result(
+                self.last_result = make_result(
                     turn_id, "rejected", "模型输出无效，全部动作未执行。"
                 )
+                return self.last_result
             except ModelTransportError:
-                return make_result(
+                self.last_result = make_result(
                     turn_id, "failed", "在线模型不可用，本轮未发出动作。"
                 )
+                return self.last_result
+
+            if self._closed:
+                self.last_result = make_result(
+                    turn_id, "failed", "入口退出，未提交动作。"
+                )
+                return self.last_result
 
             # 2. 普通聊天使用模型文字；动作整表校验后才可提交。
             tool_call = model_reply.tool_call
@@ -116,9 +130,10 @@ class Agent:
                     raise ValueError("未知工具")
                 plan = self._actions.bind_plan(tool_call.arguments)
             except ValueError:
-                return make_result(
+                self.last_result = make_result(
                     turn_id, "rejected", "动作参数无效，全部动作未执行。"
                 )
+                return self.last_result
 
             # 3. 动作模块维护执行事实，Agent 更新记忆。
             try:
@@ -135,6 +150,10 @@ class Agent:
             execution = self._execution.last_result
             if execution is not None and execution.turn_id == turn_id:
                 self.last_result = TurnResult.from_execution(execution)
+            elif self._closed:
+                # 取消摘要不抹掉实际回复；生成退出时的新事实快照。
+                assert self.last_result is not None
+                self.last_result = replace(self.last_result)
             raise
         finally:
             self._processing = False
@@ -165,7 +184,7 @@ class Agent:
             return result
         notices = memory.record(text, result.reply)
         prompt = memory.summary_prompt()
-        if prompt is not None:
+        if prompt is not None and not self._closed:
             try:
                 reply = await self._complete(prompt, tools=None, attempts=1)
                 if (
@@ -179,7 +198,8 @@ class Agent:
             except (ModelTransportError, ModelProtocolError):
                 notices.append("summary_failed")
             else:
-                notices.extend(memory.apply_summary(reply.response))
+                if not self._closed:
+                    notices.extend(memory.apply_summary(reply.response))
         self.last_result = replace(result, memory_warnings=tuple(notices))
         return self.last_result
 
@@ -247,22 +267,56 @@ class Agent:
         self.last_result = TurnResult.from_execution(result)
         return self.last_result
 
-    async def aclose(self, deadline: Optional[float] = None) -> None:
-        """停止接纳和重试，取消本地模型 I/O 并释放连接池。"""
+    def stop(self) -> None:
+        """在第一次退出等待前同步停止模型重试与所有动作准入。"""
+        if self._closed:
+            return
         self._closed = True
+        self._execution.stop()
         task = self._model_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
+        """关闭调用共享原清理；原动作仍可在剩余预算内接收回执。"""
+        if self._closing is None:
+            self.stop()
+            self._closing = asyncio.create_task(
+                self._close_resources(deadline)
+            )
+        await asyncio.shield(self._closing)
+
+    async def _close_resources(self, deadline: Optional[float]) -> None:
+        """无论动作收尾是否失败，模型连接和能力资源都必须尝试关闭。"""
+        tasks = [asyncio.create_task(self._provider.aclose(deadline))]
+        task = self._model_task
+        if task is not None:
+            tasks.append(task)
+        errors = []
         try:
             action_result = await self._execution.aclose(
                 time.monotonic() if deadline is None else deadline
             )
             if action_result is not None:
                 self.last_result = TurnResult.from_execution(action_result)
-            if task is not None and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            self._observe_retired_model()
-        finally:
-            await self._provider.aclose()
+        except BaseException as error:
+            if (
+                self._execution.blocked
+                and self._execution.last_result is not None
+            ):
+                self.last_result = TurnResult.from_execution(
+                    self._execution.last_result
+                )
+            errors.append(error)
+        try:
+            await finish_tasks(tasks, deadline)
+        except BaseException as error:
+            errors.append(error)
+        try:
+            await self._actions.aclose(deadline)
+        except BaseException as error:
+            errors.append(error)
+        if errors:
+            if len(errors) == 1:
+                raise errors[0]
+            raise ShutdownError(errors)

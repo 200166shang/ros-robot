@@ -38,7 +38,11 @@ def test_synthesis_retries_share_total_stage_budget(tmp_path):
             await asyncio.sleep(0.02)
             raise SpeechTransportError("offline")
 
-        async def aclose(self):
+        def stop(self):
+            """测试Adapter没有尚未提交的设备步骤。"""
+            pass
+
+        async def aclose(self, deadline=None):
             """此提供方没有本地连接。"""
 
     async def scenario():
@@ -73,7 +77,11 @@ def test_file_failure_is_not_retried_as_transient_synthesis(tmp_path):
             self.attempts += 1
             raise OSError("disk full")
 
-        async def aclose(self):
+        def stop(self):
+            """测试Adapter没有尚未提交的设备步骤。"""
+            pass
+
+        async def aclose(self, deadline=None):
             """无连接可关闭。"""
 
     async def scenario():
@@ -102,7 +110,11 @@ def test_cancel_retry_delay_saves_confirmed_turn_before_propagating(tmp_path):
             """只有临时网络错误允许进入重试延迟。"""
             raise SpeechTransportError("offline")
 
-        async def aclose(self):
+        def stop(self):
+            """测试Adapter没有尚未提交的设备步骤。"""
+            pass
+
+        async def aclose(self, deadline=None):
             """此提供方没有外部连接。"""
 
     async def scenario():

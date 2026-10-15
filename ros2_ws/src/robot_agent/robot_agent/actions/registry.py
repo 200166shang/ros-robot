@@ -12,6 +12,10 @@ from robot_agent.actions.contracts import (
     ActionInput,
     NoArguments,
 )
+from robot_agent.actions.perception import (
+    PerceptionActions,
+    perception_actions,
+)
 from robot_agent.results import ActionReceipt, _freeze, _json_value
 
 CONFIRMED_SUCCESS = frozenset({"simulated_success", "real_success"})
@@ -59,6 +63,7 @@ class ActionRegistry:
     def __init__(self) -> None:
         """创建空目录，能力在组装时注册。"""
         self._handlers: Dict[str, ActionHandler] = {}
+        self._perception: Optional[PerceptionActions] = None
 
     def register(
         self,
@@ -75,6 +80,21 @@ class ActionRegistry:
     def register_many(self, handlers: Mapping[str, ActionHandler]) -> None:
         """配置阶段批量加载或替换能力。"""
         self._handlers.update(handlers)
+
+    def register_perception(self, perception: PerceptionActions) -> None:
+        """注册感知能力并接管其设备准入和回执桥接生命周期。"""
+        self._perception = perception
+        self.register_many(perception_actions(perception))
+
+    def stop(self) -> None:
+        """关闭时阻止组合动作的新设备步骤。"""
+        if self._perception is not None:
+            self._perception.stop()
+
+    async def aclose(self, deadline: Optional[float]) -> None:
+        """执行已停止等待原回执之后，才释放感知Adapter。"""
+        if self._perception is not None:
+            await self._perception.aclose(deadline)
 
     @property
     def tool_schema(self) -> Dict[str, Any]:

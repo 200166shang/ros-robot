@@ -36,7 +36,11 @@ class FixedSpeech:
         """记录半双工恢复。"""
         self.events.append("resume")
 
-    async def aclose(self):
+    def stop(self):
+        """测试Adapter没有尚未提交的设备步骤。"""
+        pass
+
+    async def aclose(self, deadline=None):
         """记录连接关闭。"""
         if not self.events or self.events[-1] != "close":
             self.events.append("close")
@@ -63,7 +67,7 @@ class FixedModel:
         )
         return raw
 
-    async def aclose(self):
+    async def aclose(self, deadline=None):
         """固定模型没有本地连接资源。"""
         pass
 
@@ -84,7 +88,11 @@ class FixedTTS:
             raise SpeechTransportError("temporary provider failure")
         destination.write_bytes(b"audio fixture")
 
-    async def aclose(self):
+    def stop(self):
+        """测试Adapter没有尚未提交的设备步骤。"""
+        pass
+
+    async def aclose(self, deadline=None):
         """固定合成器没有外部资源。"""
 
 
@@ -398,12 +406,18 @@ def test_filtered_input_does_not_extend_silence_and_playback_failure_recovers(
         """同一循环持有回合、连接与迟到回执。"""
         now = [0.0]
 
-        async def fail_playback(path):
+        class FailingPlayback:
             """模拟缺失播放设备。"""
-            raise OSError("device absent")
+
+            async def __call__(self, path):
+                """实际播放时明确报告设备失败。"""
+                raise OSError("device absent")
+
+            async def aclose(self, deadline=None):
+                """无持有的外部资源。"""
 
         voice, speech, model, tts = make_voice(
-            tmp_path, clock=lambda: now[0], playback=fail_playback
+            tmp_path, clock=lambda: now[0], playback=FailingPlayback()
         )
         (await voice.submit_transcript("小沫小沫"))
         model.actions = [

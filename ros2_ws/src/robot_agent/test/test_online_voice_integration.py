@@ -187,7 +187,11 @@ def test_wav_runtime_preserves_actions_reply_audio_and_record(
             try:
                 result = await capture_turn(voice, str(fixture_wav(tmp_path)))
             finally:
-                await voice.aclose()
+                if output_failure == "save":
+                    with pytest.raises(OSError, match="退出回合记录保存失败"):
+                        await voice.aclose()
+                else:
+                    await voice.aclose()
 
         assert model_inputs == ["真实句一。真实句二。"]
         assert result.transcript == model_inputs[0]

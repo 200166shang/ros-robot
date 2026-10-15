@@ -5,9 +5,10 @@ import json
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Optional, Protocol
+from typing import Awaitable, Dict, Optional, Protocol
 
 from robot_agent.results import TurnResult, VoiceRecord, result_to_json
+from robot_agent.shutdown import finish_tasks
 from robot_agent.voice._async_speech_task import SpeechTransportError
 
 
@@ -20,8 +21,24 @@ class SpeechOutput(Protocol):
         """按期限合成，失败抛出 I/O 异常，不能留下成功文件。"""
         ...
 
-    async def aclose(self) -> None:
+    def stop(self) -> None:
+        """同步停止合成准入。"""
+        ...
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """释放合成连接。"""
+        ...
+
+
+class Playback(Protocol):
+    """可等待播放与显式资源回收的设备Seam。"""
+
+    async def __call__(self, path: Path) -> None:
+        """播放一个完整音频文件。"""
+        ...
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
+        """在同一退出期限内回收播放器。"""
         ...
 
 
@@ -32,7 +49,7 @@ class VoiceOutput:
         self,
         speech_output: SpeechOutput,
         output_dir: Path,
-        playback: Optional[Callable[[Path], Awaitable[None]]],
+        playback: Optional[Playback],
         speech_timeout: float,
         tts_attempts: int,
         failure_threshold: int,
@@ -53,6 +70,8 @@ class VoiceOutput:
         self._failures = 0
         self._tts_enabled = True
         self._transcripts: Dict[str, str] = {}
+        self._last_record: Optional[VoiceRecord] = None
+        self._pending_record: Optional[VoiceRecord] = None
 
     async def complete(
         self,
@@ -90,27 +109,53 @@ class VoiceOutput:
 
     def cancel(self) -> None:
         """停止新重试与播放，取消输出正在持有的本地I/O。"""
+        if self._closed:
+            return
         self._closed = True
+        self._output.stop()
         if self._active is not None:
             self._active.cancel()
 
-    async def aclose(self) -> None:
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """回收合成、播放器和延迟任务，再释放语音连接。"""
         if self._closing is None:
             self.cancel()
-            self._closing = asyncio.create_task(self._close_resources())
+            self._closing = asyncio.create_task(
+                self._close_resources(deadline)
+            )
         await asyncio.shield(self._closing)
 
-    async def _close_resources(self) -> None:
+    async def _close_resources(self, deadline: Optional[float]) -> None:
         """清理过程独立于外部关闭等待者的取消。"""
-        try:
-            if self._active is not None:
-                try:
-                    await self._active
-                except (asyncio.CancelledError, OSError):
-                    pass
-        finally:
-            await self._output.aclose()
+        tasks = [asyncio.create_task(self._output.aclose(deadline))]
+        if self._active is not None:
+            tasks.append(self._active)
+        if self._playback is not None:
+            tasks.append(asyncio.create_task(self._playback.aclose(deadline)))
+        await finish_tasks(tasks, deadline)
+
+    @property
+    def last_record(self) -> Optional[VoiceRecord]:
+        """最近输出快照供应用判断退出是否已有当前回合记录。"""
+        return self._last_record
+
+    def save_shutdown(
+        self, result: TurnResult, text: str, state: str
+    ) -> VoiceRecord:
+        """退出只保存新事实，不重新合成；保留已经完成的音频和输出事实。"""
+        previous = self._last_record
+        if previous is None or previous.turn_id != result.turn_id:
+            previous = self._pending_record
+        if previous is not None and previous.turn_id == result.turn_id:
+            record = replace(previous, turn=result)
+        else:
+            record = VoiceRecord(
+                result, self._transcripts.get(result.turn_id, text), state
+            )
+        record = self._save(record)
+        if record.record_status == "failed":
+            raise OSError("退出回合记录保存失败：" + result.turn_id)
+        return record
 
     async def _wait(
         self, operation: Awaitable[None], timeout: Optional[float] = None
@@ -185,6 +230,14 @@ class VoiceOutput:
         destination = self._directory / (record.turn_id + ".json")
         temporary = destination.with_suffix(".json.tmp")
         record = replace(record, record_status="completed")
+        self._last_record = record
+        if any(action.status == "unknown" for action in record.actions):
+            self._pending_record = record
+        elif (
+            self._pending_record is not None
+            and self._pending_record.turn_id == record.turn_id
+        ):
+            self._pending_record = None
         try:
             temporary.write_text(
                 json.dumps(
@@ -194,7 +247,8 @@ class VoiceOutput:
             )
             temporary.replace(destination)
         except OSError:
-            return replace(record, record_status="failed")
+            self._last_record = replace(record, record_status="failed")
+            return self._last_record
         finally:
             if temporary.exists():
                 try:

@@ -7,12 +7,13 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from robot_agent.conversation.agent import Agent
 from robot_agent.results import TurnResult, VoiceRecord, make_result
+from robot_agent.shutdown import ShutdownError, finish_tasks
 from robot_agent.voice.live_input import SpeechInput
-from robot_agent.voice.output import SpeechOutput, VoiceOutput
+from robot_agent.voice.output import Playback, SpeechOutput, VoiceOutput
 from robot_agent.voice.session import VoiceSession
 
 
@@ -23,7 +24,11 @@ class RecordingInput(Protocol):
         """验证并识别完整文件，输入失败不能启动Agent。"""
         ...
 
-    async def aclose(self) -> None:
+    def stop(self) -> None:
+        """同步停止新文件任务与重试。"""
+        ...
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """取消文件识别并释放连接。"""
         ...
 
@@ -38,7 +43,7 @@ class AgentApplication:
         speech_output: SpeechOutput,
         output_dir: Path,
         music_playing: Callable[[], bool],
-        playback: Optional[Callable[[Path], Awaitable[None]]] = None,
+        playback: Optional[Playback] = None,
         silence_timeout: float = 120.0,
         speech_timeout: float = 60.0,
         tts_attempts: int = 3,
@@ -46,6 +51,7 @@ class AgentApplication:
         retry_delay: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
         recording_input: Optional[RecordingInput] = None,
+        shutdown_timeout: float = 5.0,
     ) -> None:
         """接管Agent、会话、持续输入和独立文件识别的资源所有权。"""
         if not math.isfinite(speech_timeout) or speech_timeout <= 0:
@@ -54,6 +60,11 @@ class AgentApplication:
             raise ValueError("重试与降级阈值至少为一")
         if not math.isfinite(retry_delay) or retry_delay < 0:
             raise ValueError("重试间隔必须为非负有限秒数")
+        if not math.isfinite(shutdown_timeout) or shutdown_timeout <= 0:
+            raise ValueError("shutdown_timeout 必须为正有限秒数")
+        self._shutdown_timeout = shutdown_timeout
+        self._active: Optional[asyncio.Task] = None
+        self._turn_text = ""
         self._agent = agent
         self._input = speech_input
         self._recording = recording_input
@@ -73,6 +84,8 @@ class AgentApplication:
         self._closed = False
         self._processing = False
         self._closing: Optional[asyncio.Task] = None
+        self._shutdown_deadline: Optional[float] = None
+        self._result_at_stop: Optional[TurnResult] = None
 
     @property
     def state(self) -> str:
@@ -136,6 +149,8 @@ class AgentApplication:
         if rejected is not None:
             return rejected
         self._processing = True
+        self._active = asyncio.current_task()
+        self._turn_text = text
         paused = False
         heard_input = False
         result = make_result(uuid.uuid4().hex, "failed", "语音回合失败。")
@@ -183,6 +198,7 @@ class AgentApplication:
                     self._session.mark_activity(self._clock())
             finally:
                 self._processing = False
+                self._active = None
 
     async def submit_recording(
         self, path: Path, direct: bool = True
@@ -198,6 +214,8 @@ class AgentApplication:
                 )
             )
         self._processing = True
+        self._active = asyncio.current_task()
+        self._turn_text = ""
         try:
             try:
                 text = await self._recording.recognize(
@@ -218,6 +236,7 @@ class AgentApplication:
                 )
         finally:
             self._processing = False
+            self._active = None
         return await self.submit_transcript(text, direct=direct)
 
     async def reconcile(self, turn_id: str) -> VoiceRecord:
@@ -230,6 +249,8 @@ class AgentApplication:
                 make_result(uuid.uuid4().hex, "rejected", "回合标识无效。")
             )
         self._processing = True
+        self._active = asyncio.current_task()
+        self._turn_text = ""
         try:
             if self._input is not None:
                 self._input.pause()
@@ -244,6 +265,7 @@ class AgentApplication:
                 self._session.mark_activity(self._clock())
             finally:
                 self._processing = False
+                self._active = None
 
     async def clear_memory(self) -> TurnResult:
         """空闲时由同一应用清空记忆。"""
@@ -258,27 +280,107 @@ class AgentApplication:
         """在回合间显式恢复在线合成。"""
         self._output.enable_tts()
 
+    @property
+    def shutdown_timeout(self) -> float:
+        """正式入口复用已验证配置，不在各模块重新创建总预算。"""
+        return self._shutdown_timeout
+
+    @property
+    def shutdown_deadline(self) -> Optional[float]:
+        """第一次关闭建立的期限供最终ROS资源收尾复用。"""
+        return self._shutdown_deadline
+
+    def stop(self) -> None:
+        """退出入口同步停止准入，ROS接线第一次等待前即可调用。"""
+        if self._closed:
+            return
+        self._result_at_stop = self._agent.last_result
+        self._closed = True
+        self._agent.stop()
+        self._output.cancel()
+        if self._input is not None:
+            self._input.stop()
+        if self._recording is not None and self._recording is not self._input:
+            self._recording.stop()
+
     async def aclose(self, deadline: Optional[float] = None) -> None:
-        """先停止接纳与播放，再关闭输入输出；处理收尾不会恢复输入。"""
+        """立即停止新回合、动作和重试，唯一清理任务使用同一绝对期限。"""
         if self._closing is None:
-            self._closed = True
-            self._output.cancel()
+            deadline = (
+                time.monotonic() + self._shutdown_timeout
+                if deadline is None
+                else deadline
+            )
+            self._shutdown_deadline = deadline
+            self.stop()
             self._closing = asyncio.create_task(
-                self._close_resources(deadline)
+                self._close_resources(deadline, self._result_at_stop)
             )
         await asyncio.shield(self._closing)
 
-    async def _close_resources(self, deadline: Optional[float]) -> None:
-        """应用持有唯一清理任务，所有退出等待者共同等待资源释放。"""
+    async def _close_resources(
+        self, deadline: float, original_result: Optional[TurnResult]
+    ) -> None:
+        """输入、模型和输出并行回收；原动作等待期间ROS回执继续交付。"""
+        tasks = [
+            asyncio.create_task(self._agent.aclose(deadline)),
+            asyncio.create_task(self._output.aclose(deadline)),
+        ]
+        if self._input is not None:
+            tasks.append(
+                asyncio.create_task(
+                    finish_tasks(
+                        [asyncio.create_task(self._input.aclose(deadline))],
+                        deadline,
+                    )
+                )
+            )
+        if self._recording is not None and self._recording is not self._input:
+            tasks.append(
+                asyncio.create_task(
+                    finish_tasks(
+                        [
+                            asyncio.create_task(
+                                self._recording.aclose(deadline)
+                            )
+                        ],
+                        deadline,
+                    )
+                )
+            )
+        errors = []
         try:
-            if self._input is not None:
-                await self._input.aclose()
+            # 同一期限内领取所有故障，单个Closer不跳过其他资源。
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            errors.extend(
+                result
+                for result in results
+                if isinstance(result, BaseException)
+            )
         finally:
-            try:
+            active = self._active
+            if active is not None and active is not asyncio.current_task():
+                if not active.done():
+                    active.cancel()
                 try:
-                    if self._recording is not None:
-                        await self._recording.aclose()
-                finally:
-                    await self._output.aclose()
-            finally:
-                await self._agent.aclose(deadline)
+                    await finish_tasks([active], deadline)
+                except BaseException as error:
+                    errors.append(error)
+            result = self._agent.last_result
+            recorded = self._output.last_record
+            if result is not None and (
+                result is not original_result
+                or (
+                    recorded is not None and recorded.turn_id == result.turn_id
+                )
+            ):
+                try:
+                    self._output.save_shutdown(
+                        result, self._turn_text, self._session.state
+                    )
+                except OSError as error:
+                    errors.append(error)
+        if errors:
+            if len(errors) == 1:
+                raise errors[0]
+            raise ShutdownError(errors)

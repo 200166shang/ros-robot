@@ -56,7 +56,7 @@ class FixedProvider:
             else None,
         )
 
-    async def aclose(self):
+    async def aclose(self, deadline=None):
         """固定模型没有本地连接资源。"""
         pass
 
@@ -186,7 +186,7 @@ def test_complete_model_reply_executes_plan_once():
                     ),
                 )
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -262,7 +262,7 @@ def test_provider_timeout_blocks_next_turn_until_call_finishes():
                     ),
                 )
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -370,7 +370,7 @@ def test_standalone_protocol_mismatch_and_unconfirmed_receipt_rejected():
                     '{"function":[],"function":["head_nod"],"response":"好了"}'
                 )
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -700,7 +700,7 @@ def test_late_model_output_is_discarded_without_executing_actions():
                     )
                 return ModelReply("新的聊天")
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 

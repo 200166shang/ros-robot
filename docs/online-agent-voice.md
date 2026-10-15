@@ -7,7 +7,7 @@
        → 唤醒/休眠/音乐规则 → LLM/动作 → TTS/可选播放 → 清理并恢复
 ```
 
-ROS executor处理设备回执；ROS边缘暂时在受管理业务线程运行asyncio循环。
+asyncio主循环持有应用；专用ROS executor线程只接收回执。
 AgentApplication.run负责唯一listen→submit_transcript循环，ROS节点只接线
 与发布结果。应用拒绝忙碌或关闭后的新回合，没有输入话题或请求队列。
 
@@ -18,12 +18,12 @@ AgentApplication.run负责唯一listen→submit_transcript循环，ROS节点只�
 
 独立WAV先await文件识别，再复用submit_transcript(direct=True)。
 reconcile只核对原动作并关联原文本，不发起新模型或动作。忽略、过滤、
-busy不合成；识别失败和空文本只记录。旧阻塞I/O由明确持有调用句柄和
-语音资源的临时Adapter适配；业务调用者只await公开入口。
+busy不合成；识别失败和空文本只记录。模型、语音、PCM和播放全部使用
+原生异步I/O，业务调用者直接await公开入口；没有过渡阻塞Adapter。
 
 ## 外部配置与启动
 
-依赖 Python3.8、ROS2 Foxy、`websocket-client>=1.6,<2` 与robot_audio。
+依赖 Python3.8、ROS2 Foxy、`websockets==13.1`、`httpx==0.28.1` 与robot_audio。
 正常录音还需要 `arecord`（alsa-utils），播放可选，开启时使用 `aplay`。
 完整依赖和统一启动见[操作指南](online-agent.md)。
 
@@ -39,6 +39,7 @@ busy不合成；识别失败和空文本只记录。旧阻塞I/O由明确持有�
   "tts_model": "cosyvoice-v2",
   "tts_voice": "longfeifei_v2",
   "speech_timeout": 60,
+  "shutdown_timeout": 5,
   "provider_timeout": 60,
   "action_timeout": 5,
   "silence_timeout": 120,
@@ -54,18 +55,16 @@ busy不合成；识别失败和空文本只记录。旧阻塞I/O由明确持有�
 `arecord -l` 查询实际麦克风；上例为当前板端USB麦克风。默认record_device
 为default。正常入口连续读取PCM，不再按record_seconds切片；ASR最终句
 决定回合。record_executable须持续输出原始单声道PCM16/16kHz，命令由
-PcmMicrophone组装。连接建立前与重连中不缓存音频，准备完成后再说话。
+AsyncPcmMicrophone组装。连接建立前与重连中不缓存音频，准备完成后再说话。
 Agent不再定义dry_run或microphone_enabled配置和运行参数。
 缺失设备由明确的模拟实现承担；ObjectTrack自身输出模式由其配置负责，
 当前板端继续dry_run=true。感知服务负责TF、同步数据和近期扫描前提。
 
 ```bash
-source /opt/ros/foxy/setup.bash
-source /absolute/external/install/setup.bash
-ros2 run robot_agent online_voice_agent --ros-args \
+./scripts/dev.sh ros run robot_agent online_voice_agent --ros-args \
   -p config_file:=/absolute/external/config.json
 # 观察回执，不能向正常入口提交text/WAV：
-ros2 topic echo /online_agent/result std_msgs/msg/String
+./scripts/dev.sh ros topic echo /online_agent/result std_msgs/msg/String
 ```
 
 凭证仅环境读取，不写配置明文api_key。默认真实在线ASR/LLM/TTS使用
@@ -88,18 +87,22 @@ ASR仅最终句进入交互，支持有限重连；暂停时有效音频停止�
 正常入口也可退出后重启恢复。动作回复只依据确认结果。
 
 删除会话锁后仍保留实际执行约束：模型/摘要调用仍在途时，新提交返回
-busy，不重叠外部调用；动作unknown保持待核对，线程结束不等于设备确认。
+busy，不重叠外部调用；动作unknown保持待核对，本地Task结束不等于设备确认。
 单调用者可通过reconcile(turn_id)核对迟到回执，不补执行剩余动作。
 正常入口不开放文本控制话题；未知设备状态需操作者核实后停止/重启，不能
 把自动重启当作动作成功。独立验收中可直接使用公共clear_memory、reconcile
 与enable_tts Interface；退出后可删除专用记忆文件再重新开始。
 
-Ctrl+C关闭语音连接、取消并回收录制/播放子进程，等待唯一业务线程结束，
-随后销毁ROS节点。ASR、模型、TTS、文件或播放失败保留已有动作事实，
-异常不会被替换为成功。语音连接关闭使用的传输锁只协调socket生命周期，
-不承担会话或输入调度。
+Ctrl+C首先同步停止新回合、音频、模型/合成重试和所有后续设备步骤。
+shutdown_timeout默认为5秒，必须为正有限秒数；第一次关闭建立唯一绝对
+总期限，输入、输出、模型和设备回执收尾共享剩余预算。并发关闭共享原
+清理任务，取消等待者不能放弃资源回收。期限内保留原ROS回执交付，保存
+确认事实、unknown和not_executed后才关闭ROS executor；本地等待取消不
+代表设备动作撤回。已经完成的WAV和动作事实不受后续播放或保存故障影响。
+退出记录复用原turn_id的JSON；保存失败以异常明确报告。多个清理故障保留
+原始错误，其他必要Closer仍执行；没有重放、自动补执行或跨进程恢复。
 
-持续输入的线程、资源、失败与恢复规则见[设计说明](online-agent-streaming-input.md)。
+持续输入的任务、资源、失败与恢复规则见[设计说明](online-agent-streaming-input.md)。
 
 ## 独立测试入口
 
@@ -109,7 +112,7 @@ Ctrl+C关闭语音连接、取消并回收录制/播放子进程，等待唯一�
 WAV单回合CLI仅处理文件，必须提供--wav；免唤醒，不启动麦克风：
 
 ```bash
-ros2 run robot_agent online_voice_wav \
+./scripts/dev.sh ros run robot_agent online_voice_wav \
   --config /absolute/external/config.json --wav /absolute/path/existing.wav
 ```
 

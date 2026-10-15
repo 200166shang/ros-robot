@@ -17,8 +17,7 @@ robot_audio没有ROS节点或模型，在线Agent不再依赖robot_voice。
 robot_agent/
 ├── runtime.py                 # 配置读取与共同应用/Agent组装
 ├── application.py             # 异步语音回合、持续运行和关闭
-├── legacy_io.py               # 临时阻塞I/O Adapter及调用所有权
-├── calls.py                   # 阻塞I/O隔离，传回Future结果/异常
+├── shutdown.py                # 同一绝对期限的等待与可观察清理故障
 ├── results.py                 # 共同回合结果与动作记录快照
 ├── conversation/
 │   ├── agent.py               # 模型→整表校验→动作→记忆
@@ -28,7 +27,7 @@ robot_agent/
 ├── actions/
 │   ├── capabilities.py        # 默认能力组装与音乐状态查询
 │   ├── registry.py            # 已配置动作解析、整表校验与注册
-│   ├── contracts.py           # 动作契约与共享期限
+│   ├── contracts.py           # 动作输入模型与Schema契约
 │   ├── execution.py           # 顺序执行、未知状态与显式核对
 │   ├── perception.py          # 感知动作与启停顺序
 │   ├── simulation.py          # 导航、音乐、音量等模拟行为
@@ -37,7 +36,9 @@ robot_agent/
 ├── voice/
 │   ├── session.py             # 纯唤醒、休眠、静音与过滤规则
 │   ├── live_input.py          # 持续ASR、暂停丢弃与静音保活
-│   ├── speech.py              # WAV单次ASR/TTS Adapter
+│   ├── speech.py              # 原生异步WAV单次ASR/TTS Adapter
+│   ├── output.py              # 合成、播放、既有VoiceRecord保存
+│   ├── _async_speech_task.py  # socket、握手、协议校验及所有权
 │   └── runtime.py             # 复用共同组装的独立 WAV 命令
 └── ros/
     ├── voice_node.py          # 正常麦克风节点与生命周期
@@ -66,31 +67,23 @@ head/music/navigation/volume对象；自定义音乐能力须同时提供动作�
 MPP/RGA、RKNN runtime、源码外官方 SDK 头、RKNN 模型和 YDLIDAR SDK。
 不沿用旧 ROS 1 的硬编码启动路径，不修改 PWM 权限，不访问舵机驱动。
 运行依赖为 ROS 2 的 rclpy、std_msgs、std_srvs，
-以及 Python `websocket-client>=1.6,<2`。独立探针还需要
+以及 Python `websockets==13.1`、`httpx==0.28.1`。独立探针还需要
 rcl_interfaces。无需 DashScope/OpenAI SDK。
 
-以下命令均为 Bash，从本 checkout 根目录执行。首次安装 Python 依赖到
-源码外目录，让 Foxy 继续使用系统 Python 3.8；不要切换到不同版本的
-Python 来启动 ROS。
+以下命令从本checkout根目录执行；使用根uv.lock和系统Python3.8的
+独立.venv，ROS二进制扩展继续来自系统。统一命令负责环境加载，普通
+运行不会隐式安装依赖。首次准备uv0.8.22的方法见[根README](../README.md)。
 
 ```bash
-python3 -m pip install --target "$HOME/.local/lib/ros-robot-online" \
-  'websocket-client>=1.6,<2'
-export PYTHONPATH="$HOME/.local/lib/ros-robot-online${PYTHONPATH:+:$PYTHONPATH}"
-source /opt/ros/foxy/setup.bash
-source scripts/ydlidar-sdk-env.zsh
-export ONLINE_BUILD_ROOT="$HOME/local-data/ros-robot/online-build"
-colcon --log-base "$ONLINE_BUILD_ROOT/log" build --base-paths ros2_ws/src \
-  --build-base "$ONLINE_BUILD_ROOT/build" \
-  --install-base "$ONLINE_BUILD_ROOT/install" \
-  --packages-up-to robot_bringup --executor sequential \
+./scripts/dev.sh sync
+./scripts/dev.sh build --packages-up-to robot_bringup --executor sequential \
   --cmake-args -DRKNN_API_INCLUDE_DIR="$HOME/sdk/rknn/include"
-source "$ONLINE_BUILD_ROOT/install/setup.bash"
+./scripts/dev.sh verify
 ```
 
-模型位置由 rknn_yolov6 包配置指定；部署到其他板子时调整该包配置，
-不要把模型或 SDK 头复制进源码。构建目录与运行数据均放在源码外。
-退出终端后需重新加载 ROS、SDK、Python 依赖及该 install 环境。
+以下ROS命令均通过`./scripts/dev.sh ros`运行。模型位置由rknn_yolov6包
+配置指定；不要把模型或官方SDK头复制进源码。构建输出保留在忽略目录，
+录音、凭证与运行记录使用源码外路径。
 
 ## 外部配置与凭证
 
@@ -115,6 +108,7 @@ actions/execution.py中的ActionExecution集中持有原生异步动作 Task、�
   "model_attempts": 3,
   "action_timeout": 5,
   "speech_timeout": 60,
+  "shutdown_timeout": 5,
   "asr_model": "paraformer-realtime-v2",
   "asr_attempts": 2,
   "tts_model": "cosyvoice-v2",
@@ -153,7 +147,7 @@ export no_proxy="$NO_PROXY"
 ## 一次启动完整组合
 
 ```bash
-ros2 launch robot_bringup online_agent.launch.py \
+./scripts/dev.sh ros launch robot_bringup online_agent.launch.py \
   config_file:="$HOME/.config/ros-robot/online.json"
 ```
 
@@ -166,7 +160,7 @@ Launch 生命周期管理，没有第二进程管理器或自动重启策略。
 另一终端仅观察结果：
 
 ```bash
-ros2 topic echo /online_agent/result std_msgs/msg/String
+./scripts/dev.sh ros topic echo /online_agent/result std_msgs/msg/String
 ```
 
 说“小沫小沫”后连续请求，明确“晚安”或静音120秒回待机。正常ASR持续监听；完整句交付后暂停真实音频并静音保活，回复结束后清理
@@ -182,7 +176,7 @@ ros2 topic echo /online_agent/result std_msgs/msg/String
 独立单 WAV CLI 只用于在线语音/模拟设备诊断，不接入 ROS 感知：
 
 ```bash
-ros2 run robot_agent online_voice_wav \
+./scripts/dev.sh ros run robot_agent online_voice_wav \
   --config "$HOME/.config/ros-robot/online.json" \
   --wav /absolute/path/to/existing.wav
 ```
@@ -202,16 +196,19 @@ arecord -l核对record_device，配置record_executable、record_device；
 显式核对规则。TTS降级后可停止/重启恢复，绝不自动重试原动作。
 记忆语义见[记忆说明](online-agent-memory.md)。
 
-启动终端 Ctrl+C 退出本次 Launch 创建的全部进程。在线入口关闭语音连接，
-取消/回收录制与播放子进程，等待有界在线调用后释放 ROS。凭证、录音、
-TTS音频、记忆、模型、SDK头和构建输出不提交。
+启动终端 Ctrl+C 退出本次 Launch 创建的全部进程。在线入口的
+shutdown_timeout默认5秒，必须为正有限秒数。第一次关闭建立唯一绝对
+总期限：立即停止新回合、重试、音频与后续设备步骤，在剩余预算内保留
+原回执，保存确认/unknown/not_executed，再回收连接、子进程和任务，最后
+停止ROS executor。重复或并发关闭不续期。退出记录失败明确抛出异常；
+按turn_id检查既有JSON与设备状态，不自动重发或补执行。
 
 ## 可复现综合验收
 
 停止麦克风入口，单独启动固定感知组合；探针自身组装交互并按序测试文本/WAV：
 
 ```bash
-ros2 launch robot_bringup tracking.launch.py with_foxglove:=false
+./scripts/dev.sh ros launch robot_bringup tracking.launch.py with_foxglove:=false
 # 另一个已加载环境的终端，使用专用外部配置：
 python3 ros2_ws/src/robot_agent/test/online_integration_probe.py \
   --config /absolute/external/test-config.json \

@@ -8,7 +8,7 @@ operation selects the microphone; the independent WAV command selects recording.
 Read one voice turn in `AgentApplication.submit_transcript` in
 `robot_agent/application.py`: admit the turn, pause real audio, ask `VoiceSession`
 for a local decision, await `Agent.submit` when needed, await output and recording,
-and restore input in `finally`. The application owns processing and closed state.
+and restore input in `finally` while open. The application owns processing and closed state.
 `VoiceSession` owns wake state and activity time; it receives text, time, and a
 music observation and performs no I/O. Idle input waits advance silence timing;
 processing time does not put an active session to sleep.
@@ -58,9 +58,27 @@ reported separately in `VoiceRecord`. The async player owns and reaps its child.
 Standalone WAV recognition validates first, retries the entire file with a fresh
 task after transient failure, then calls the application's direct text entry.
 The obsolete blocking speech connection and worker Adapters have been removed.
-`AgentApplication.aclose(deadline)` closes owned speech resources and the Agent,
-retaining action receipt delivery within the remaining deadline. The accepted
-`aclose(deadline)` shape does not yet impose the total shutdown budget; that supervision remains the next migration step.
+`AgentApplication.aclose()` establishes one absolute deadline from the validated
+`shutdown_timeout` (default five seconds). An explicit `aclose(deadline)` uses the
+supplied deadline. The first close operation owns a shielded cleanup Task;
+concurrent callers share it and cancelling one waiter cannot abandon cleanup.
+The synchronous `stop` handoff first rejects turns, model/speech retries, audio,
+plan items and compound device steps. Input never resumes during shutdown.
+Input/recording, model and output cleanup proceed under that same deadline;
+children receive its remaining budget, without renewing it. WebSocket close and
+process termination leave time within that budget for abort/kill and reaping.
+A failing closer cannot skip the other owned resources. Expected local action
+wait expiry preserves `unknown`; cleanup failures remain visible. Multiple
+cleanup/record failures retain their original exceptions in `ShutdownError.errors`.
+
+Shutdown saves the final `Agent.last_result` through the existing VoiceRecord
+JSON, including any original late receipt and `not_executed` remainder. It retains
+the original transcript and completed WAV/output facts, produces a new snapshot,
+and never synthesizes or replays an action. Output retains only its latest record
+and the single unresolved action record, so a later local wake response cannot
+replace the original action transcript or completed audio. Failed exit persistence raises an
+error with the turn ID; inspect the existing record/output directory and device
+state manually. There is no cross-process recovery or replay queue.
 The model Adapter owns bounded JSON/SSE assembly and returns a complete `ModelReply`.
 It exposes one native `execute_actions` tool; ordinary chat is plain model text.
 Summaries explicitly disable tools and use one attempt with a separate phase
@@ -82,13 +100,17 @@ wait timeout never cancels that Future or removes the pending service request.
 Compound actions share one absolute deadline: a late partial confirmation may
 update facts, but cannot submit a later service, camera publication, or plan item.
 Camera publication remains a request without device state confirmation.
+`ActionRegistry.register_perception` gives the concrete perception capability
+ownership of its compound admission flag and receipt Adapter. `Agent.stop` closes
+that admission synchronously while retaining the original invocation and ROS
+Future; final Adapter detach follows execution cleanup.
 `Agent.aclose(deadline)` waits for original action completion and records available
 facts before the ROS Adapter detaches; `RosPerception.aclose(deadline)` then drains
 or disconnects local receipt delivery before `RosExecutor.aclose(deadline)` stops
 its thread. Ending local waiting cannot establish device cancellation. Executor
-callback errors propagate to the main loop. The current entry uses a five-second
-shutdown allowance; configurable total-budget persistence belongs to the shutdown
-migration.
+callback errors propagate to the main loop. The ROS entry and integration probe
+reuse the application's original shutdown deadline for the Adapter and executor,
+including when the run loop had already started closing itself.
 
 Memory storage owns bounded data and atomic persistence; it has no callback that can invoke a model. Clear/new turn
 admission stays blocked while summary cleanup is in flight, so retired summaries
@@ -113,3 +135,14 @@ For deployment and existing JSON fields, see [the operation guide](../../../docs
 and [voice behavior](../../../docs/online-agent-voice.md). Deterministic tests use
 external model, device, and speech Adapters; they are not cloud or hardware
 acceptance evidence.
+
+
+| Owner | Retained work and final release |
+| --- | --- |
+| AgentApplication | Single turn and shared cleanup Task; final VoiceRecord save |
+| LiveSpeechInput / DashScopeASR | Capture/network or file send/receive tasks; PCM process and socket |
+| VoiceOutput / DashScopeTTS | Synthesis/retry/playback operation; incomplete WAV removal and socket |
+| AsyncWavPlayer / AsyncPcmMicrophone | Original spawning task, process and reaping operation |
+| Agent / DashScopeProvider | Current model or summary operation; HTTP response and client pool |
+| ActionExecution / PerceptionActions | Original device operation and facts; compound admission |
+| RosPerception / RosExecutor | Original ROS Future receipt handoff; executor thread stops last |

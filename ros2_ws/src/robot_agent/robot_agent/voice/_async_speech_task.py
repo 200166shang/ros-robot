@@ -14,6 +14,8 @@ from websockets.exceptions import (
     InvalidStatus,
 )
 
+from robot_agent.shutdown import finish_tasks
+
 DEFAULT_SPEECH_ENDPOINT = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
 
 
@@ -31,6 +33,7 @@ class AsyncSpeechTask:
     def __init__(self, socket: client.ClientConnection) -> None:
         """持有已经打开的原始连接。"""
         self._socket = socket
+        self._closed = False
         self._task_id = uuid.uuid4().hex
         self._closing: Optional[asyncio.Task] = None
 
@@ -55,6 +58,8 @@ class AsyncSpeechTask:
 
     async def _send(self, message: Union[str, bytes]) -> None:
         """只分类外部网络错误，编程错误原样传播。"""
+        if self._closed:
+            raise SpeechTransportError("语音任务已关闭")
         try:
             await self._socket.send(message)
         except (ConnectionClosed, OSError) as error:
@@ -62,10 +67,14 @@ class AsyncSpeechTask:
 
     async def receive(self) -> Union[Dict, bytes]:
         """读取并验证不可信事件，服务端错误与网络断线分开。"""
+        if self._closed:
+            raise SpeechTransportError("语音任务已关闭")
         try:
             message = await self._socket.recv()
         except (ConnectionClosed, OSError) as error:
             raise SpeechTransportError("在线语音接收失败") from error
+        if self._closed:
+            raise SpeechTransportError("语音任务已关闭")
         if isinstance(message, bytes):
             return message
         try:
@@ -81,11 +90,21 @@ class AsyncSpeechTask:
             raise SpeechProtocolError("在线语音任务失败")
         return event
 
-    async def aclose(self) -> None:
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """先关闭socket以解除发送背压，再由持有者回收发送任务。"""
+        self._closed = True
         if self._closing is None:
             self._closing = asyncio.create_task(self._socket.close())
-        await asyncio.shield(self._closing)
+        if deadline is None:
+            await asyncio.shield(self._closing)
+        else:
+            done, _ = await asyncio.wait(
+                [self._closing],
+                timeout=max(0, (deadline - time.monotonic()) / 2),
+            )
+            if not done:
+                self._socket.transport.abort()
+            await finish_tasks([self._closing], deadline)
 
 
 class AsyncSpeechConnection:
@@ -101,14 +120,17 @@ class AsyncSpeechConnection:
             raise ValueError("语音端点必须使用 WSS")
         self._task: Optional[AsyncSpeechTask] = None
         self._closed = False
+        self._deadline: Optional[float] = None
+        self._opening: Optional[asyncio.Task] = None
 
     async def open(self, payload: Dict, deadline: float) -> AsyncSpeechTask:
         """总期限覆盖连接与握手，失败或取消总是释放已创建的socket。"""
         if self._closed:
             raise SpeechTransportError("语音入口已关闭")
         try:
+            self._opening = asyncio.create_task(self._open(payload, deadline))
             return await asyncio.wait_for(
-                self._open(payload, deadline),
+                self._opening,
                 max(0, deadline - time.monotonic()),
             )
         except asyncio.TimeoutError as error:
@@ -144,6 +166,8 @@ class AsyncSpeechConnection:
                 or event["header"]["event"] != "task-started"
             ):
                 raise SpeechProtocolError("在线语音握手事件无效")
+            if self._closed:
+                raise SpeechTransportError("语音入口已关闭")
             return task
         except BaseException:
             await self.disconnect()
@@ -153,11 +177,23 @@ class AsyncSpeechConnection:
         """释放当前任务，允许持续输入创建下一任务。"""
         task = self._task
         if task is not None:
-            await task.aclose()
+            await task.aclose(self._deadline)
             if self._task is task:
                 self._task = None
 
-    async def aclose(self) -> None:
-        """永久停止入口并释放当前socket。"""
+    def stop(self) -> None:
+        """同步关闭新握手准入，已经拥有的资源留给aclose回收。"""
         self._closed = True
-        await self.disconnect()
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
+        """永久停止入口并释放当前socket。"""
+        self.stop()
+        self._deadline = deadline
+        opening = self._opening
+        if opening is not None and not opening.done():
+            opening.cancel()
+        try:
+            await self.disconnect()
+        finally:
+            if opening is not None and not opening.done():
+                await finish_tasks([opening], deadline)

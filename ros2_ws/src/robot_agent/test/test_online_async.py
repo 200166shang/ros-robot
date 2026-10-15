@@ -74,7 +74,7 @@ def test_async_action_late_receipt_requires_reconcile_and_never_replays():
                     ),
                 )
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -174,7 +174,7 @@ def test_summary_cleanup_blocks_clear_then_discards_late_summary(tmp_path):
                     return ModelReply("stale-summary")
                 return ModelReply("confirmed-chat")
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -240,7 +240,7 @@ def test_programming_error_surfaces_with_submitted_and_confirmed_facts(
                     ),
                 )
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """固定模型没有本地连接资源。"""
                 pass
 
@@ -539,7 +539,7 @@ def test_model_interface_enforces_deadline_during_active_stream(monkeypatch):
                     yield b": keepalive\n\n"
                     await asyncio.sleep(0.002)
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """响应退出必须释放外部流。"""
                 closed.set()
 
@@ -586,7 +586,7 @@ def test_http_response_cleanup_retains_model_ownership_until_closed(
                     yield b": heartbeat\n\n"
                     await asyncio.sleep(0.002)
 
-            async def aclose(self):
+            async def aclose(self, deadline=None):
                 """第二次取消不得打断正在进行的同一清理。"""
                 cleaning.set()
                 await release.wait()

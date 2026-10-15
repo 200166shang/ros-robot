@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.simulation import simulate_cue
@@ -30,7 +30,7 @@ class FixedDemoProvider:
             else None,
         )
 
-    async def aclose(self):
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """固定模型没有本地连接资源。"""
         pass
 

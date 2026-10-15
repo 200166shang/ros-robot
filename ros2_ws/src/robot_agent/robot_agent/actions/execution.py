@@ -11,6 +11,7 @@ from robot_agent.actions.registry import (
     ActionRegistry,
 )
 from robot_agent.results import ActionOutcome, ExecutionResult
+from robot_agent.shutdown import finish_tasks
 
 
 @dataclass(frozen=True)
@@ -176,9 +177,14 @@ class ActionExecution:
             )
             raise ActionExecutionError(self.last_result) from error
 
+    def stop(self) -> None:
+        """停止计划余项和组合设备步骤，保留原回执任务。"""
+        self._closed = True
+        self._actions.stop()
+
     async def aclose(self, deadline: float) -> Optional[ExecutionResult]:
         """关闭时核对原调用；预算耗尽仅结束本地等待，保留未知事实。"""
-        self._closed = True
+        self.stop()
         pending = self._pending_action
         if pending is None:
             return None
@@ -192,13 +198,10 @@ class ActionExecution:
             # execute 的原等待者可能已先一步记录回执并结束计划。
             return self.last_result
         pending.task.cancel()
-        try:
-            await pending.task
-        except asyncio.CancelledError:
-            pass
         self.last_result = self._report(
             pending.turn_id, pending.actions, pending.tool_call_id
         )
+        await finish_tasks([pending.task], deadline)
         return self.last_result
 
     def _snapshot(self, turn_id, outcomes, tool_call_id) -> ExecutionResult:

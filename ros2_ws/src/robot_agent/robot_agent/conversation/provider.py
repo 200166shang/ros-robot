@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Protocol
 import httpx
 
 from robot_agent.results import ModelReply, ToolCall
+from robot_agent.shutdown import finish_tasks
 
 DEFAULT_ENDPOINT = (
     "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
@@ -72,7 +73,7 @@ class Model(Protocol):
         """tools 为空时禁用工具，用于只读摘要。"""
         ...
 
-    async def aclose(self) -> None:
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """释放模型连接和本地请求资源。"""
         ...
 
@@ -222,7 +223,7 @@ class DashScopeProvider:
         except (httpx.InvalidURL, httpx.UnsupportedProtocol) as error:
             raise ModelTransportError("configuration") from error
 
-    async def aclose(self) -> None:
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """先结束已拥有的请求，再释放连接池。"""
         self._closed = True
         requests = tuple(self._requests)
@@ -230,9 +231,11 @@ class DashScopeProvider:
             self._cancel_request(task)
         try:
             if requests:
-                await asyncio.gather(*requests, return_exceptions=True)
+                await finish_tasks(requests, deadline)
         finally:
-            await self._client.aclose()
+            await finish_tasks(
+                [asyncio.create_task(self._client.aclose())], deadline
+            )
 
     def _read_response(self, response, tools_enabled: bool) -> ModelReply:
         """兼容完整 JSON 与 SSE，截断、多个调用及未完成响应全部拒绝。"""

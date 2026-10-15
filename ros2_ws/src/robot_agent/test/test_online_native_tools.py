@@ -140,7 +140,7 @@ def test_agent_native_plan_invalid_tail_sends_nothing_then_confirms_facts():
                 ToolCall("call_plan", "execute_actions", {"actions": items}),
             )
 
-        async def aclose(self):
+        async def aclose(self, deadline=None):
             """固定模型没有本地连接资源。"""
             pass
 

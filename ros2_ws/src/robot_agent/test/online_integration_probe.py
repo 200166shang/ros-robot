@@ -20,7 +20,7 @@ from robot_agent.application import AgentApplication
 from robot_agent.results import TurnResult, VoiceRecord, result_to_json
 from robot_agent.ros.perception import RosPerception
 from robot_agent.ros.voice_node import RosExecutor, create_ros_application
-from robot_agent.runtime import load_config
+from robot_agent.runtime import load_config, shutdown_timeout
 from robot_agent.voice.runtime import capture_turn
 
 
@@ -279,10 +279,14 @@ async def _run() -> None:
                 if acceptance_error is None:
                     raise
         finally:
-            deadline = monotonic() + 5
+            deadline = monotonic() + shutdown_timeout(config)
             try:
                 if voice is not None:
-                    await voice.aclose(deadline)
+                    try:
+                        await voice.aclose(deadline)
+                    finally:
+                        assert voice.shutdown_deadline is not None
+                        deadline = voice.shutdown_deadline
             finally:
                 try:
                     await perception.aclose(deadline)

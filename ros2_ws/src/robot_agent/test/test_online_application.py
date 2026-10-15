@@ -151,7 +151,7 @@ def test_concurrent_close_waits_for_the_same_resource_cleanup(tmp_path):
         entered, release = asyncio.Event(), asyncio.Event()
         original = speech.aclose
 
-        async def close():
+        async def close(deadline=None):
             """在输入资源关闭中保留一个可观察的等待窗口。"""
             entered.set()
             await release.wait()

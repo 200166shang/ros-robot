@@ -5,6 +5,7 @@ import math
 import time
 from typing import Dict, List, Optional, Protocol, Tuple
 
+from robot_agent.shutdown import finish_tasks
 from robot_agent.voice._async_speech_task import (
     AsyncSpeechConnection,
     AsyncSpeechTask,
@@ -29,7 +30,7 @@ class PcmInput(Protocol):
         """同步清理部分帧与源积压。"""
         ...
 
-    async def aclose(self) -> None:
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """停止并回收采集进程。"""
         ...
 
@@ -49,7 +50,11 @@ class SpeechInput(Protocol):
         """丢弃旧音频后恢复。"""
         ...
 
-    async def aclose(self) -> None:
+    def stop(self) -> None:
+        """同步停止音频、最终句和重连准入。"""
+        ...
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """结束所有持有的输入任务和资源。"""
         ...
 
@@ -69,6 +74,7 @@ class LiveSpeechInput:
         if not math.isfinite(self._timeout) or self._timeout <= 0:
             raise ValueError("speech_timeout 必须为正有限秒数")
         self._closed = False
+        self._deadline: Optional[float] = None
         self._paused = False
         self._started = False
         self._text: Optional[str] = None
@@ -150,6 +156,8 @@ class LiveSpeechInput:
         try:
             await self._source.start()
             self._started = True
+            if self._closed:
+                return
             tasks = [
                 asyncio.create_task(self._capture()),
                 asyncio.create_task(self._network()),
@@ -162,12 +170,12 @@ class LiveSpeechInput:
         finally:
             self._closed = True
             try:
-                await self._connection.aclose()
+                await self._connection.aclose(self._deadline)
             finally:
                 try:
                     await self._stop(tasks)
                 finally:
-                    await self._source.aclose()
+                    await self._source.aclose(self._deadline)
                     self._changed.set()
 
     async def _capture(self) -> None:
@@ -191,7 +199,7 @@ class LiveSpeechInput:
 
     async def _network(self) -> None:
         """只有网络失败消耗连续预算；重连成功不重置，最终句才重置。"""
-        while True:
+        while not self._closed:
             tasks = []
             try:
                 stream = await self._connection.open(
@@ -209,6 +217,8 @@ class LiveSpeechInput:
                     },
                     time.monotonic() + min(self._timeout, 5),
                 )
+                if self._closed:
+                    return
                 self._cutover()
                 self._sent_samples = 0
                 self._accept_after_ms = 0
@@ -225,6 +235,8 @@ class LiveSpeechInput:
                 for task in done:
                     await task
             except SpeechTransportError as error:
+                if self._closed:
+                    return
                 self._failures += 1
                 if self._failures >= self._attempts:
                     raise OSError("持续ASR失败，重连次数已耗尽") from error
@@ -237,8 +249,10 @@ class LiveSpeechInput:
 
     async def _send(self, stream: AsyncSpeechTask) -> None:
         """唯一socket发送者；采集持续覆盖交接槽，不等待网络发送完成。"""
-        while True:
+        while not self._closed:
             await self._frame_ready.wait()
+            if self._closed:
+                return
             self._frame_ready.clear()
             pending, self._frame = self._frame, None
             if pending is None or pending[0] != self._epoch:
@@ -250,8 +264,10 @@ class LiveSpeechInput:
 
     async def _receive(self, stream: AsyncSpeechTask) -> None:
         """唯一socket接收者；接收循环不承担PCM失败检测。"""
-        while True:
+        while not self._closed:
             event = await stream.receive()
+            if self._closed:
+                return
             if isinstance(event, bytes):
                 continue
             kind = event["header"]["event"]
@@ -305,26 +321,43 @@ class LiveSpeechInput:
             ):
                 raise result
 
-    async def aclose(self) -> None:
+    def stop(self) -> None:
+        """第一次等待之前禁止真实音频、旧文本和后续连接。"""
+        self._closed = True
+        self._text = None
+        self._frame = None
+        self._epoch += 1
+        self._connection.stop()
+
+    async def aclose(self, deadline: Optional[float] = None) -> None:
         """所有关闭调用共享清理任务；编程异常在资源回收后继续显露。"""
         if self._closing is None:
-            self._closed = True
+            self.stop()
+            self._deadline = deadline
             self._closing = asyncio.create_task(self._close())
         await asyncio.shield(self._closing)
 
     async def _close(self) -> None:
-        """取消持久任务并等待其资源清理；未启动输入也可安全关闭。"""
+        """停止采集与网络并行收尾；连接关闭不能延后其他资源回收。"""
+        tasks = [asyncio.create_task(self._connection.aclose(self._deadline))]
         if self._runner is not None:
             if not self._runner.done():
                 self._runner.cancel()
-            try:
-                await self._runner
-            except (asyncio.CancelledError, OSError):
-                pass
+            tasks.append(asyncio.create_task(self._finish_runner()))
         else:
-            try:
-                await self._connection.aclose()
-            finally:
-                await self._source.aclose()
-        if self._runner is not None:
-            self._changed.set()
+            tasks.append(
+                asyncio.create_task(self._source.aclose(self._deadline))
+            )
+        try:
+            await finish_tasks(tasks, self._deadline)
+        finally:
+            if self._runner is not None:
+                self._changed.set()
+
+    async def _finish_runner(self) -> None:
+        """输入故障已经由listen报告，关闭仍传播未分类编程错误。"""
+        assert self._runner is not None
+        try:
+            await self._runner
+        except (asyncio.CancelledError, OSError):
+            pass

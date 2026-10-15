@@ -7,7 +7,7 @@ import pytest
 from native_protocol_fixture import install_async_transport, native_response
 
 from robot_agent.actions.registry import ActionRegistry
-from robot_agent.runtime import build_agent, load_config
+from robot_agent.runtime import build_agent, build_application, load_config
 
 
 def install_model_transport(monkeypatch):
@@ -122,3 +122,14 @@ def test_custom_actions_are_used_by_common_assembly(tmp_path, monkeypatch):
         assert "模型承诺" not in result.reply
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_shutdown_timeout_is_validated_before_resource_assembly(
+    tmp_path, timeout
+):
+    """无效总预算在配置边缘拒绝，不先读取凭证或创建输入连接。"""
+    with pytest.raises(ValueError, match="shutdown_timeout"):
+        build_application(
+            {"output_dir": str(tmp_path), "shutdown_timeout": timeout}
+        )

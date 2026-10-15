@@ -1,8 +1,9 @@
 """在线交互共同组装：读取外部配置，集中解释依赖和默认值。"""
 
 import json
+import math
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
 from robot_agent.actions.capabilities import (
     ActionCapabilities,
@@ -14,11 +15,21 @@ from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import DashScopeProvider
 from robot_agent.voice.live_input import LiveSpeechInput, SpeechInput
+from robot_agent.voice.output import Playback
 from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 from robot_audio.async_pcm_input import AsyncPcmMicrophone
 from robot_audio.async_playback import AsyncWavPlayer
 
 DEFAULT_ACTION_TIMEOUT = 5.0
+DEFAULT_SHUTDOWN_TIMEOUT = 5.0
+
+
+def shutdown_timeout(config: Dict) -> float:
+    """退出预算在外部配置边缘统一验证，后代只接收绝对期限。"""
+    timeout = float(config.get("shutdown_timeout", DEFAULT_SHUTDOWN_TIMEOUT))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("shutdown_timeout 必须为正有限秒数")
+    return timeout
 
 
 def load_config(filename: Union[str, Path]) -> Dict:
@@ -66,13 +77,14 @@ def build_application(
     input_mode: str = "recording",
 ) -> AgentApplication:
     """组装已有文本/动作和语音 Adapters；始终保持缺失设备模拟。"""
+    close_timeout = shutdown_timeout(config)
     directory = Path(config["output_dir"]).expanduser().resolve()
     checkout = Path(__file__).resolve().parents[4]
     if directory == checkout or checkout in directory.parents:
         raise ValueError("output_dir 必须在源码目录外")
     if capabilities is None:
         capabilities = create_default_actions()
-    playback: Optional[Callable[[Path], Awaitable[None]]] = None
+    playback: Optional[Playback] = None
     if config.get("playback_enabled", False):
         playback = AsyncWavPlayer(
             config.get("play_executable", "aplay"),
@@ -107,6 +119,7 @@ def build_application(
         failure_threshold=int(config.get("tts_failure_threshold", 5)),
         retry_delay=float(config.get("tts_retry_delay", 1)),
         recording_input=recording_input,
+        shutdown_timeout=close_timeout,
     )
 
     return voice
