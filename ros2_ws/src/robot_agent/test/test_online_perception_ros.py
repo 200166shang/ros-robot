@@ -1,5 +1,8 @@
 """通过真实 ROS 传输与固定服务事件验证交互结果，不替代在线验收。"""
 
+# ROS 缺失时先跳过模块，再导入依赖 ROS 的 Interface。
+# ruff: noqa: E402
+
 import threading
 import time
 
@@ -7,19 +10,23 @@ import pytest
 from test_online_interaction import FixedProvider, await_reconciliation
 
 rclpy = pytest.importorskip("rclpy")
-from rclpy.executors import SingleThreadedExecutor  # noqa: E402
-from rclpy.node import Node  # noqa: E402
-from rclpy.parameter import Parameter  # noqa: E402
-from std_msgs.msg import Bool  # noqa: E402
-from std_srvs.srv import SetBool  # noqa: E402
+from rclpy.executors import SingleThreadedExecutor
+from rclpy.node import Node
+from rclpy.parameter import Parameter
+from std_msgs.msg import Bool
+from std_srvs.srv import SetBool
 
-from robot_agent.actions.capabilities import create_default_actions  # noqa: E402
-from robot_agent.actions.perception import (  # noqa: E402
+from robot_agent.actions.capabilities import (
+    create_default_actions,
+)
+from robot_agent.actions.perception import (
     PerceptionActions,
     perception_actions,
 )
-from robot_agent.conversation.interaction import OnlineInteraction  # noqa: E402
-from robot_agent.ros.perception import RosPerception  # noqa: E402
+from robot_agent.conversation.interaction import (
+    OnlineInteraction,
+)
+from robot_agent.ros.perception import RosPerception
 
 
 @pytest.fixture

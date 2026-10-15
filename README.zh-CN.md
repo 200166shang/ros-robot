@@ -21,15 +21,25 @@ ROS 软件包统一放在 `ros2_ws/src/`，每个目录对应一个软件包。�
 
 ## 构建与测试
 
-先加载 ROS 2 Foxy 环境，然后在仓库根目录运行工作区命令。包装脚本会切换到
-`ros2_ws/` 再调用 `colcon`，并原样传递参数：
+项目使用板端系统 Python 3.8 创建的根目录 uv 环境。按
+[环境指南](docs/development-environment.md) 安装 uv 0.8.22、确认系统基线后运行：
 
 ```bash
-source /opt/ros/foxy/setup.bash
-./scripts/colcon.sh build --symlink-install
-./scripts/colcon.sh test
-./scripts/colcon.sh test-result --verbose
+export PATH="$HOME/.local/bin:$PATH"
+./scripts/dev.sh sync
+./scripts/dev.sh build --executor sequential --cmake-args \
+  -DRKNN_API_INCLUDE_DIR=/home/orangepi/sdk/rknn/include
+./scripts/dev.sh lint
+./scripts/dev.sh test -q tests ros2_ws/src
+./scripts/dev.sh test-ros --executor sequential
+./scripts/dev.sh test-result --verbose
+./scripts/dev.sh verify
 ```
+
+只有 `sync` 安装锁定依赖；普通命令复用 `.venv`，不会同步依赖或修改锁文件。
+`python`、`ros` 分别执行项目 Python 和 ROS 命令。ROS 源码包仍由 colcon
+构建安装；现有 `colcon.sh` 与演示脚本复用相同环境。语音工具也安装在此环境，
+模型保留在仓库外；`verify` 不启动节点或实际设备。
 
 各软件包特有的后端、SDK、资源和测试准备步骤见对应的软件包 README。
 
