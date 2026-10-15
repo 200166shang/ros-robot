@@ -1,6 +1,5 @@
-"""语音交互 Implementation：会话状态、半双工交接与合成恢复。"""
+"""语音交互 Implementation：会话状态与半双工交接。"""
 
-import json
 import math
 import re
 import threading
@@ -12,6 +11,7 @@ from typing import Callable, Dict, Optional, Protocol
 
 from robot_agent.conversation.interaction import OnlineInteraction
 from robot_agent.results import make_result
+from robot_agent.voice.output import SpeechOutput, VoiceOutput
 
 WAKE_WORDS = tuple(
     name * 2 for name in ("小沫", "小莫", "小墨", "小末", "小陌", "小默")
@@ -85,18 +85,6 @@ class SpeechInput(Protocol):
         ...
 
 
-class SpeechOutput(Protocol):
-    """流式合成 Adapter；完整成功才提交可试听 WAV 文件。"""
-
-    def synthesize(self, text: str, destination: Path, timeout: float) -> None:
-        """按期限合成，失败抛出 I/O 异常，不能留下成功文件。"""
-        ...
-
-    def close(self) -> None:
-        """释放合成连接。"""
-        ...
-
-
 @dataclass
 class _VoiceTurn:
     """一轮处理的结果、输入与暂停状态，由生命周期流程统一收尾。"""
@@ -137,23 +125,23 @@ class OnlineVoice:
         self._interaction = interaction
         self._input = speech_input
         self._recognize_recording = recognize_recording
-        self._output = speech_output
-        self._directory = Path(output_dir).expanduser().resolve()
-        self._directory.mkdir(parents=True, exist_ok=True)
+        self._output = VoiceOutput(
+            speech_output,
+            output_dir,
+            playback,
+            speech_timeout,
+            tts_attempts,
+            failure_threshold,
+            retry_delay,
+        )
         self._music_playing = music_playing
-        self._playback = playback
         self._silence_timeout = silence_timeout
         self._speech_timeout = speech_timeout
-        self._tts_attempts = tts_attempts
-        self._failure_threshold = failure_threshold
-        self._retry_delay = retry_delay
         self._clock = clock
         self._last_activity = clock()
         self._awake = False
         self._closed = threading.Event()
         self._processing = False
-        self._failures = 0
-        self._tts_enabled = True
 
     @property
     def state(self) -> str:
@@ -203,8 +191,7 @@ class OnlineVoice:
 
     def enable_tts(self) -> None:
         """由同一调用者在两轮之间显式恢复在线合成。"""
-        self._failures = 0
-        self._tts_enabled = True
+        self._output.enable_tts()
 
     def _run_turn(self, operation: Callable[[_VoiceTurn], Dict]) -> Dict:
         """统一回合生命周期；业务入口各自处理，不调度并发输入。"""
@@ -242,7 +229,9 @@ class OnlineVoice:
             turn.result.update(
                 reply="在线识别不可用，本轮未发出动作。", asr_status="failed"
             )
-            return self._save(turn.result, "")
+            return self._output.complete(
+                turn.result, "", self._session_state(), input_failed=True
+            )
         return self._process_text(turn, text, direct)
 
     def _process_text(self, turn: _VoiceTurn, text: str, direct: bool) -> Dict:
@@ -250,7 +239,9 @@ class OnlineVoice:
         # 1. 外部文本或识别结果在进入会话前统一校验。
         if not isinstance(text, str) or not text.strip():
             turn.result.update(status="rejected", reply="未识别到有效文本。")
-            return self._save(turn.result, "")
+            return self._output.complete(
+                turn.result, "", self._session_state(), input_failed=True
+            )
         turn.text = text
         turn.heard_input = True
         turn.paused = True
@@ -264,7 +255,9 @@ class OnlineVoice:
             turn.result = decision
 
         # 3. 输出与保存不重复模型或动作，生命周期统一恢复采集。
-        return self._finish_turn(turn)
+        return self._output.complete(
+            turn.result, turn.text, self._session_state()
+        )
 
     def _decide_session(
         self, text: str, direct: bool, turn_id: str
@@ -296,74 +289,18 @@ class OnlineVoice:
         turn.paused = True
         self._input.pause()
         turn.result = self._interaction.reconcile(turn_id)
-        if turn.result["status"] != "busy":
-            self._speak(turn.result)
-        record = self._directory / (turn_id + ".json")
-        if record.is_file():
-            turn.text = json.loads(record.read_text(encoding="utf-8"))[
-                "transcript"
-            ]
-        return self._save(turn.result, turn.text)
+        return self._output.complete(
+            turn.result, turn.text, self._session_state(), reconcile_id=turn_id
+        )
 
-    def _finish_turn(self, turn: _VoiceTurn) -> Dict:
-        """被忽略、过滤或执行仍在途时只记录，其余结果合成后保存。"""
-        if turn.result["status"] not in ("ignored", "filtered", "busy"):
-            self._speak(turn.result)
-        return self._save(turn.result, turn.text)
-
-    def _speak(self, result: Dict) -> None:
-        """有限合成重试，连续回合失败后降级为文本；播放失败保留音频。"""
-        result["tts_status"] = "disabled"
-        if not self._tts_enabled or self._closed.is_set():
-            return
-        audio_path = self._directory / (result["turn_id"] + ".wav")
-        for attempt in range(self._tts_attempts):
-            try:
-                self._output.synthesize(
-                    result["reply"], audio_path, self._speech_timeout
-                )
-            except (OSError, TimeoutError):
-                if attempt + 1 < self._tts_attempts:
-                    if self._closed.wait(self._retry_delay):
-                        return
-                    continue
-                self._failures += 1
-                self._tts_enabled = self._failures < self._failure_threshold
-                result["tts_status"] = (
-                    "failed" if self._tts_enabled else "degraded"
-                )
-                return
-            self._failures = 0
-            result.update(tts_status="completed", audio_path=str(audio_path))
-            if self._playback is not None and not self._closed.is_set():
-                try:
-                    self._playback(audio_path)
-                except (OSError, RuntimeError):
-                    result["playback_status"] = "failed"
-                else:
-                    result["playback_status"] = "completed"
-            return
-
-    def _save(self, result: Dict, text: str) -> Dict:
-        """按 turn_id 关联识别、动作、回复和音频，原子保存记录。"""
-        result["transcript"] = text
-        result["session_state"] = "listening" if self._awake else "standby"
-        destination = self._directory / (result["turn_id"] + ".json")
-        temporary = destination.with_suffix(".json.tmp")
-        result["record_status"] = "completed"
-        try:
-            temporary.write_text(
-                json.dumps(result, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            temporary.replace(destination)
-        except OSError:
-            result["record_status"] = "failed"
-        return result
+    def _session_state(self) -> str:
+        """提供回合结束时的会话决策，不触发静音计时。"""
+        return "listening" if self._awake else "standby"
 
     def close(self) -> None:
         """停止接入并关闭在线连接；回合生命周期负责清除处理标记。"""
         self._closed.set()
+        self._output.cancel()
         try:
             self._input.close()
         finally:
