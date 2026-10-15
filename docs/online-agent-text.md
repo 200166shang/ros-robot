@@ -20,13 +20,14 @@ build_application统一解释ASR/TTS、录音与播放配置；ROS入口只接�
   "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
   "api_key_env": "DASHSCOPE_API_KEY",
   "provider_timeout": 60,
+  "model_attempts": 3,
   "action_timeout": 5
 }
 ```
 
 凭证仅从环境读取，不允许明文api_key。端点必须HTTPS，模型/端点
 须与Key地域授权匹配；不会输出Key或HTTP错误正文。
-provider_timeout/action_timeout单位秒，必须为正有限数。
+provider_timeout/action_timeout单位秒，必须为正有限数。model_attempts 是 1–5 的整数，默认3；仅已分类的临时模型故障可重试，所有尝试共用 provider_timeout 总预算。永久配置、协议、Schema、整个回合与设备动作不重试。
 语音识别与合成另用speech_timeout，配置见[语音说明](online-agent-voice.md)。
 
 默认system prompt为随包安装的online_system_prompt.txt，保留旧人设、
@@ -42,13 +43,19 @@ import asyncio
 
 from robot_agent.runtime import build_agent, load_config
 
-config = load_config("/absolute/external/test-config.json")
-agent = build_agent(config)
-result = asyncio.run(agent.submit("你好，请只聊天"))
-print(result)
-# 独立测试可在每轮完整返回后调用：
-# asyncio.run(agent.clear_memory())
-# asyncio.run(agent.reconcile(result["turn_id"]))
+async def main():
+    config = load_config("/absolute/external/test-config.json")
+    agent = build_agent(config)
+    try:
+        result = await agent.submit("你好，请只聊天")
+        print(result)
+        # 独立测试在同一循环的回合之间显式调用：
+        # await agent.clear_memory()
+        # await agent.reconcile(result.turn_id)
+    finally:
+        await agent.aclose()
+
+asyncio.run(main())
 ```
 
 默认动作注册表为明确模拟；需要真实感知时运行[独立综合探针](online-agent.md)，
@@ -70,7 +77,7 @@ transcript、音频与会话状态后，由正常节点发布/online_agent/resul
 有意重复不去重。动作回复只依据确认回执，不采用模型提前成功承诺。
 完整动作与模拟范围见[业务清单](online-agent-inventory.md)。
 
-模型等待超时不取消仍在途调用，其结束前拒绝新回合。动作unknown须用
+模型等待超时请求取消原生 HTTP/SSE，本地响应和连接清理完成前拒绝新回合。动作unknown须用
 原turn_id调用reconcile；迟到回执确认成功或失败后才能解除阻塞，不补执行
 后续动作。迟到回执仍未知或异常时继续阻塞，需操作者核实设备后恢复。
 正常麦克风没有文本控制入口，恢复规则见[语音说明](online-agent-voice.md)。

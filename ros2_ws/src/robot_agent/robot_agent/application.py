@@ -267,4 +267,7 @@ class AgentApplication:
         try:
             await self._input.aclose()
         finally:
-            await self._output.aclose()
+            try:
+                await self._output.aclose()
+            finally:
+                await self._agent.aclose()

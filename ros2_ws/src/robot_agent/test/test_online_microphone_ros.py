@@ -5,7 +5,7 @@ import time
 
 import rclpy
 import websocket
-from native_protocol_fixture import native_response
+from native_protocol_fixture import install_async_transport, native_response
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -107,13 +107,13 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
     def complete(request, timeout):
         """固定模型建议点头，观察只有有效麦克风请求进入模型。"""
         model_inputs.append(
-            json.loads(request.data)["messages"][-1]["content"]
+            json.loads(request.content)["messages"][-1]["content"]
         )
         return native_response([{"name": "head_nod", "arguments": {}}])
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     monkeypatch.setattr(websocket, "create_connection", connect)
-    monkeypatch.setattr("urllib.request.urlopen", complete)
+    install_async_transport(monkeypatch, complete)
     config = tmp_path / "config.json"
     config.write_text(
         json.dumps(

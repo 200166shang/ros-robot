@@ -15,6 +15,7 @@ from robot_agent.actions.registry import ActionRegistry
 from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.memory import ConversationMemory
+from robot_agent.conversation.provider import ModelTransportError
 from robot_agent.results import result_to_json
 
 
@@ -60,11 +61,15 @@ def test_voice_failures_keep_execution_and_flat_json(tmp_path, monkeypatch):
     class SummaryFailure(FixedProvider):
         """正常请求可用，外部摘要模型报告连接故障。"""
 
-        def complete(self, text, timeout, *, tools=None):
+        async def complete(self, text, deadline, *, tools=None):
             """摘要失败不能改写此前的动作事实。"""
             if "【摘要任务】" in text:
-                raise OSError("summary unavailable")
-            return super().complete(text, timeout, tools=tools)
+                raise ModelTransportError("network", transient=True)
+            return await super().complete(text, deadline, tools=tools)
+
+        async def aclose(self):
+            """固定模型没有本地连接资源。"""
+            pass
 
     registry = ActionRegistry()
     registry.register("confirmed", lambda: {"status": "real_success"})

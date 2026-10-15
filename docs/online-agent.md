@@ -98,7 +98,7 @@ source "$ONLINE_BUILD_ROOT/install/setup.bash"
 默认值集中在build_agent。语音配置和输入Adapter选择也集中由build_application解释。
 
 交互主线位于conversation/agent.py：模型调用→整表校验→动作执行→记忆。
-actions/execution.py中的ActionExecution集中持有动作Future、全表执行记录、
+actions/execution.py中的ActionExecution集中持有原生异步动作 Task、全表执行记录、
 超时未知状态与迟到回执；交互层只读取blocked并调用execute/reconcile。
 设备Adapter及其期限契约不变。动作未知时仍阻止下一轮，显式核对仅更新
 原回合，不自动重试、不补执行余项，已返回的结果快照保持原状。
@@ -112,6 +112,7 @@ actions/execution.py中的ActionExecution集中持有动作Future、全表执行
   "model": "qwen-plus",
   "api_key_env": "DASHSCOPE_API_KEY",
   "provider_timeout": 60,
+  "model_attempts": 3,
   "action_timeout": 5,
   "speech_timeout": 60,
   "asr_model": "paraformer-realtime-v2",

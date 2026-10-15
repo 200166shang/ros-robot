@@ -21,12 +21,16 @@ from robot_agent.voice.speech import DashScopeASR, DashScopeTTS
 class FixedModel:
     """从固定识别文本生成确定的普通聊天。"""
 
-    def complete(self, text, timeout, *, tools=None):
+    async def complete(self, text, deadline, *, tools=None):
         """输入原样出现在回复中，便于检测中间句或重复句。"""
         return ModelReply(
             text,
             None,
         )
+
+    async def aclose(self):
+        """固定模型没有本地连接资源。"""
+        pass
 
 
 class SpeechSocket:

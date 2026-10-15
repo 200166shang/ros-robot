@@ -33,124 +33,137 @@ class FixedPerception:
 
 def test_voice_runtime_retains_perception_and_memory(tmp_path, monkeypatch):
     """录音回合包含感知回执，记忆跨回合/重启保持并能显式清空。"""
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "fixed-test-key")
-    inputs = []
 
-    def recognize(self, path, timeout):
-        """以固定最终事件替换在线传输。"""
-        return "我叫小明，请查询相机状态并点头"
+    async def scenario():
+        """同一循环持有回合、连接与迟到回执。"""
+        monkeypatch.setenv("DASHSCOPE_API_KEY", "fixed-test-key")
+        inputs = []
 
-    def complete(self, text, timeout, *, tools=None):
-        """从公开 provider Interface 观察上下文与摘要请求。"""
-        inputs.append(text)
-        if "【摘要任务】" in text:
+        def recognize(self, path, timeout):
+            """以固定最终事件替换在线传输。"""
+            return "我叫小明，请查询相机状态并点头"
+
+        async def complete(self, text, deadline, *, tools=None):
+            """从公开 provider Interface 观察上下文与摘要请求。"""
+            inputs.append(text)
+            if "【摘要任务】" in text:
+                return ModelReply(
+                    "用户叫小明",
+                    None,
+                )
             return ModelReply(
-                "用户叫小明",
-                None,
+                "模型的提前承诺",
+                ToolCall(
+                    "fixture_call",
+                    "execute_actions",
+                    {
+                        "actions": [
+                            {"name": "query_camera_status", "arguments": {}},
+                            {"name": "head_nod", "arguments": {}},
+                        ]
+                    },
+                ),
             )
-        return ModelReply(
-            "模型的提前承诺",
-            ToolCall(
-                "fixture_call",
-                "execute_actions",
-                {
-                    "actions": [
-                        {"name": "query_camera_status", "arguments": {}},
-                        {"name": "head_nod", "arguments": {}},
-                    ]
-                },
-            ),
-        )
 
-    def synthesize(self, text, path, timeout):
-        """仅保存行为测试音频替身。"""
-        path.write_bytes(b"fixed speech")
+        def synthesize(self, text, path, timeout):
+            """仅保存行为测试音频替身。"""
+            path.write_bytes(b"fixed speech")
 
-    monkeypatch.setattr(DashScopeASR, "recognize", recognize)
-    monkeypatch.setattr(DashScopeProvider, "complete", complete)
-    monkeypatch.setattr(DashScopeTTS, "synthesize", synthesize)
-    capabilities = create_default_actions()
-    actions = capabilities.registry
-    actions.register_many(
-        perception_actions(PerceptionActions(FixedPerception()))
-    )
-    config = {
-        "output_dir": str(tmp_path / "audio"),
-        "memory_file": str(tmp_path / "memory.json"),
-        "memory_recent_turns": 2,
-        "memory_summary_trigger": 2,
-    }
-    voice = build_application(config, capabilities=capabilities)
-    try:
-        first = asyncio.run(voice.submit_recording(tmp_path / "input.wav"))
-        assert first.actions[0].status == "real_success"
-        assert first.actions[1].status == "simulated_success"
-        assert "模型的提前承诺" not in first.reply
-        assert (
-            asyncio.run(voice.submit_transcript("第二轮", direct=True)).status
-            == "completed"
+        monkeypatch.setattr(DashScopeASR, "recognize", recognize)
+        monkeypatch.setattr(DashScopeProvider, "complete", complete)
+        monkeypatch.setattr(DashScopeTTS, "synthesize", synthesize)
+        capabilities = create_default_actions()
+        actions = capabilities.registry
+        actions.register_many(
+            perception_actions(PerceptionActions(FixedPerception()))
         )
-        context = json.loads(inputs[1].split("\n", 1)[1])
-        assert context["recent_exchanges"][0]["user"] == first.transcript
-        assert context["recent_exchanges"][0]["assistant"] == first.reply
-        assert (
-            json.loads((tmp_path / "memory.json").read_text())["summary"]
-            == "用户叫小明"
-        )
-    finally:
-        asyncio.run(voice.aclose())
-    restarted = build_application(config, capabilities=capabilities)
-    try:
-        asyncio.run(restarted.submit_transcript("重启后", direct=True))
-        assert "用户叫小明" in inputs[-1]
-        assert asyncio.run(restarted.clear_memory()).status == "completed"
-        asyncio.run(restarted.submit_transcript("清空后", direct=True))
-        assert inputs[-1] == "清空后"
-    finally:
-        asyncio.run(restarted.aclose())
+        config = {
+            "output_dir": str(tmp_path / "audio"),
+            "memory_file": str(tmp_path / "memory.json"),
+            "memory_recent_turns": 2,
+            "memory_summary_trigger": 2,
+        }
+        voice = build_application(config, capabilities=capabilities)
+        try:
+            first = await voice.submit_recording(tmp_path / "input.wav")
+            assert first.actions[0].status == "real_success"
+            assert first.actions[1].status == "simulated_success"
+            assert "模型的提前承诺" not in first.reply
+            assert (
+                await voice.submit_transcript("第二轮", direct=True)
+            ).status == "completed"
+            context = json.loads(inputs[1].split("\n", 1)[1])
+            assert context["recent_exchanges"][0]["user"] == first.transcript
+            assert context["recent_exchanges"][0]["assistant"] == first.reply
+            assert (
+                json.loads((tmp_path / "memory.json").read_text())["summary"]
+                == "用户叫小明"
+            )
+        finally:
+            (await voice.aclose())
+        restarted = build_application(config, capabilities=capabilities)
+        try:
+            (await restarted.submit_transcript("重启后", direct=True))
+            assert "用户叫小明" in inputs[-1]
+            assert (await restarted.clear_memory()).status == "completed"
+            (await restarted.submit_transcript("清空后", direct=True))
+            assert inputs[-1] == "清空后"
+        finally:
+            (await restarted.aclose())
+
+    asyncio.run(scenario())
 
 
 def test_wav_runtime_preserves_actions_reply_audio_and_record(
     tmp_path, monkeypatch
 ):
     """独立 WAV 通过真实语音任务协议进入模型和动作主线并关联产物。"""
-    sockets = [SpeechSocket(), SpeechSocket()]
-    transport(monkeypatch, sockets)
-    model_inputs = []
 
-    def complete(self, text, timeout, *, tools=None):
-        """固定模型外部结果，保留动作解析、执行和确认回复主线。"""
-        model_inputs.append(text)
-        return ModelReply(
-            "模型的提前承诺",
-            ToolCall(
-                "fixture_call",
-                "execute_actions",
-                {"actions": [{"name": "head_nod", "arguments": {}}]},
-            ),
+    async def scenario():
+        """同一循环持有回合、连接与迟到回执。"""
+        sockets = [SpeechSocket(), SpeechSocket()]
+        transport(monkeypatch, sockets)
+        model_inputs = []
+
+        async def complete(self, text, deadline, *, tools=None):
+            """固定模型外部结果，保留动作解析、执行和确认回复主线。"""
+            model_inputs.append(text)
+            return ModelReply(
+                "模型的提前承诺",
+                ToolCall(
+                    "fixture_call",
+                    "execute_actions",
+                    {"actions": [{"name": "head_nod", "arguments": {}}]},
+                ),
+            )
+
+        monkeypatch.setattr(DashScopeProvider, "complete", complete)
+        directory = tmp_path / "output"
+        voice = build_application({"output_dir": str(directory)})
+        try:
+            result = await capture_turn(voice, str(fixture_wav(tmp_path)))
+        finally:
+            (await voice.aclose())
+
+        assert model_inputs == ["真实句一。真实句二。"]
+        assert result.transcript == model_inputs[0]
+        assert result.actions[0].status == "simulated_success"
+        assert "模型的提前承诺" not in result.reply
+        assert result.tts_status == "completed"
+        assert (
+            sockets[1].commands[1]["payload"]["input"]["text"] == result.reply
         )
+        audio_path = Path(result.audio_path)
+        assert audio_path == directory / (result.turn_id + ".wav")
+        with wave.open(str(audio_path)) as audio:
+            assert audio.getnframes() == 2400
+        record = json.loads(
+            (directory / (result.turn_id + ".json")).read_text()
+        )
+        assert record["transcript"] == result.transcript
+        assert record["reply"] == result.reply
+        assert record["actions"] == result_to_json(result)["actions"]
+        assert record["audio_path"] == result.audio_path
+        assert all(socket.closed for socket in sockets)
 
-    monkeypatch.setattr(DashScopeProvider, "complete", complete)
-    directory = tmp_path / "output"
-    voice = build_application({"output_dir": str(directory)})
-    try:
-        result = asyncio.run(capture_turn(voice, str(fixture_wav(tmp_path))))
-    finally:
-        asyncio.run(voice.aclose())
-
-    assert model_inputs == ["真实句一。真实句二。"]
-    assert result.transcript == model_inputs[0]
-    assert result.actions[0].status == "simulated_success"
-    assert "模型的提前承诺" not in result.reply
-    assert result.tts_status == "completed"
-    assert sockets[1].commands[1]["payload"]["input"]["text"] == result.reply
-    audio_path = Path(result.audio_path)
-    assert audio_path == directory / (result.turn_id + ".wav")
-    with wave.open(str(audio_path)) as audio:
-        assert audio.getnframes() == 2400
-    record = json.loads((directory / (result.turn_id + ".json")).read_text())
-    assert record["transcript"] == result.transcript
-    assert record["reply"] == result.reply
-    assert record["actions"] == result_to_json(result)["actions"]
-    assert record["audio_path"] == result.audio_path
-    assert all(socket.closed for socket in sockets)
+    asyncio.run(scenario())

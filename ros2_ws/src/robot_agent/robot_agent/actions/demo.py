@@ -17,7 +17,9 @@ class FixedDemoProvider:
         """初始化本轮动作建议。"""
         self.actions: List[Dict[str, Any]] = []
 
-    def complete(self, text: str, timeout: float, *, tools=None) -> ModelReply:
+    async def complete(
+        self, text: str, deadline: float, *, tools=None
+    ) -> ModelReply:
         """按在线契约返回固定动作列表。"""
         return ModelReply(
             "模拟建议",
@@ -27,6 +29,10 @@ class FixedDemoProvider:
             if self.actions
             else None,
         )
+
+    async def aclose(self):
+        """固定模型没有本地连接资源。"""
+        pass
 
 
 async def _run_demo() -> None:

@@ -26,7 +26,15 @@ def main() -> None:
     print("Python", sys.version.split()[0], sys.executable)
 
     # 1. 导入系统二进制扩展，确认 ROS 与 OpenCV 保持相同 ABI。
-    for name in ("rclpy", "cv2", "numpy", "flask", "websocket", "pydantic"):
+    for name in (
+        "rclpy",
+        "cv2",
+        "numpy",
+        "flask",
+        "websocket",
+        "pydantic",
+        "httpx",
+    ):
         module = importlib.import_module(name)
         print(name, module.__file__)
     for name in (
@@ -35,6 +43,8 @@ def main() -> None:
         "sherpa-onnx-bin",
         "pydantic",
         "pydantic-core",
+        "httpx",
+        "httpcore",
     ):
         installed = distribution(name)
         assert root / ".venv" in installed.locate_file("").parents
@@ -73,10 +83,10 @@ def main() -> None:
 
     # 3. 原生 sherpa 工具只运行版本/帮助入口，以验证 ARM64 动态库。
     for name in ("sherpa-onnx", "sherpa-onnx-offline-tts"):
-        executable = shutil.which(name)
-        assert executable == str(root / ".venv/bin" / name), executable
+        executable = root / ".venv/bin" / name
+        assert shutil.which(name) == str(executable), executable
         subprocess.run(
-            [executable, "--help"],
+            [str(executable), "--help"],
             check=True,
             capture_output=True,
             text=True,

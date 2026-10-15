@@ -5,6 +5,7 @@ import json
 from decimal import Decimal
 
 import pytest
+from native_protocol_fixture import install_async_transport
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.agent import Agent
@@ -102,13 +103,17 @@ def test_provider_assembles_fragmented_native_plan(monkeypatch):
 
     def transport(request, timeout):
         """仅替换 HTTPS 传输，保留生产协议处理。"""
-        requests.append(json.loads(request.data))
+        requests.append(json.loads(request.content))
         return io.BytesIO(wire)
 
-    monkeypatch.setattr("urllib.request.urlopen", transport)
+    install_async_transport(monkeypatch, transport)
     registry = create_default_actions().registry
-    reply = DashScopeProvider({}).complete(
-        "点头", 1, tools=registry.tool_schema
+    reply = asyncio.run(
+        DashScopeProvider({}).complete(
+            "点头",
+            __import__("time").monotonic() + 1,
+            tools=registry.tool_schema,
+        )
     )
     assert reply.tool_call.call_id == "call_88"
     assert reply.tool_call.arguments == {
@@ -128,12 +133,16 @@ def test_agent_native_plan_invalid_tail_sends_nothing_then_confirms_facts():
     class Provider:
         """替代外部模型返回完整原生请求。"""
 
-        def complete(self, text, timeout, *, tools=None):
+        async def complete(self, text, deadline, *, tools=None):
             """不把模型预先成功承诺当作设备事实。"""
             return ModelReply(
                 "全部真实完成",
                 ToolCall("call_plan", "execute_actions", {"actions": items}),
             )
+
+        async def aclose(self):
+            """固定模型没有本地连接资源。"""
+            pass
 
     def sent():
         """外部设备记录动作是否真正发出。"""
@@ -251,8 +260,8 @@ def test_real_adapter_rejects_invalid_protocol_before_any_action(
 
     sent = []
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
-    monkeypatch.setattr(
-        "urllib.request.urlopen", lambda request, timeout: io.BytesIO(wire)
+    install_async_transport(
+        monkeypatch, lambda request, timeout: io.BytesIO(wire)
     )
     registry = create_default_actions().registry
     registry.register(
@@ -283,8 +292,8 @@ def test_full_native_response_executes_once_and_preserves_correlation(
             }
         )
     )
-    monkeypatch.setattr(
-        "urllib.request.urlopen", lambda request, timeout: io.BytesIO(wire)
+    install_async_transport(
+        monkeypatch, lambda request, timeout: io.BytesIO(wire)
     )
     result = asyncio.run(
         Agent(DashScopeProvider({}), create_default_actions().registry).submit(
@@ -371,7 +380,7 @@ def test_registry_passes_one_explicit_deadline_through_compound_action():
         {"actions": [{"name": "start_following", "arguments": {}}]}
     )
     deadline = time.monotonic() + 1
-    receipt = registry.invoke(plan.commands[0], deadline)
+    receipt = asyncio.run(registry.invoke(plan.commands[0], deadline))
     assert receipt.status == "real_success"
     assert deadlines == [("fusion", deadline), ("follow", deadline)]
     assert plan.commands[0].parameters == {}

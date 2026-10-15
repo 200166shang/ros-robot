@@ -16,7 +16,9 @@ class FixedProvider:
         """初始化无动作响应。"""
         self.actions = []
 
-    def complete(self, text: str, timeout: float, *, tools=None) -> ModelReply:
+    async def complete(
+        self, text: str, deadline: float, *, tools=None
+    ) -> ModelReply:
         """返回完整原生计划。"""
         return ModelReply(
             "建议",
@@ -26,6 +28,10 @@ class FixedProvider:
             if self.actions
             else None,
         )
+
+    async def aclose(self):
+        """固定模型没有本地连接资源。"""
+        pass
 
 
 def submit(agent, provider, *functions):

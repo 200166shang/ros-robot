@@ -1,11 +1,15 @@
 """DashScope 原生工具 Adapter：拥有完整响应和 SSE 片段收集。"""
 
+import asyncio
+import io
 import json
 import os
-import urllib.request
+import time
 from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
+
+import httpx
 
 from robot_agent.results import ModelReply, ToolCall
 
@@ -49,20 +53,36 @@ def _object(value) -> Dict[str, Any]:
     return value
 
 
-class TextProvider(Protocol):
-    """临时同步模型 Interface 返回完整记录，不把网络片段交给 Agent。"""
+class ModelTransportError(Exception):
+    """已分类的外部模型故障，只有明确暂时故障允许有限重试。"""
 
-    def complete(
-        self, text: str, timeout: float, *, tools: Optional[Dict] = None
+    def __init__(self, code: str, *, transient: bool = False) -> None:
+        """只保留脱敏错误代码和重试分类。"""
+        super().__init__(code)
+        self.code = code
+        self.transient = transient
+
+
+class Model(Protocol):
+    """异步模型 Interface；deadline 是所有等待共用的绝对期限。"""
+
+    async def complete(
+        self, text: str, deadline: float, *, tools: Optional[Dict] = None
     ) -> ModelReply:
         """tools 为空时禁用工具，用于只读摘要。"""
         ...
 
+    async def aclose(self) -> None:
+        """释放模型连接和本地请求资源。"""
+        ...
+
 
 class DashScopeProvider:
-    """在线模型 Adapter；网络暂时由受控阻塞调用持有。"""
+    """原生异步 HTTP Adapter，独占并关闭请求响应和连接池。"""
 
-    def __init__(self, config: dict) -> None:
+    def __init__(
+        self, config: dict, *, client: Optional[httpx.AsyncClient] = None
+    ) -> None:
         """加载非敏感配置，凭证只从环境读取，在线端点必须 HTTPS。"""
         if "api_key" in config:
             raise ValueError("配置使用 api_key_env，不允许明文 api_key")
@@ -84,9 +104,13 @@ class DashScopeProvider:
             )
         if not self._system_prompt.strip():
             raise ValueError("system prompt 文件不能为空")
+        self._client = client or httpx.AsyncClient()
+        self._requests = set()
+        self._cancelling = set()
+        self._closed = False
 
-    def complete(
-        self, text: str, timeout: float, *, tools: Optional[Dict] = None
+    async def complete(
+        self, text: str, deadline: float, *, tools: Optional[Dict] = None
     ) -> ModelReply:
         """完整收齐请求后返回记录；不执行工具，也不请求措辞总结。"""
         payload = {
@@ -102,24 +126,113 @@ class DashScopeProvider:
         if tools is not None:
             payload["tools"] = [tools]
             payload["parallel_tool_calls"] = False
-        request = urllib.request.Request(
-            self._endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": "Bearer " + self._key,
-                "Content-Type": "application/json",
-            },
+        if self._closed:
+            raise ModelTransportError("closed")
+        task = asyncio.create_task(
+            self._request(payload, deadline, tools is not None)
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            try:
-                return self._read_response(response, tools is not None)
-            except (
-                KeyError,
-                TypeError,
-                UnicodeError,
-                json.JSONDecodeError,
-            ) as error:
-                raise ModelProtocolError("模型协议无效") from error
+        self._requests.add(task)
+        task.add_done_callback(self._retire_request)
+        try:
+            done, _ = await asyncio.wait(
+                {task}, timeout=max(0.0, deadline - time.monotonic())
+            )
+            if not done:
+                raise ModelTransportError("timeout", transient=True)
+            return task.result()
+        finally:
+            self._cancel_request(task)
+            # Agent 与 Adapter 的同一期限可能同时取消；清理只取消一次。
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+            if not task.cancelled():
+                task.result()
+
+    def _cancel_request(self, task: asyncio.Task) -> None:
+        """不把第二次取消传入正在释放响应的同一原请求。"""
+        if not task.done() and task not in self._cancelling:
+            self._cancelling.add(task)
+            task.cancel()
+
+    def _retire_request(self, task: asyncio.Task) -> None:
+        """请求清理结束后才释放强引用，并领取尚未观察的异常。"""
+        self._requests.discard(task)
+        self._cancelling.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def _request(self, payload, deadline, tools_enabled) -> ModelReply:
+        """只在网络入口分类已知外部故障，不隐藏客户端编程错误。"""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ModelTransportError("timeout", transient=True)
+        try:
+            async with self._client.stream(
+                "POST",
+                self._endpoint,
+                json=payload,
+                headers={"Authorization": "Bearer " + self._key},
+                timeout=remaining,
+            ) as response:
+                response.raise_for_status()
+                raw = bytearray()
+                line = bytearray()
+                async for chunk in response.aiter_bytes():
+                    raw.extend(chunk)
+                    if len(raw) > MAX_MODEL_OUTPUT_BYTES:
+                        raise ModelProtocolError("模型输出过长")
+                    done = False
+                    for byte in chunk:
+                        line.append(byte)
+                        if len(line) > MAX_SSE_LINE_BYTES:
+                            raise ModelProtocolError("模型输出过长")
+                        if byte == 10:
+                            if (
+                                line.startswith(b"data:")
+                                and line[5:].strip() == b"[DONE]"
+                            ):
+                                done = True
+                            line.clear()
+                    if done:
+                        break
+                try:
+                    return self._read_response(io.BytesIO(raw), tools_enabled)
+                except (
+                    KeyError,
+                    TypeError,
+                    UnicodeError,
+                    json.JSONDecodeError,
+                ) as error:
+                    raise ModelProtocolError("模型协议无效") from error
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            raise ModelTransportError(
+                "http_" + str(status),
+                transient=status in {408, 429, 500, 502, 503, 504},
+            ) from error
+        except httpx.TimeoutException as error:
+            raise ModelTransportError("timeout", transient=True) from error
+        except httpx.NetworkError as error:
+            raise ModelTransportError("network", transient=True) from error
+        except (httpx.RemoteProtocolError, httpx.DecodingError) as error:
+            raise ModelProtocolError("模型传输协议无效") from error
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol) as error:
+            raise ModelTransportError("configuration") from error
+
+    async def aclose(self) -> None:
+        """先结束已拥有的请求，再释放连接池。"""
+        self._closed = True
+        requests = tuple(self._requests)
+        for task in requests:
+            self._cancel_request(task)
+        try:
+            if requests:
+                await asyncio.gather(*requests, return_exceptions=True)
+        finally:
+            await self._client.aclose()
 
     def _read_response(self, response, tools_enabled: bool) -> ModelReply:
         """兼容完整 JSON 与 SSE，截断、多个调用及未完成响应全部拒绝。"""

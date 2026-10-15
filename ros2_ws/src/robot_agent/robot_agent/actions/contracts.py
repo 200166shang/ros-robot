@@ -1,7 +1,7 @@
 """动作输入模型是 Schema、默认值和类型校验的共同声明。"""
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Literal, Optional, Type, Union
+from typing import Callable, Literal, Optional, Type, Union
 
 from pydantic import (
     BaseModel,
@@ -149,7 +149,7 @@ class LevelInput(ActionInput):
 class ActionHandler:
     """输入模型、业务校验和实现；仅等待设备的实现接收显式期限。"""
 
-    execute: Callable[..., Dict]
+    execute: Callable
     validate: Optional[Callable[..., None]] = None
     inputs: Type[ActionInput] = NoArguments
     timed: bool = False

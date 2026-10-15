@@ -22,6 +22,7 @@ setup(
         "setuptools",
         "websocket-client>=1.6,<2",
         "pydantic==2.10.6",
+        "httpx==0.28.1",
         "typing-extensions==4.13.2",
     ],
     zip_safe=True,
