@@ -64,7 +64,7 @@ class AgentApplication:
             raise ValueError("shutdown_timeout 必须为正有限秒数")
         self._shutdown_timeout = shutdown_timeout
         self._active: Optional[asyncio.Task] = None
-        self._turn_text = ""
+        self._agent_text = ""
         self._agent = agent
         self._input = speech_input
         self._recording = recording_input
@@ -150,7 +150,6 @@ class AgentApplication:
             return rejected
         self._processing = True
         self._active = asyncio.current_task()
-        self._turn_text = text
         paused = False
         heard_input = False
         result = make_result(uuid.uuid4().hex, "failed", "语音回合失败。")
@@ -177,7 +176,13 @@ class AgentApplication:
                 )
             )
             if decision is None:
-                result = await self._agent.submit(text)
+                previous_result = self._agent.last_result
+                try:
+                    result = await self._agent.submit(text)
+                finally:
+                    # 新 Agent 回合接管输入；异常保留，忙碌拒绝不覆盖。
+                    if self._agent.last_result is not previous_result:
+                        self._agent_text = text
             else:
                 result = replace(
                     result, status=decision.status, reply=decision.reply
@@ -215,7 +220,6 @@ class AgentApplication:
             )
         self._processing = True
         self._active = asyncio.current_task()
-        self._turn_text = ""
         try:
             try:
                 text = await self._recording.recognize(
@@ -250,7 +254,6 @@ class AgentApplication:
             )
         self._processing = True
         self._active = asyncio.current_task()
-        self._turn_text = ""
         try:
             if self._input is not None:
                 self._input.pause()
@@ -379,7 +382,7 @@ class AgentApplication:
                         )
                     ):
                         self._output.save_shutdown(
-                            result, self._turn_text, self._session.state
+                            result, self._agent_text, self._session.state
                         )
                 except OSError as error:
                     errors.append(error)
