@@ -7,6 +7,7 @@ from async_speech_fixture import acknowledge, event, final, speech_server
 from websockets.asyncio import client
 from websockets.asyncio.client import ClientConnection
 
+from robot_agent.voice._async_speech_task import SpeechProtocolError
 from robot_agent.voice.live_input import LiveSpeechInput
 
 
@@ -271,8 +272,9 @@ def test_accepted_final_resets_budget_but_preserves_pause_across_reconnect(
     asyncio.run(scenario())
 
 
-def test_invalid_final_flags_fail_once_instead_of_delivering_text(monkeypatch):
-    """外部事件的布尔字段必须严格校验，不能把字符串当作最终句。"""
+@pytest.mark.parametrize("deep_json", [False, True])
+def test_invalid_control_event_fails_without_reconnect(monkeypatch, deep_json):
+    """深 JSON 与无效最终句均为永久协议故障，不交付文本或重连。"""
 
     async def scenario():
         """在同一事件循环观察输入、错误及资源回收。"""
@@ -282,6 +284,10 @@ def test_invalid_final_flags_fail_once_instead_of_delivering_text(monkeypatch):
             """本机语音服务器提供可控事件并等待连接释放。"""
             command = await acknowledge(socket)
             connections.append(socket)
+            if deep_json:
+                await socket.send("[" * 1200 + "0" + "]" * 1200)
+                await socket.wait_closed()
+                return
             await event(
                 socket,
                 command,
@@ -302,7 +308,7 @@ def test_invalid_final_flags_fail_once_instead_of_delivering_text(monkeypatch):
             source = PcmFixture()
             live = LiveSpeechInput({}, source)
             try:
-                with pytest.raises(OSError, match="最终句无效"):
+                with pytest.raises(SpeechProtocolError):
                     await live.listen(1)
             finally:
                 await live.aclose()

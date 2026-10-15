@@ -79,6 +79,11 @@ class AsyncSpeechTask:
             return message
         try:
             event = json.loads(message)
+        except RecursionError as error:
+            raise SpeechProtocolError("在线语音 JSON 嵌套过深") from error
+        except (ValueError, TypeError) as error:
+            raise SpeechProtocolError("在线语音事件无效") from error
+        try:
             header = event["header"]
             if header["task_id"] != self._task_id:
                 raise ValueError("任务标识不匹配")

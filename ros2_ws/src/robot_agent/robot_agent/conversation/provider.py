@@ -42,9 +42,14 @@ def _invalid_constant(value):
 
 def _decode(raw):
     """JSON 解码仅留在传输入口。"""
-    return json.loads(
-        raw, object_pairs_hook=_unique_object, parse_constant=_invalid_constant
-    )
+    try:
+        return json.loads(
+            raw,
+            object_pairs_hook=_unique_object,
+            parse_constant=_invalid_constant,
+        )
+    except RecursionError as error:
+        raise ModelProtocolError("模型 JSON 嵌套过深") from error
 
 
 def _object(value) -> Dict[str, Any]:
@@ -341,10 +346,11 @@ class DashScopeProvider:
             arguments = _decode(function["arguments"])
             if not isinstance(arguments, dict):
                 raise ModelProtocolError("工具参数必须为对象")
-            return ModelReply(
-                content or "",
-                ToolCall(call["id"], function["name"], arguments),
-            )
+            try:
+                tool_call = ToolCall(call["id"], function["name"], arguments)
+            except RecursionError as error:
+                raise ModelProtocolError("工具参数嵌套过深") from error
+            return ModelReply(content or "", tool_call)
         if finish != "stop" or not content or not content.strip():
             raise ModelProtocolError("聊天响应未完成或为空")
         return ModelReply(content)

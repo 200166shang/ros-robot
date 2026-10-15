@@ -3,6 +3,8 @@
 import io
 import json
 
+import httpx
+
 
 def native_response(actions=(), response="你好"):
     """提供完整的单计划 SSE 响应，不连接任何模型 endpoint。"""
@@ -31,7 +33,6 @@ def native_response(actions=(), response="你好"):
 
 def install_async_transport(monkeypatch, send):
     """仅替换外部 HTTP 传输，生产请求、流式解码与关闭保持真实。"""
-    import httpx
 
     client_type = httpx.AsyncClient
 

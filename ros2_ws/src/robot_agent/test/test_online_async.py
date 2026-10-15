@@ -2,12 +2,22 @@
 
 import asyncio
 import json
+import ssl
+import subprocess
 import time
 
 import httpx
+import pytest
 
 from robot_agent.actions.capabilities import create_default_actions
-from robot_agent.conversation.provider import DashScopeProvider
+from robot_agent.actions.execution import ActionExecutionError
+from robot_agent.conversation.agent import Agent
+from robot_agent.conversation.memory import ConversationMemory
+from robot_agent.conversation.provider import (
+    DashScopeProvider,
+    ModelTransportError,
+)
+from robot_agent.results import ModelReply, ToolCall
 
 
 def test_async_provider_collects_native_sse_and_closes(monkeypatch):
@@ -46,8 +56,6 @@ def test_async_provider_collects_native_sse_and_closes(monkeypatch):
 
 def test_async_action_late_receipt_requires_reconcile_and_never_replays():
     """超时仅结束等待，原动作迟到确认，旧快照和余项保持不变。"""
-    from robot_agent.conversation.agent import Agent
-    from robot_agent.results import ModelReply, ToolCall
 
     async def scenario():
         """提交与核对共用原操作所在循环。"""
@@ -114,7 +122,6 @@ def test_model_retry_is_classified_finite_and_shares_phase_deadline(
     monkeypatch,
 ):
     """503 可重试，401 不重试，每次等待共用原阶段期限。"""
-    from robot_agent.conversation.agent import Agent
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
 
@@ -148,9 +155,6 @@ def test_model_retry_is_classified_finite_and_shares_phase_deadline(
 
 def test_summary_cleanup_blocks_clear_then_discards_late_summary(tmp_path):
     """摘要超时保留回复，清理结束前阻止清空，迟到摘要不能回写。"""
-    from robot_agent.conversation.agent import Agent
-    from robot_agent.conversation.memory import ConversationMemory
-    from robot_agent.results import ModelReply
 
     async def scenario():
         """可控外部模型模拟取消期间的资源清理。"""
@@ -201,15 +205,11 @@ def test_summary_cleanup_blocks_clear_then_discards_late_summary(tmp_path):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("error_type", [RuntimeError, RecursionError])
 def test_programming_error_surfaces_with_submitted_and_confirmed_facts(
-    tmp_path,
+    tmp_path, error_type
 ):
     """设备编程错误继续抛出，之前成功与当前未知仍可供调用者保存。"""
-    import pytest
-
-    from robot_agent.actions.execution import ActionExecutionError
-    from robot_agent.conversation.agent import Agent
-    from robot_agent.results import ModelReply, ToolCall
 
     async def scenario():
         """失败不转成普通设备回执，也不补执行余项。"""
@@ -218,7 +218,7 @@ def test_programming_error_surfaces_with_submitted_and_confirmed_facts(
         async def broken():
             """模拟请求已发出之后的编程错误。"""
             sent.append("sent")
-            raise RuntimeError("programming failure")
+            raise error_type("programming failure")
 
         class Provider:
             """固定计划替代外部模型。"""
@@ -249,7 +249,7 @@ def test_programming_error_surfaces_with_submitted_and_confirmed_facts(
         agent = Agent(Provider(), registry)
         with pytest.raises(ActionExecutionError) as failure:
             await agent.submit("go")
-        assert isinstance(failure.value.__cause__, RuntimeError)
+        assert type(failure.value.__cause__) is error_type
         assert [a.status for a in failure.value.result.actions] == [
             "simulated_success",
             "unknown",
@@ -268,10 +268,6 @@ def test_real_sse_trickle_hits_total_deadline_and_releases_socket(
     tmp_path, monkeypatch
 ):
     """真实 TLS SSE 受总期限约束，循环推进和连接释放可观察。"""
-    import ssl
-    import subprocess
-
-    from robot_agent.conversation.agent import Agent
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
     cert = tmp_path / "fixture.crt"
@@ -427,9 +423,6 @@ def test_real_sse_trickle_hits_total_deadline_and_releases_socket(
 
 def test_retry_attempts_share_absolute_budget_and_do_not_overlap():
     """第一次故障消耗预算，第二次只使用余量，不能重置阶段期限。"""
-    from robot_agent.conversation.agent import Agent
-    from robot_agent.conversation.provider import ModelTransportError
-    from robot_agent.results import ModelReply
 
     async def scenario():
         """控制外部模型等待，独立观察期限与并发请求数。"""
@@ -474,11 +467,6 @@ def test_retry_attempts_share_absolute_budget_and_do_not_overlap():
 
 def test_summary_programming_error_surfaces_without_erasing_action(tmp_path):
     """摘要编程错误向外显露，已确认动作仍通过回合快照可见。"""
-    import pytest
-
-    from robot_agent.conversation.agent import Agent
-    from robot_agent.conversation.memory import ConversationMemory
-    from robot_agent.results import ModelReply, ToolCall
 
     async def scenario():
         """错误后的清理不会重执行设备，也不会伪造记忆成功。"""
@@ -520,9 +508,6 @@ def test_summary_programming_error_surfaces_without_erasing_action(tmp_path):
 
 def test_model_interface_enforces_deadline_during_active_stream(monkeypatch):
     """Model 直接调用也有总期限，流持续到达不能无限延长等待。"""
-    import pytest
-
-    from robot_agent.conversation.provider import ModelTransportError
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
 
@@ -566,7 +551,6 @@ def test_http_response_cleanup_retains_model_ownership_until_closed(
     monkeypatch,
 ):
     """业务超时后 HTTP 响应清理仍有唯一归属，接入和清空均保持 busy。"""
-    from robot_agent.conversation.agent import Agent
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-only")
 

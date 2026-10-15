@@ -29,6 +29,74 @@ from robot_audio.async_pcm_input import AsyncPcmMicrophone
 from robot_audio.async_playback import AsyncWavPlayer
 
 
+@pytest.mark.parametrize("prior_output", [False, True])
+@pytest.mark.parametrize("record_failure", [False, True])
+def test_shutdown_saves_confirmed_turn_after_summary_programming_error(
+    tmp_path, monkeypatch, prior_output, record_failure
+):
+    """摘要错误保持原样传播；退出必须保存尚未进入语音输出的动作事实。"""
+
+    async def scenario():
+        """先通过真实 Agent 确认动作，再检查公开关闭入口的产物。"""
+
+        class Model(FixedModel):
+            """仅摘要阶段抛出编程错误，动作请求仍使用固定模型 Seam。"""
+
+            async def complete(self, text, deadline, *, tools=None):
+                """动作后发生的摘要故障不能被误判为外部临时故障。"""
+                if tools is None:
+                    raise RuntimeError("summary implementation failure")
+                return await super().complete(text, deadline, tools=tools)
+
+        capabilities = create_default_actions()
+        agent = Agent(
+            Model(),
+            capabilities.registry,
+            memory=ConversationMemory(tmp_path / "memory", 1, 1),
+        )
+        tts = FixedTTS()
+        app = AgentApplication(
+            agent, None, tts, tmp_path, capabilities.music_playing
+        )
+        local = (
+            await app.submit_transcript("小莫小莫") if prior_output else None
+        )
+        with pytest.raises(
+            RuntimeError, match="summary implementation failure"
+        ):
+            await app.submit_transcript("点头", direct=True)
+        original = agent.last_result
+        assert original.actions[0].status == "simulated_success"
+        assert len(tts.replies) == int(prior_output)
+        destination = tmp_path / (original.turn_id + ".json")
+        assert not destination.exists()
+        if record_failure:
+
+            def fail_replace(path, destination):
+                """仅在公开关闭阶段让原子保存失败。"""
+                raise OSError("record disk failed")
+
+            monkeypatch.setattr(Path, "replace", fail_replace)
+            with pytest.raises(OSError, match="退出回合记录保存失败"):
+                await app.aclose()
+            assert not destination.exists()
+        else:
+            await app.aclose()
+            saved = json.loads(destination.read_text())
+            assert saved["actions"][0]["status"] == "simulated_success"
+            assert saved["transcript"] == "点头"
+            assert "audio_path" not in saved
+            if local is not None:
+                prior = json.loads(
+                    (tmp_path / (local.turn_id + ".json")).read_text()
+                )
+                assert prior["audio_path"] == local.audio_path
+                assert prior["status"] == "woken"
+        assert original.actions[0].status == "simulated_success"
+
+    asyncio.run(scenario())
+
+
 def test_shutdown_uses_one_budget_and_attempts_every_closer(tmp_path):
     """多个慢外部关闭共享期限，故障不能跳过其他资源。"""
 
@@ -701,8 +769,9 @@ def test_recording_close_reclaims_native_file_recognition(
     asyncio.run(scenario())
 
 
-def test_late_shutdown_receipt_keeps_original_audio_after_local_output(
-    tmp_path,
+@pytest.mark.parametrize("unresolved", [False, True])
+def test_shutdown_keeps_original_audio_after_local_output(
+    tmp_path, unresolved
 ):
     """等待动作期间本地唤醒另有输出，最终确认仍保留原动作产物及快照。"""
 
@@ -713,7 +782,8 @@ def test_late_shutdown_receipt_keeps_original_audio_after_local_output(
 
         async def nod():
             """设备只完成原始调用。"""
-            await receipt.wait()
+            if unresolved:
+                await receipt.wait()
             return {"status": "real_success"}
 
         capabilities.registry.register("head_nod", nod)
@@ -726,7 +796,8 @@ def test_late_shutdown_receipt_keeps_original_audio_after_local_output(
             shutdown_timeout=0.2,
         )
         original = await app.submit_transcript("点头", direct=True)
-        assert original.actions[0].status == "unknown"
+        status = "unknown" if unresolved else "real_success"
+        assert original.actions[0].status == status
         local = await app.submit_transcript("小莫小莫")
         assert local.status == "woken"
         closing = asyncio.create_task(app.aclose())
@@ -740,7 +811,7 @@ def test_late_shutdown_receipt_keeps_original_audio_after_local_output(
         assert saved["transcript"] == "点头"
         assert saved["audio_path"] == original.audio_path
         assert saved["tts_status"] == "completed"
-        assert original.actions[0].status == "unknown"
+        assert original.actions[0].status == status
         local_path = tmp_path / (local.turn_id + ".json")
         assert json.loads(local_path.read_text())["status"] == "woken"
 

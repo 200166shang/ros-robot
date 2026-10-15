@@ -8,6 +8,7 @@ from native_protocol_fixture import install_async_transport, native_response
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.agent import Agent
+from robot_agent.conversation.memory import ConversationMemory
 from robot_agent.conversation.provider import DashScopeProvider
 
 
@@ -78,7 +79,6 @@ def test_invalid_external_prompt_fails_at_startup(
 
 def test_summary_request_disables_native_tools(tmp_path, monkeypatch):
     """摘要使用真实请求构造禁用工具，不为动作回复额外请求模型措辞。"""
-    from robot_agent.conversation.memory import ConversationMemory
 
     requests = []
 

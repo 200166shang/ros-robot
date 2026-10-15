@@ -368,16 +368,19 @@ class AgentApplication:
                     errors.append(error)
             result = self._agent.last_result
             recorded = self._output.last_record
-            if result is not None and (
-                result is not original_result
-                or (
-                    recorded is not None and recorded.turn_id == result.turn_id
-                )
-            ):
+            if result is not None:
                 try:
-                    self._output.save_shutdown(
-                        result, self._turn_text, self._session.state
-                    )
+                    if (
+                        result is not original_result
+                        or not self._output.has_saved_record(result.turn_id)
+                        or (
+                            recorded is not None
+                            and recorded.turn_id == result.turn_id
+                        )
+                    ):
+                        self._output.save_shutdown(
+                            result, self._turn_text, self._session.state
+                        )
                 except OSError as error:
                     errors.append(error)
         if errors:
