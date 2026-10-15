@@ -236,3 +236,37 @@ create_interaction集中模型、动作注册表、记忆与共同期限的组�
 
 日志位于同一源码外证据目录，前缀assembly-；双轴审查
 Standards/Spec均0项发现。
+
+## 动作执行与核对状态集中（2026-10-15）
+
+本轮在共同组装重构后继续实施用户确认的候选02。`online_execution`
+中的 `ActionExecution` 独占动作Future、全表执行记录、未知状态与迟到
+回执核对；`OnlineInteraction` 保留模型、整表校验及记忆编排，通过
+`blocked`、`execute`、`reconcile` 使用执行事实。执行流程异常携带
+原执行快照返回，仍不写入记忆。结果字段、期限、失败停止、显式核对、
+无自动重试/重叠、不补执行余项与已返回快照语义保持。
+
+验证使用 ROS 2 Foxy / Python 3.8，工具沿用源码外 issue-67-venv。
+
+- 交互与记忆定向回归：27项通过，1.15秒。新增检查覆盖执行等待流程
+  异常后的原调用核对、异常不写记忆、设备数据保留，以及旧回合标识
+  不能解除新回合阻塞；原有输出格式异常注入迁到执行模块。
+- 完整源码回归：107项通过，12.07秒。命令：加载Foxy及本轮install，
+  将robot_audio、robot_agent、robot_voice源码与pytest依赖加入
+  PYTHONPATH，ROS_DOMAIN_ID=195，执行
+  `python3 -m pytest -q tests ros2_ws/src/robot_audio/tests ros2_ws/src/robot_agent/test ros2_ws/src/robot_voice/test ros2_ws/src/robot_bringup/test`。
+- 全新目录构建robot_audio、robot_agent：两包成功，15.4秒。
+  使用 `colcon build --base-paths ros2_ws/src --packages-select robot_audio robot_agent --executor sequential`，
+  build/install/log均指定在源码外issue-68-execution-build目录。
+- 安装版：从/tmp加载新install，不加入源码路径，打印确认执行模块位于
+  install/robot_agent/lib/python3.8/site-packages。执行整个
+  robot_agent/test目录，89项通过，7.18秒。
+- Ruff格式及静态检查44文件通过；online_execution、online_interaction
+  的Pyright为0错误、0警告；git diff --check通过。
+- 双轴审查范围 `0008369...714906f`：Standards 0项、Spec 0项。
+
+证据位于源码外 `/home/orangepi/local-data/ros-robot/`：
+`issue-68-microphone-refactor/execution-{build,pytest,installed}.log`；
+全新构建目录为 `issue-68-execution-build/{build,install,log}`。
+本轮为行为保持重构，未重跑云端在线音频或实体麦克风；此前真实在线
+证据与实体硬件验证限度保持，不将本轮固定测试当作新增在线验收。
