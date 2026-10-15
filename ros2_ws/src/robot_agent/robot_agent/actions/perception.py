@@ -1,10 +1,12 @@
 """感知动作流程：复用设备 Interface，不管理进程或输出运动命令。"""
 
+import asyncio
 import json
 import time
 from typing import Dict, Optional, Protocol
 
 from robot_agent.actions.contracts import ActionHandler
+from robot_agent.calls import start_call
 
 
 class PerceptionInterface(Protocol):
@@ -191,7 +193,7 @@ def perception_actions(
     perception: PerceptionActions,
 ) -> Dict[str, ActionHandler]:
     """声明感知动作及兼容名称，入口负责批量注册，流程不依赖注册表。"""
-    return {
+    handlers = {
         "start_receiving_image": ActionHandler(
             perception.start_camera, timed=True
         ),
@@ -228,3 +230,19 @@ def perception_actions(
         "enable_lidar": ActionHandler(perception.enable_lidar, timed=True),
         "disable_lidar": ActionHandler(perception.disable_lidar, timed=True),
     }
+
+    return {
+        name: ActionHandler(_blocking_perception(handler.execute), timed=True)
+        for name, handler in handlers.items()
+    }
+
+
+def _blocking_perception(method):
+    """#92 前的唯一阻塞设备 Adapter；执行模块仍持有原异步操作。"""
+
+    async def invoke(**parameters):
+        """只包裹尚未迁移的感知调用，不把线程引入业务主流程。"""
+        operation = start_call(lambda: method(**parameters))
+        return await asyncio.shield(asyncio.wrap_future(operation))
+
+    return invoke

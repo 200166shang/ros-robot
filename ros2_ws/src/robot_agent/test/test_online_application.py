@@ -41,13 +41,13 @@ def test_busy_application_keeps_session_awake_until_turn_finishes(tmp_path):
         )
         await application.submit_transcript("小莫小莫")
         original = model.complete
-        entered, release = threading.Event(), threading.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
 
-        def complete(text, timeout, *, tools=None):
+        async def complete(text, deadline, *, tools=None):
             """模拟在途模型请求。"""
             entered.set()
-            release.wait(2)
-            return original(text, timeout, tools=tools)
+            await release.wait()
+            return await original(text, deadline, tools=tools)
 
         model.complete = complete
         turn = asyncio.create_task(application.submit_transcript("请点头"))
@@ -71,13 +71,13 @@ def test_agent_rejects_overlap_while_actions_are_waiting():
 
     async def scenario():
         """设备 Seam 保持动作在途，另一个提交应直接报告忙碌。"""
-        entered, release = threading.Event(), threading.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
         capabilities = create_default_actions()
 
-        def nod():
+        async def nod():
             """提供可控设备确认。"""
             entered.set()
-            release.wait(2)
+            await release.wait()
             return {"status": "real_success"}
 
         capabilities.registry.register("head_nod", nod)

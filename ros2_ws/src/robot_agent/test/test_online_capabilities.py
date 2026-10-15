@@ -33,11 +33,13 @@ def test_registry_contains_only_explicitly_registered_actions():
         == "custom"
     )
     assert (
-        registry.invoke(
-            registry.bind_plan(
-                {"actions": [{"name": "custom", "arguments": {}}]}
-            ).commands[0],
-            100,
+        asyncio.run(
+            registry.invoke(
+                registry.bind_plan(
+                    {"actions": [{"name": "custom", "arguments": {}}]}
+                ).commands[0],
+                100,
+            )
         ).status
         == "real_success"
     )
@@ -74,7 +76,7 @@ def test_voice_filter_uses_injected_music_capability(tmp_path, monkeypatch):
         state["playing"] = False
         return {"status": "real_success"}
 
-    def complete(self, text, timeout, *, tools=None):
+    async def complete(self, text, deadline, *, tools=None):
         """仅提供固定模型响应，保留真实交互流程。"""
         requests.append(text)
         if text.startswith("【会话上下文】"):

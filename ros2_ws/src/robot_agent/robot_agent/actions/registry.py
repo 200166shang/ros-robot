@@ -1,5 +1,6 @@
 """单一目录导出原生工具 Schema，整表绑定后才允许调用设备。"""
 
+import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Type
 
@@ -128,8 +129,10 @@ class ActionRegistry:
             commands.append(ActionCommand(item.name, parameters))
         return ActionPlan(tuple(commands))
 
-    def invoke(self, command: ActionCommand, deadline: float) -> ActionReceipt:
-        """临时同步设备 Adapter 显式传递期限，出口统一为不可变回执。"""
+    async def invoke(
+        self, command: ActionCommand, deadline: float
+    ) -> ActionReceipt:
+        """直接等待异步设备；即时模拟在当前循环返回，不引入工作线程。"""
         handler = self._handlers[command.name]
         if handler.timed:
             receipt = handler.execute(
@@ -137,6 +140,10 @@ class ActionRegistry:
             )
         else:
             receipt = handler.execute(**_json_value(command.parameters))
+        if inspect.isawaitable(receipt):
+            receipt = await receipt
+        if isinstance(receipt, ActionReceipt):
+            return receipt
         if (
             not isinstance(receipt, dict)
             or receipt.get("status") not in DEVICE_OUTCOMES

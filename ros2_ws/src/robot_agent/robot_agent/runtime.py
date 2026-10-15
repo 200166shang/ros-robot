@@ -42,6 +42,7 @@ def build_agent(
         DashScopeProvider(config),
         actions,
         provider_timeout=float(config.get("provider_timeout", 60)),
+        model_attempts=config.get("model_attempts", 3),
         action_timeout=float(
             config.get("action_timeout", DEFAULT_ACTION_TIMEOUT)
         ),

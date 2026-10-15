@@ -4,7 +4,7 @@ import asyncio
 import json
 
 import pytest
-from native_protocol_fixture import native_response
+from native_protocol_fixture import install_async_transport, native_response
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.agent import Agent
@@ -18,11 +18,11 @@ def captured_requests(monkeypatch):
 
     def send(request, timeout):
         """替代外部 HTTPS 响应，记录真实请求并返回流式聊天。"""
-        requests.append(json.loads(request.data))
+        requests.append(json.loads(request.content))
         return native_response(response="你好")
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    monkeypatch.setattr("urllib.request.urlopen", send)
+    install_async_transport(monkeypatch, send)
     return requests
 
 
@@ -84,7 +84,7 @@ def test_summary_request_disables_native_tools(tmp_path, monkeypatch):
 
     def send(request, timeout):
         """先返回原生动作，再返回纯文字摘要。"""
-        body = json.loads(request.data)
+        body = json.loads(request.content)
         requests.append(body)
         if len(requests) == 1:
             return native_response(
@@ -93,7 +93,7 @@ def test_summary_request_disables_native_tools(tmp_path, monkeypatch):
         return native_response(response="只记录模拟 LCD 已确认")
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "fixture-key")
-    monkeypatch.setattr("urllib.request.urlopen", send)
+    install_async_transport(monkeypatch, send)
     agent = Agent(
         DashScopeProvider({}),
         create_default_actions().registry,

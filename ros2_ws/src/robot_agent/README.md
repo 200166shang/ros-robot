@@ -15,7 +15,9 @@ processing time does not put an active session to sleep.
 
 Read a text turn in `Agent.submit` in `robot_agent/conversation/agent.py`: obtain
 memory context, await a complete `ModelReply`, bind the whole native plan,
-execute in order, then update memory. The Agent has no audio dependency. `ActionExecution` owns
+await execution in order, then record the actual reply and explicitly await a
+tool-disabled summary when needed. The Agent has no audio dependency.
+`ActionExecution` owns
 submitted device operations, unknown results, and explicit reconciliation. Model
 or summary calls still in flight block a new request; an unknown action blocks
 new actions until the original receipt is explicitly reconciled.
@@ -26,12 +28,33 @@ wires result publication and lifecycle to it; it has no second listen/turn loop.
 `submit_transcript(direct=True)`. Direct mode bypasses wake and music rules and
 retains the existing result JSON and simulated device behavior.
 
-The temporary `legacy_io.py` Adapters own the still-blocking operations. Each
-Agent owns model, execution, and memory call handles; the application owns speech
-input and output Adapters. A wait ending does not cancel an underlying operation.
-The model Adapter owns JSON/SSE assembly and returns a complete `ModelReply`.
+`DashScopeProvider.complete(text, deadline, tools=...)` uses HTTPX native async
+HTTP/SSE and owns its response and client resources. Agent owns the single model
+attempt task through cancellation cleanup. The default three attempts share one
+phase deadline (`model_attempts` accepts 1–5); only classified transient transport failures retry, before actions have
+been submitted and after the previous attempt is fully closed. Invalid protocol,
+Schema and permanent configuration failures do not retry. A timed-out or cancelled
+model result cannot execute actions or apply a late summary.
+
+`ActionRegistry.invoke(command, deadline)` and `ActionExecution.execute(plan,
+turn_id)` are native async Interfaces. Instant simulations run in the event loop;
+async device implementations are awaited directly. The temporary blocking
+perception Adapter in `actions/perception.py` is the only action worker bridge
+until the ROS receipt migration. Execution retains the original operation Task
+when a wait expires or its caller is cancelled. A completed `unknown` receipt
+still blocks admission; `reconcile(turn_id)` only checks that original operation.
+Unexpected action/report errors carry `ActionExecutionError.result` and preserve
+the original exception as the cause. `Agent.last_result` also retains confirmed
+or submitted facts when later memory or programming errors propagate.
+
+The temporary `legacy_io.py` Adapters still own blocking speech operations.
+`AgentApplication.aclose` closes speech and the Agent's model client. Native audio
+I/O and the total shutdown budget remain subsequent migration steps; the accepted
+application `aclose(deadline)` shape does not yet impose that total budget.
+The model Adapter owns bounded JSON/SSE assembly and returns a complete `ModelReply`.
 It exposes one native `execute_actions` tool; ordinary chat is plain model text.
-Summaries explicitly disable tools. `actions/contracts.py` declares small strict
+Summaries explicitly disable tools and use one attempt with a separate phase
+budget. `actions/contracts.py` declares small strict
 Pydantic input models; `ActionRegistry.tool_schema` and `bind_plan` share these
 models for Schema, validation and defaults. The catalog preserves aliases, order
 and repeats. An invalid final item prevents every action from executing. Internal
@@ -41,10 +64,11 @@ exist only at device Adapters; the registry returns an `ActionReceipt`.
 `ExecutionResult.tool_call_id` keeps the native call associated with execution
 and reconciliation without changing the external result JSON. The memory stores
 plain exchanges, so it does not persist unpaired native tool messages.
-Native network/audio I/O and a total shutdown budget are subsequent migration
-steps; the accepted `aclose(deadline)` shape does not yet impose that total
-budget. The ROS edge temporarily hosts the asyncio
-loop in its managed business thread while the ROS executor delivers receipts.
+The ROS edge temporarily hosts the asyncio loop in its managed business thread
+while the ROS executor delivers receipts. Memory storage owns bounded data and
+atomic persistence; it has no callback that can invoke a model. Clear/new turn
+admission stays blocked while summary cleanup is in flight, so retired summaries
+cannot write after a successful clear.
 
 `robot_agent/results.py` defines `ModelReply`, `ActionReceipt`, `ActionOutcome`,
 `ExecutionResult`, `TurnResult`, and `VoiceRecord`. A voice record composes its
