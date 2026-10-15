@@ -6,8 +6,6 @@ import time
 from concurrent.futures import Future
 from typing import Dict, Optional, Protocol
 
-import websocket
-
 from robot_agent.calls import start_call
 from robot_agent.voice._speech_task import SpeechConnection, SpeechTask
 from robot_agent.voice.speech import FRAME_SAMPLES, SILENCE_FRAME
@@ -56,7 +54,7 @@ class LiveSpeechInput:
         self._stream: Optional[SpeechTask] = None
         self._sent_samples = 0
         self._accept_after_ms = 0
-        self._send_error: Optional[Exception] = None
+        self._send_error: Optional[OSError] = None
         self._error: Optional[OSError] = None
         self._reader: Optional[Future] = None
         self._receiver: Optional[Future] = None
@@ -119,7 +117,7 @@ class LiveSpeechInput:
                         SILENCE_FRAME if self._paused else frame
                     )
                     self._sent_samples += FRAME_SAMPLES
-                except (OSError, websocket.WebSocketException) as error:
+                except OSError as error:
                     self._send_error = error
                     self._stream = None
 
@@ -159,7 +157,7 @@ class LiveSpeechInput:
                                 raise OSError(
                                     "ASR音频发送失败"
                                 ) from self._send_error
-                        event = self._connection.receive(stream, math.inf)
+                        event = stream.receive(math.inf)
                         if event is None or isinstance(event, bytes):
                             continue
                         kind = event["header"]["event"]
@@ -167,7 +165,7 @@ class LiveSpeechInput:
                             raise OSError("持续ASR任务已结束")
                         if kind == "result-generated" and self._accept(event):
                             failures = 0
-                except (OSError, websocket.WebSocketException) as error:
+                except OSError as error:
                     if self._closed.is_set():
                         return
                     reader = self._reader
@@ -230,7 +228,7 @@ class LiveSpeechInput:
         if call is not None:
             try:
                 call.result(timeout=6)
-            except (OSError, websocket.WebSocketException):
+            except OSError:
                 pass
 
     def close(self) -> None:

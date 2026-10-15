@@ -246,3 +246,174 @@ def test_close_failure_still_releases_other_resources(
     with pytest.raises(RuntimeError, match="cleanup failure"):
         live.close()
     assert socket.closed and source.closed.is_set()
+
+
+@pytest.mark.parametrize("operation", ["send", "receive"])
+@pytest.mark.parametrize("programming_error", [False, True])
+def test_live_transport_failure_is_visible_and_releases_pcm(
+    monkeypatch, operation, programming_error
+):
+    """传输失败有限重连；编程错误原样显露且不遗漏设备清理。"""
+
+    class FailingSocket(SpeechSocket):
+        """在已握手的传输操作中注入可控错误。"""
+
+        def send_binary(self, frame):
+            """模拟发送失败，不把失败帧记录为成功。"""
+            if operation == "send":
+                self.fail_operation()
+            super().send_binary(frame)
+
+        def recv(self):
+            """握手成功后才触发接收失败。"""
+            if operation == "receive" and self.queue.empty():
+                self.fail_operation()
+            return super().recv()
+
+        def fail_operation(self):
+            """网络异常由任务转换，编程异常必须保留原类型。"""
+            if programming_error:
+                raise RuntimeError("transport programming error")
+            raise websocket.WebSocketConnectionClosedException("disconnected")
+
+    socket, source = FailingSocket(), PcmFixture()
+    transport(monkeypatch, [socket])
+    live = LiveSpeechInput({"asr_attempts": 1}, source)
+    expected = RuntimeError if programming_error else OSError
+    message = (
+        "transport programming error" if programming_error else "重连次数"
+    )
+    try:
+        with pytest.raises(expected, match=message):
+            while True:
+                live.listen(0.1)
+    finally:
+        if programming_error:
+            with pytest.raises(RuntimeError, match=message):
+                live.close()
+        else:
+            live.close()
+    assert socket.closed and source.closed.is_set()
+    assert len(socket.commands) == 1
+
+
+@pytest.mark.parametrize("operation", ["send", "receive", "pcm"])
+def test_close_cancels_inflight_io(monkeypatch, operation):
+    """关闭可取消在途发送、接收或PCM读取，所有线程均有界结束。"""
+    entered, released = threading.Event(), threading.Event()
+
+    class BlockingSocket(SpeechSocket):
+        """等待关闭回执的外部传输替身。"""
+
+        def send_binary(self, frame):
+            """让发送停留在外部I/O中，直到关闭取消。"""
+            if operation == "send":
+                entered.set()
+                assert released.wait(2)
+                raise websocket.WebSocketConnectionClosedException("closed")
+            super().send_binary(frame)
+
+        def recv(self):
+            """先完成握手，再阻塞事件接收。"""
+            if operation == "receive" and self.queue.empty():
+                entered.set()
+                assert released.wait(2)
+                raise websocket.WebSocketConnectionClosedException("closed")
+            return super().recv()
+
+        def close(self, timeout=None):
+            """释放外部I/O等待者。"""
+            super().close(timeout)
+            released.set()
+
+    class BlockingPcm(PcmFixture):
+        """提供等待设备关闭的PCM读取。"""
+
+        def read(self, size, timeout=0.2):
+            """外部关闭取消读取，不伪造采集成功。"""
+            if operation == "pcm":
+                entered.set()
+                assert self.closed.wait(2)
+                return None
+            return super().read(size, timeout)
+
+    socket, source = BlockingSocket(), BlockingPcm()
+    transport(monkeypatch, [socket])
+    live = LiveSpeechInput({}, source)
+    try:
+        with ThreadPoolExecutor() as executor:
+            listening = executor.submit(live.listen, 1)
+            assert entered.wait(1)
+            until(lambda: bool(socket.commands))
+            live.close()
+            assert listening.result(timeout=1) is None
+        assert live.listen(0.01) is None
+    finally:
+        released.set()
+        live.close()
+    assert source.closed.is_set() and socket.closed
+
+
+def test_missing_pcm_times_out_without_silence_success(monkeypatch):
+    """采集持续无数据必须显露超时，不能用静音冒充正常保活。"""
+
+    class EmptyPcm(PcmFixture):
+        """只报告轮询无数据的采集替身。"""
+
+        def read(self, size, timeout=0.2):
+            """模拟有界读取始终拿不到完整PCM帧。"""
+            self.closed.wait(0.01)
+            return None
+
+    socket, source = SpeechSocket(), EmptyPcm()
+    transport(monkeypatch, [socket])
+    live = LiveSpeechInput({"speech_timeout": 0.05}, source)
+    try:
+        with pytest.raises(OSError, match="PCM采集超时"):
+            while True:
+                live.listen(0.1)
+    finally:
+        live.close()
+    assert socket.frames == []
+    assert len(socket.commands) == 1
+    assert socket.closed and source.closed.is_set()
+
+
+def test_live_reconnect_sends_only_new_capture(monkeypatch):
+    """发送失败后只发新采集帧，不能重放上一任务已消费的音频。"""
+
+    class NumberedPcm(PcmFixture):
+        """每帧内容标记采集次序，便于观察重放。"""
+
+        def read(self, size, timeout=0.2):
+            """按公开PCM读取契约返回唯一帧。"""
+            frame = super().read(size, timeout)
+            if frame is None:
+                return None
+            return self.frames.to_bytes(2, "little") * (size // 2)
+
+    class InterruptedSocket(SpeechSocket):
+        """第二帧发送发生断线，前一帧已经提交。"""
+
+        def send_binary(self, frame):
+            """记录已尝试发送的音频，包括结果未知的失败帧。"""
+            super().send_binary(frame)
+            if len(self.frames) == 2:
+                raise websocket.WebSocketConnectionClosedException("lost")
+
+    first, second = InterruptedSocket(), SpeechSocket()
+    source = NumberedPcm()
+    transport(monkeypatch, [first, second])
+    live = LiveSpeechInput({}, source)
+    try:
+        live.listen(0.02)
+        until(lambda: len(second.frames) >= 2)
+        final(second, "断线后新句", 0)
+        assert live.listen(1) == "断线后新句"
+        assert len(first.frames) == 2
+        assert all(frame not in first.frames for frame in second.frames[:2])
+        assert len(first.commands) == len(second.commands) == 1
+        assert first.closed
+    finally:
+        live.close()
+    assert second.closed and source.closed.is_set()

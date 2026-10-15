@@ -141,12 +141,6 @@ class SpeechConnection:
             self.disconnect()
             raise
 
-    def receive(
-        self, task: SpeechTask, deadline: float
-    ) -> Optional[Union[Dict, bytes]]:
-        """持续 ASR 过渡调用；仍复用同一个任务协议 implementation。"""
-        return task.receive(deadline)
-
     def disconnect(self) -> None:
         """释放当前任务，允许下轮重新建立连接。"""
         with self._lock:
