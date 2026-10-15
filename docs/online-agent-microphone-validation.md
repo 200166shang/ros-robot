@@ -331,3 +331,38 @@ start_call从actions/execution原样迁至根calls，make_result原样迁至
 同级issue-68-microphone-refactor包含
 imports-{build,pyright,pytest,installed}.log。
 本轮仅修正依赖归属，未重新调用云端或验证实体音频设备。
+
+## 动作能力组装重构02（2026-10-15）
+
+ActionRegistry构造空注册表，仅保留动作契约、整表校验与调用。
+actions/capabilities中的create_default_actions持有默认导航、头部、
+音乐、音量及共享LCD关系，返回ActionCapabilities：registry与同一
+音乐能力的music_playing查询。语音组装接收完整capabilities，ROS在
+其registry追加感知动作；共同交互缺省使用默认能力的registry。
+注册表不再公开head/music/navigation/volume，未保留旧actions参数。
+自定义音乐能力必须同时注入动作和状态查询。未引入插件或common框架，
+未改候选03输入生命周期。
+
+验证结果：
+
+- 新增行为检查先因缺少capabilities模块失败；实现后覆盖空注册表、
+  默认音乐动作与状态隔离，以及完全替代音乐能力时语音过滤/停止恢复。
+  定向回归36项通过，1.57秒；包含既有共享LCD、完整模拟及语音行为。
+  首次新音乐测试未解析记忆上下文导致固定响应未停止音乐，修正测试
+  provider按current_input响应后通过；未为此改动产品记忆或会话规则。
+- 完整源码回归110项通过，11.85秒；范围与前述完整pytest命令相同。
+- 全新源码外目录构建robot_audio、robot_agent两包成功，19.4秒。
+- 从/tmp加载新install、不加入源码路径，确认能力模块来自新安装；
+  单独加载registry不导入模拟设备实现。安装版Agent92项测试通过，
+  7.25秒；安装版模拟演示仍可运行。
+- Ruff格式及静态检查53文件通过，完整robot_agent Pyright为0错误、
+  0警告；git diff --check通过。源码独立加载也确认registry不创建或
+  暴露默认设备对象。
+- 双轴审查 `dafcc42...1affdf5`：Standards 0项、Spec 0项。
+
+构建目录位于源码外
+`/home/orangepi/local-data/ros-robot/issue-68-capabilities-build/{build,install,log}`；
+同级issue-68-microphone-refactor包含
+capabilities-{build,pyright,pytest,installed,demo}.log。
+本轮未重新调用云端或验证实体音频设备。默认运行行为与ROS命令保持；
+直接构造注册表的外部调用者需显式选择默认能力或注册自定义动作。
