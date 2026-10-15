@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -169,7 +170,7 @@ def test_local_voice_defaults_use_the_project_speech_executables():
 @pytest.mark.parametrize(
     "entry_point", [("dev.sh", "test-ros"), ("colcon.sh", "test")]
 )
-def test_ros_workspace_discovers_pytest_function_cases(entry_point):
+def test_ros_workspace_discovers_pytest_function_cases(entry_point, tmp_path):
     """ROS测试入口执行函数式音频测试，不能只发现unittest类。"""
     result = subprocess.run(
         [
@@ -177,6 +178,8 @@ def test_ros_workspace_discovers_pytest_function_cases(entry_point):
             entry_point[1],
             "--packages-select",
             "robot_audio",
+            "--test-result-base",
+            str(tmp_path),
             "--executor",
             "sequential",
             "--event-handlers",
@@ -188,4 +191,15 @@ def test_ros_workspace_discovers_pytest_function_cases(entry_point):
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "7 passed" in result.stdout
+    report = ElementTree.parse(tmp_path / "robot_audio/pytest.xml").getroot()
+    cases = {case.attrib["name"]: case for case in report.iter("testcase")}
+    representative_cases = {
+        "test_cancelled_audio_process_is_reaped[record]",
+        "test_partial_pcm_frames_and_idle_close_reap_process",
+    }
+    assert representative_cases <= cases.keys()
+    assert all(
+        cases[name].find("skipped") is None for name in representative_cases
+    )
+    assert report.find(".//failure") is None
+    assert report.find(".//error") is None
