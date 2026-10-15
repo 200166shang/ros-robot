@@ -15,11 +15,13 @@ robot_audio没有ROS节点或模型，在线Agent不再依赖robot_voice。
 
 ```text
 robot_agent/
-├── runtime.py                 # 配置读取与共同交互组装
+├── runtime.py                 # 配置读取与共同应用/Agent组装
+├── application.py             # 异步语音回合、持续运行和关闭
+├── legacy_io.py               # 临时阻塞I/O Adapter及调用所有权
 ├── calls.py                   # 阻塞I/O隔离，传回Future结果/异常
 ├── results.py                 # 共同回合结果与动作记录快照
 ├── conversation/
-│   ├── interaction.py         # 模型→整表校验→动作→记忆
+│   ├── agent.py               # 模型→整表校验→动作→记忆
 │   ├── memory.py              # 近期上下文与持久摘要
 │   ├── provider.py            # 在线文本模型 Adapter
 │   └── online_system_prompt.txt
@@ -33,27 +35,27 @@ robot_agent/
 │   ├── head_simulation.py     # 头部与表情模拟行为
 │   └── demo.py                # 固定输入演示
 ├── voice/
-│   ├── session.py             # 唤醒、休眠、回复与语音回合
+│   ├── session.py             # 纯唤醒、休眠、静音与过滤规则
 │   ├── live_input.py          # 持续ASR、暂停丢弃与静音保活
 │   ├── speech.py              # WAV单次ASR/TTS Adapter
-│   └── runtime.py             # 语音组装、采集与独立 WAV 命令
+│   └── runtime.py             # 复用共同组装的独立 WAV 命令
 └── ros/
     ├── voice_node.py          # 正常麦克风节点与生命周期
     └── perception.py          # ROS 感知接口 Adapter
 ```
 
-建议从[正常节点](../ros2_ws/src/robot_agent/robot_agent/ros/voice_node.py)
-进入，再看[采集与语音组装](../ros2_ws/src/robot_agent/robot_agent/voice/runtime.py)、
-[语音回合](../ros2_ws/src/robot_agent/robot_agent/voice/session.py)、
-[文本交互](../ros2_ws/src/robot_agent/robot_agent/conversation/interaction.py)
-与[动作执行](../ros2_ws/src/robot_agent/robot_agent/actions/execution.py)。
+建议先看[包内阅读说明](../ros2_ws/src/robot_agent/README.md)，从
+[共同组装](../ros2_ws/src/robot_agent/robot_agent/runtime.py)进入
+[应用回合](../ros2_ws/src/robot_agent/robot_agent/application.py)，再看
+[文本Agent](../ros2_ws/src/robot_agent/robot_agent/conversation/agent.py)
+和[动作执行](../ros2_ws/src/robot_agent/robot_agent/actions/execution.py)。
 目录内的__init__.py只声明Python包，不转发旧导入；测试与探针使用新路径。
 ROS可执行命令、参数与话题保持不变。测试文件仍放在独立test目录。
 
 ActionRegistry()创建空注册表，不再暗含默认设备。默认组装使用
 create_default_actions()，返回ActionCapabilities（registry和
-music_playing查询）。create_interaction缺省使用默认能力的注册表；
-create_voice接收完整capabilities，音乐过滤与动作读取同一能力状态。
+music_playing查询）。build_agent缺省使用默认能力的注册表；
+build_application接收完整capabilities，音乐过滤与动作读取同一能力状态。
 ROS入口在同一registry追加感知动作后注入语音。不保留注册表上的
 head/music/navigation/volume对象；自定义音乐能力须同时提供动作和查询。
 
@@ -93,9 +95,9 @@ source "$ONLINE_BUILD_ROOT/install/setup.bash"
 ## 外部配置与凭证
 
 配置文件统一由runtime.load_config读取；模型、记忆与共同期限
-默认值集中在create_interaction。语音专属配置仍由create_voice解释。
+默认值集中在build_agent。语音配置和输入Adapter选择也集中由build_application解释。
 
-交互主线位于conversation/interaction.py：模型调用→整表校验→动作执行→记忆。
+交互主线位于conversation/agent.py：模型调用→整表校验→动作执行→记忆。
 actions/execution.py中的ActionExecution集中持有动作Future、全表执行记录、
 超时未知状态与迟到回执；交互层只读取blocked并调用execute/reconcile。
 设备Adapter及其期限契约不变。动作未知时仍阻止下一轮，显式核对仅更新

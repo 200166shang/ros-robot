@@ -10,7 +10,7 @@ Python 3.8 起，不依赖 ROS 或云端 Key：
 PYTHONPATH=ros2_ws/src/robot_agent python3 -m robot_agent.actions.demo
 ```
 
-安装 `robot_agent` 后也可在源码目录外运行相同模块，无需设置源码 PYTHONPATH。演示采用固定模型响应，提交 `OnlineInteraction.submit(text)`，输出输入、回合标识、可信回复、绑定参数和每步动作结果。顺序展示头部、重复呼吸、位置注册/导航/取消、音乐队列/推荐/停止、音量/静音/WiFi及未知导航目标失败停止。启动/错误提示音只记录模拟回执。
+安装 `robot_agent` 后也可在源码目录外运行相同模块，无需设置源码 PYTHONPATH。演示采用固定模型响应，提交 `await Agent.submit(text)`，输出输入、回合标识、可信回复、绑定参数和每步动作结果。顺序展示头部、重复呼吸、位置注册/导航/取消、音乐队列/推荐/停止、音量/静音/WiFi及未知导航目标失败停止。启动/错误提示音只记录模拟回执。
 
 这不是云端模型或在线语音验收。真实在线启动和话题命令沿用 [文本入口](online-agent-text.md)，始终指定 `dry_run=true`。例如先监听 `/online_agent/result`，再提交“注册书房为地图坐标1、2，导航到书房，查询状态，然后取消导航”。默认模型提示词包含全部模拟名称、参数与限制；自定义提示词需自行同步。
 

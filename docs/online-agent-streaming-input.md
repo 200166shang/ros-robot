@@ -5,7 +5,7 @@
 LLM、动作、合成和播放结束后恢复监听，暂停期间的声音不能补发。
 
 ```text
-PcmMicrophone → LiveSpeechInput → 完整句 → OnlineVoice
+PcmMicrophone → LiveSpeechInput → 完整句 → AgentApplication
       ↑              ↓                    ↓
 持续读取PCM     自动暂停真实输入        会话/模型/动作/TTS/播放
 暂停时丢弃      持续发送静音保活               ↓
@@ -20,17 +20,17 @@ PcmMicrophone → LiveSpeechInput → 完整句 → OnlineVoice
 - voice.live_input.LiveSpeechInput拥有PCM源、一个ASR任务以及采集/接收
   两个I/O线程。listen只交付完整句；pause/resume/close管理真实输入与
   连接生命周期。传输线程持续工作，不等待业务处理或TTS完成。
-- SpeechInput只描述pause/resume/close，不再要求持续输入实现WAV识别。
-  独立WAV输入把recognize_recording函数与生命周期一起注入OnlineVoice；
+- 迁移期输入生命周期只描述pause/resume/close，不再要求持续输入实现WAV识别。
+  独立WAV输入把recognize_recording函数与生命周期一起注入AgentApplication；
   正常输入不支持submit_recording，明确拒绝，不另造一次性ASR连接。
-- 正常ROS节点是唯一业务调用者，listen→submit_transcript顺序执行。
+- AgentApplication.run是唯一业务循环，await listen→submit_transcript顺序执行。
   无输入话题、请求队列、多入口接入锁或临时回合线程。内部Condition只
   协调采集、接收和单个最终句的资源交接；它不调度并发业务请求。
 
 ## 暂停、保活和恢复
 
 接收线程确认最终非心跳句时，先暂停真实音频再交付。单个最终句槽在
-暂停期间不再接纳请求。OnlineVoice在整个LLM/动作/TTS/播放期间保持
+暂停期间不再接纳请求。AgentApplication在整个LLM/动作/TTS/播放期间保持
 暂停，finally请求恢复。正常暂停时仍消费麦克风PCM，以同样的100毫秒
 音频帧节奏发送静音，不结束ASR任务，也不缓存播报或新的用户请求。
 

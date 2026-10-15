@@ -1,18 +1,21 @@
 """真实在线记忆验收，只报告阶段结果，不输出记忆内容。"""
 
 import argparse
+import asyncio
 import multiprocessing
 import uuid
 from pathlib import Path
 
-from robot_agent.conversation.interaction import OnlineInteraction
-from robot_agent.runtime import create_interaction, load_config
+from robot_agent.conversation.agent import Agent
+from robot_agent.runtime import build_agent, load_config
 
 
 def verify_restart(config: dict, marker: str, cleared: bool) -> None:
     """在新进程重新构造 provider 和交互，仅从磁盘恢复记忆。"""
-    agent = create_interaction(config)
-    result = agent.submit("只聊天，我最喜欢的色号是什么？不知道则说明。")
+    agent = build_agent(config)
+    result = asyncio.run(
+        agent.submit("只聊天，我最喜欢的色号是什么？不知道则说明。")
+    )
     assert result["status"] == "completed", "重启在线回合未完成"
     assert not result["actions"], "验收不允许动作"
     assert not result["memory_warnings"], "重启记忆存在故障"
@@ -20,7 +23,9 @@ def verify_restart(config: dict, marker: str, cleared: bool) -> None:
         assert marker not in result["reply"], "清空后仍召回旧记忆"
     else:
         assert marker in result["reply"], "重启摘要未召回"
-        assert agent.clear_memory()["status"] == "completed", "清空失败"
+        assert asyncio.run(agent.clear_memory())["status"] == "completed", (
+            "清空失败"
+        )
 
 
 def main() -> None:
@@ -40,13 +45,13 @@ def main() -> None:
     # 色号只含随机标识，避免模型把中文字段标签当成可省略的说明。
     marker = uuid.uuid4().hex[:12]
 
-    def start() -> OnlineInteraction:
+    def start() -> Agent:
         """通过公开交互 Interface 重新加载同一专用文件。"""
-        return create_interaction(config)
+        return build_agent(config)
 
-    def submit(agent: OnlineInteraction, text: str) -> dict:
+    def submit(agent: Agent, text: str) -> dict:
         """检查真实在线回合，不在异常报告中输出用户输入或回复。"""
-        result = agent.submit(text)
+        result = asyncio.run(agent.submit(text))
         assert result["status"] == "completed", "在线回合未完成"
         assert not result["actions"], "验收不允许动作"
         assert not result["memory_warnings"], "记忆阶段存在故障"
