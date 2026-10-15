@@ -3,7 +3,17 @@
 from functools import partial
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
-from robot_agent.actions.contracts import ActionHandler
+from pydantic import create_model
+
+from robot_agent.actions.contracts import (
+    ActionHandler,
+    AttentionInput,
+    BreathingInput,
+    DurationInput,
+    EmotionalInput,
+    PositionInput,
+    PositiveNumber,
+)
 from robot_agent.actions.simulation import simulated, validate_number
 
 # 旧注册函数仅改变 LCD，不能把这些表情宣称为真实舵机点头或跳舞。
@@ -266,7 +276,13 @@ def head_actions(head: HeadSimulation) -> Dict[str, ActionHandler]:
     handlers.update(
         {
             name: ActionHandler(
-                head.gesture_handler(name, default), validate_duration
+                head.gesture_handler(name, default),
+                validate_duration,
+                create_model(
+                    name + "Input",
+                    __base__=DurationInput,
+                    duration=(PositiveNumber, default),
+                ),
             )
             for name, (default, _) in GESTURES.items()
         }
@@ -274,16 +290,16 @@ def head_actions(head: HeadSimulation) -> Dict[str, ActionHandler]:
     handlers.update(
         {
             "head_position": ActionHandler(
-                head.head_position, validate_position
+                head.head_position, validate_position, PositionInput
             ),
             "head_breathing": ActionHandler(
-                head.head_breathing, validate_breathing
+                head.head_breathing, validate_breathing, BreathingInput
             ),
             "head_attention": ActionHandler(
-                head.head_attention, validate_attention
+                head.head_attention, validate_attention, AttentionInput
             ),
             "head_emotional": ActionHandler(
-                head.head_emotional, validate_emotional
+                head.head_emotional, validate_emotional, EmotionalInput
             ),
         }
     )

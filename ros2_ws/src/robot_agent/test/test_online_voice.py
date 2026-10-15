@@ -13,7 +13,7 @@ from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.actions.registry import ActionHandler
 from robot_agent.application import AgentApplication
 from robot_agent.conversation.agent import Agent
-from robot_agent.results import result_to_json
+from robot_agent.results import ModelReply, ToolCall, result_to_json
 
 
 class FixedSpeech:
@@ -48,13 +48,20 @@ class FixedModel:
     def __init__(self):
         """初始化输入记录与建议动作。"""
         self.inputs = []
-        self.functions = ["head_nod"]
+        self.actions = [{"name": "head_nod", "arguments": {}}]
 
-    def complete(self, text, timeout):
-        """记录用户输入并模拟分片模型响应。"""
+    def complete(self, text, timeout, *, tools=None):
+        """记录用户输入并返回完整模型响应。"""
         self.inputs.append(text)
-        raw = json.dumps({"function": self.functions, "response": "已经好了"})
-        return iter([raw[:12], raw[12:]])
+        raw = ModelReply(
+            "已经好了",
+            ToolCall(
+                "fixture_call", "execute_actions", {"actions": self.actions}
+            )
+            if self.actions
+            else None,
+        )
+        return raw
 
 
 class FixedTTS:
@@ -142,14 +149,16 @@ def test_music_filters_input_from_actual_simulation_state(tmp_path):
     """通过真实动作改变第二票音乐状态，再观察语音输入过滤和停止。"""
     voice, speech, model, tts = make_voice(tmp_path)
     asyncio.run(voice.submit_transcript("小莫小莫"))
-    model.functions = ["play_music('夜曲')"]
+    model.actions = [
+        {"name": "play_music", "arguments": {"song_name": "夜曲"}}
+    ]
     assert (
         asyncio.run(voice.submit_transcript("播放音乐")).status == "completed"
     )
     assert (
         asyncio.run(voice.submit_transcript("今天的天气")).status == "filtered"
     )
-    model.functions = ["stop_music"]
+    model.actions = [{"name": "stop_music", "arguments": {}}]
     assert (
         asyncio.run(voice.submit_transcript("停止音乐")).status == "completed"
     )
@@ -198,10 +207,10 @@ def test_collecting_pauses_before_model_and_resumes_after_failure(tmp_path):
     voice, speech, model, tts = make_voice(tmp_path)
     original = model.complete
 
-    def complete(text, timeout):
+    def complete(text, timeout, *, tools=None):
         """从 provider Adapter 观察半双工交接时序。"""
         assert speech.events[-1] == "pause"
-        return original(text, timeout)
+        return original(text, timeout, tools=tools)
 
     model.complete = complete
     assert (
@@ -257,11 +266,11 @@ def test_close_releases_adapters_during_provider_call(tmp_path):
     entered, release = threading.Event(), threading.Event()
     original = model.complete
 
-    def complete(text, timeout):
+    def complete(text, timeout, *, tools=None):
         """保持模型在途，允许从公共退出Interface关闭资源。"""
         entered.set()
         release.wait(2)
-        return original(text, timeout)
+        return original(text, timeout, tools=tools)
 
     model.complete = complete
     with ThreadPoolExecutor() as executor:
@@ -304,7 +313,10 @@ def test_unknown_action_can_be_reconciled_without_reexecution(
         music_playing=lambda: False,
         recognize_recording=speech.recognize,
     )
-    model.functions = ["head_nod", "head_nod"]
+    model.actions = [
+        {"name": "head_nod", "arguments": {}},
+        {"name": "head_nod", "arguments": {}},
+    ]
 
     def failed_replace(path, destination):
         """初次记录不可保存时，核对仍须记住原识别文本。"""
@@ -336,7 +348,7 @@ def test_unknown_action_can_be_reconciled_without_reexecution(
     assert reconciled.audio_path.endswith(result.turn_id + ".wav")
     saved = json.loads((tmp_path / (result.turn_id + ".json")).read_text())
     assert saved == result_to_json(reconciled)
-    model.functions = ["head_nod"]
+    model.actions = [{"name": "head_nod", "arguments": {}}]
     assert (
         asyncio.run(voice.submit_recording(tmp_path / "input.wav")).status
         == "completed"
@@ -357,7 +369,9 @@ def test_filtered_input_does_not_extend_silence_and_playback_failure_recovers(
         tmp_path, clock=lambda: now[0], playback=fail_playback
     )
     asyncio.run(voice.submit_transcript("小沫小沫"))
-    model.functions = ["play_music('夜曲')"]
+    model.actions = [
+        {"name": "play_music", "arguments": {"song_name": "夜曲"}}
+    ]
     result = asyncio.run(voice.submit_transcript("播放音乐"))
     assert result.playback_status == "failed"
     assert result.tts_status == "completed"

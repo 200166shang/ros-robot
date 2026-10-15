@@ -26,15 +26,24 @@ def _json_value(value: Any) -> Any:
 
 
 @dataclass(frozen=True)
-class ModelReply:
-    """完整模型文字与尚未验证的旧动作请求；原生工具迁移前使用。"""
+class ToolCall:
+    """已收齐的原生工具请求，参数仍需动作目录校验。"""
 
-    functions: Tuple[str, ...]
-    response: str
+    call_id: str
+    name: str
+    arguments: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        """脱离解析器的可变列表。"""
-        object.__setattr__(self, "functions", tuple(self.functions))
+        """模型传输结束时取得请求快照。"""
+        object.__setattr__(self, "arguments", _freeze(self.arguments))
+
+
+@dataclass(frozen=True)
+class ModelReply:
+    """完整聊天文字及至多一个原生完整计划请求。"""
+
+    response: str = ""
+    tool_call: Optional[ToolCall] = None
 
 
 @dataclass(frozen=True)
@@ -48,13 +57,6 @@ class ActionReceipt:
     def __post_init__(self) -> None:
         """接收回执时立刻取得嵌套快照。"""
         object.__setattr__(self, "data", _freeze(self.data))
-
-    @classmethod
-    def from_legacy(cls, receipt: Mapping[str, Any]) -> "ActionReceipt":
-        """在旧设备 Adapter 出口接收回执，随注册表迁移移除此转换。"""
-        return cls(
-            receipt["status"], receipt.get("detail", ""), receipt.get("data")
-        )
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,7 @@ class ExecutionResult:
     status: str
     reply: str
     actions: Tuple[ActionOutcome, ...]
+    tool_call_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         """脱离执行器用于推进状态的列表。"""

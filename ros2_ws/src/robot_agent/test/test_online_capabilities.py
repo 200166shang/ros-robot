@@ -13,6 +13,7 @@ from robot_agent.actions.capabilities import (
 from robot_agent.actions.registry import ActionRegistry
 from robot_agent.conversation.agent import Agent
 from robot_agent.conversation.provider import DashScopeProvider
+from robot_agent.results import ModelReply, ToolCall
 from robot_agent.runtime import build_application
 from robot_agent.voice.speech import DashScopeTTS
 
@@ -21,22 +22,39 @@ def test_registry_contains_only_explicitly_registered_actions():
     """空注册表不创建默认设备，只处理显式装入的动作契约。"""
     registry = ActionRegistry()
     with pytest.raises(ValueError, match="动作未实现"):
-        registry.validate(["head_nod"])
+        registry.bind_plan(
+            {"actions": [{"name": "head_nod", "arguments": {}}]}
+        )
     registry.register("custom", lambda: {"status": "real_success"})
-    assert registry.validate(["custom"])[0].name == "custom"
-    assert registry.execute("custom", {})["status"] == "real_success"
+    assert (
+        registry.bind_plan({"actions": [{"name": "custom", "arguments": {}}]})
+        .commands[0]
+        .name
+        == "custom"
+    )
+    assert (
+        registry.invoke(
+            registry.bind_plan(
+                {"actions": [{"name": "custom", "arguments": {}}]}
+            ).commands[0],
+            100,
+        ).status
+        == "real_success"
+    )
 
 
 def test_default_music_state_belongs_to_its_own_capabilities():
     """音乐状态与动作共享同一能力；不同组装之间保持独立。"""
     first, second = create_default_actions(), create_default_actions()
-    provider = FixedProvider(["play_music('夜曲')"])
+    provider = FixedProvider(
+        [{"name": "play_music", "arguments": {"song_name": "夜曲"}}]
+    )
     agent = Agent(provider, first.registry)
     assert not first.music_playing()
     assert asyncio.run(agent.submit("播放")).status == "completed"
     assert first.music_playing()
     assert not second.music_playing()
-    provider.functions = ["stop_music"]
+    provider.actions = [{"name": "stop_music", "arguments": {}}]
     assert asyncio.run(agent.submit("停止")).status == "completed"
     assert not first.music_playing()
 
@@ -56,14 +74,24 @@ def test_voice_filter_uses_injected_music_capability(tmp_path, monkeypatch):
         state["playing"] = False
         return {"status": "real_success"}
 
-    def complete(self, text, timeout):
+    def complete(self, text, timeout, *, tools=None):
         """仅提供固定模型响应，保留真实交互流程。"""
         requests.append(text)
         if text.startswith("【会话上下文】"):
             text = json.loads(text.split("\n", 1)[1])["current_input"]
-        functions = {"播放音乐": ["play_music"], "停止音乐": ["stop_music"]}
-        return json.dumps(
-            {"function": functions.get(text, []), "response": "好的"}
+        functions = {
+            "播放音乐": [{"name": "play_music", "arguments": {}}],
+            "停止音乐": [{"name": "stop_music", "arguments": {}}],
+        }
+        return ModelReply(
+            "好的",
+            ToolCall(
+                "fixture_call",
+                "execute_actions",
+                {"actions": functions.get(text, [])},
+            )
+            if functions.get(text, [])
+            else None,
         )
 
     def synthesize(self, text, path, timeout):

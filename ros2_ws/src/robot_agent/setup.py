@@ -18,7 +18,12 @@ setup(
         ),
         ("share/" + package_name, ["package.xml"]),
     ],
-    install_requires=["setuptools", "websocket-client>=1.6,<2"],
+    install_requires=[
+        "setuptools",
+        "websocket-client>=1.6,<2",
+        "pydantic==2.10.6",
+        "typing-extensions==4.13.2",
+    ],
     zip_safe=True,
     maintainer="robot",
     maintainer_email="robot@example.com",

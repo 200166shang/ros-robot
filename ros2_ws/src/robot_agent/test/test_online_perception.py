@@ -42,7 +42,11 @@ def test_follow_fusion_and_toggle_through_interaction():
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(
-        ["start_following", "following_status", "toggle_following"]
+        [
+            {"name": "start_following", "arguments": {}},
+            {"name": "following_status", "arguments": {}},
+            {"name": "toggle_following", "arguments": {}},
+        ]
     )
     result = asyncio.run(
         Agent(provider, registry).submit("启动跟随，查询，然后停止")
@@ -60,7 +64,10 @@ def test_follow_fusion_and_toggle_through_interaction():
         "status": "failed",
         "detail": "waiting for camera <- laser TF",
     }
-    provider.functions = ["start_following", "head_nod"]
+    provider.actions = [
+        {"name": "start_following", "arguments": {}},
+        {"name": "head_nod", "arguments": {}},
+    ]
     interface.events.clear()
     result = asyncio.run(Agent(provider, registry).submit("启动然后点头"))
     assert interface.events == [("camera", True), ("fusion", True)]
@@ -90,7 +97,12 @@ def test_late_fusion_does_not_start_follow_or_retry():
         perception_actions(PerceptionActions(interface, action_timeout=1.0))
     )
     agent = Agent(
-        FixedProvider(["start_following", "head_nod"]),
+        FixedProvider(
+            [
+                {"name": "start_following", "arguments": {}},
+                {"name": "head_nod", "arguments": {}},
+            ]
+        ),
         registry,
         action_timeout=0.02,
     )
@@ -130,7 +142,13 @@ def test_device_rejection_is_in_reply_and_stops_actions(reason):
     registry.register_many(perception_actions(PerceptionActions(interface)))
     result = asyncio.run(
         Agent(
-            FixedProvider(["enable_lidar", "start_following"]), registry
+            FixedProvider(
+                [
+                    {"name": "enable_lidar", "arguments": {}},
+                    {"name": "start_following", "arguments": {}},
+                ]
+            ),
+            registry,
         ).submit("开启融合并跟随")
     )
     assert [a.status for a in result.actions] == [
@@ -148,7 +166,9 @@ def test_follow_aliases_preserve_the_same_sequence(action):
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
     result = asyncio.run(
-        Agent(FixedProvider([action]), registry).submit("启动")
+        Agent(
+            FixedProvider([{"name": action, "arguments": {}}]), registry
+        ).submit("启动")
     )
     assert result.status == "completed"
     assert interface.events == [
@@ -165,13 +185,13 @@ def test_camera_aliases_standby_and_unknown_status():
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(
         [
-            "start_receiving_image",
-            "stop_camera_collection",
-            "query_camera_status",
-            "query_person_tracking_status",
-            "enable_lidar",
-            "disable_lidar",
-            "following_status",
+            {"name": "start_receiving_image", "arguments": {}},
+            {"name": "stop_camera_collection", "arguments": {}},
+            {"name": "query_camera_status", "arguments": {}},
+            {"name": "query_person_tracking_status", "arguments": {}},
+            {"name": "enable_lidar", "arguments": {}},
+            {"name": "disable_lidar", "arguments": {}},
+            {"name": "following_status", "arguments": {}},
         ]
     )
     result = asyncio.run(Agent(provider, registry).submit("操作并查询"))
@@ -194,10 +214,13 @@ def test_unknown_toggle_and_invalid_parameters_send_nothing():
     interface = PerceptionInterface()
     registry = create_default_actions().registry
     registry.register_many(perception_actions(PerceptionActions(interface)))
-    provider = FixedProvider(["toggle_following"])
+    provider = FixedProvider([{"name": "toggle_following", "arguments": {}}])
     agent = Agent(provider, registry)
     assert asyncio.run(agent.submit("切换")).actions[0].status == "failed"
-    provider.functions = ["enable_lidar", "start_following(True)"]
+    provider.actions = [
+        {"name": "enable_lidar", "arguments": {}},
+        {"name": "start_following", "arguments": {"unexpected_0": True}},
+    ]
     assert asyncio.run(agent.submit("启动")).status == "rejected"
     assert interface.events == []
 
@@ -210,7 +233,11 @@ def test_tracking_only_and_full_stop_preserve_source_semantics():
     result = asyncio.run(
         Agent(
             FixedProvider(
-                ["enable_tracking", "disable_tracking", "stop_following"]
+                [
+                    {"name": "enable_tracking", "arguments": {}},
+                    {"name": "disable_tracking", "arguments": {}},
+                    {"name": "stop_following", "arguments": {}},
+                ]
             ),
             registry,
         ).submit("单独切换然后完整停止")
@@ -231,7 +258,10 @@ def test_partial_perception_facts_survive_later_failure():
     registry.register_many(perception_actions(PerceptionActions(interface)))
     interface.failure = {"status": "failed", "detail": "fusion refused"}
     result = asyncio.run(
-        Agent(FixedProvider(["start_following"]), registry).submit("启动")
+        Agent(
+            FixedProvider([{"name": "start_following", "arguments": {}}]),
+            registry,
+        ).submit("启动")
     )
     assert "采集请求已发布" in result.reply
     assert "fusion refused" in result.reply
@@ -248,9 +278,12 @@ def test_partial_perception_facts_survive_later_failure():
         perception_actions(PerceptionActions(MissingCamera()))
     )
     result = asyncio.run(
-        Agent(FixedProvider(["stop_camera_collection"]), registry).submit(
-            "暂停采集"
-        )
+        Agent(
+            FixedProvider(
+                [{"name": "stop_camera_collection", "arguments": {}}]
+            ),
+            registry,
+        ).submit("暂停采集")
     )
     assert "Follow 已确认待机" in result.reply
     assert "相机无订阅端" in result.reply
@@ -263,11 +296,11 @@ def test_simulation_and_perception_share_one_turn_after_main_merge():
     registry.register_many(perception_actions(PerceptionActions(interface)))
     provider = FixedProvider(
         [
-            "volume_set(35)",
-            "enable_lidar",
-            "enable_tracking",
-            "volume_status",
-            "stop_following",
+            {"name": "volume_set", "arguments": {"level": 35}},
+            {"name": "enable_lidar", "arguments": {}},
+            {"name": "enable_tracking", "arguments": {}},
+            {"name": "volume_status", "arguments": {}},
+            {"name": "stop_following", "arguments": {}},
         ]
     )
     result = asyncio.run(

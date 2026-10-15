@@ -26,10 +26,16 @@ def main() -> None:
     print("Python", sys.version.split()[0], sys.executable)
 
     # 1. 导入系统二进制扩展，确认 ROS 与 OpenCV 保持相同 ABI。
-    for name in ("rclpy", "cv2", "numpy", "flask", "websocket"):
+    for name in ("rclpy", "cv2", "numpy", "flask", "websocket", "pydantic"):
         module = importlib.import_module(name)
         print(name, module.__file__)
-    for name in ("Flask", "websocket-client", "sherpa-onnx-bin"):
+    for name in (
+        "Flask",
+        "websocket-client",
+        "sherpa-onnx-bin",
+        "pydantic",
+        "pydantic-core",
+    ):
         installed = distribution(name)
         assert root / ".venv" in installed.locate_file("").parents
         print(name, version(name))

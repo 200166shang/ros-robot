@@ -1,12 +1,12 @@
 """固定模型响应经交互输入验证完整模拟状态与结果。"""
 
 import asyncio
-import json
 
 import pytest
 
 from robot_agent.actions.capabilities import create_default_actions
 from robot_agent.conversation.agent import Agent
+from robot_agent.results import ModelReply, ToolCall
 
 
 class FixedProvider:
@@ -14,16 +14,23 @@ class FixedProvider:
 
     def __init__(self) -> None:
         """初始化无动作响应。"""
-        self.functions = []
+        self.actions = []
 
-    def complete(self, text: str, timeout: float) -> str:
-        """按旧 function/response 契约返回完整建议。"""
-        return json.dumps({"function": self.functions, "response": "建议"})
+    def complete(self, text: str, timeout: float, *, tools=None) -> ModelReply:
+        """返回完整原生计划。"""
+        return ModelReply(
+            "建议",
+            ToolCall(
+                "fixture_call", "execute_actions", {"actions": self.actions}
+            )
+            if self.actions
+            else None,
+        )
 
 
 def submit(agent, provider, *functions):
     """从文本入口提交一轮固定模型建议。"""
-    provider.functions = list(functions)
+    provider.actions = list(functions)
     return asyncio.run(agent.submit("执行指定业务"))
 
 
@@ -34,12 +41,15 @@ def test_navigation_registration_goal_cancel_and_unknown_failure():
     result = submit(
         agent,
         provider,
-        "add_location('书房', 1, 2)",
-        "list_locations",
-        "go_to('书房')",
-        "navigation_status",
-        "cancel_navigation",
-        "navigation_status",
+        {
+            "name": "add_location",
+            "arguments": {"name": "书房", "x": 1, "y": 2},
+        },
+        {"name": "list_locations", "arguments": {}},
+        {"name": "go_to", "arguments": {"location": "书房"}},
+        {"name": "navigation_status", "arguments": {}},
+        {"name": "cancel_navigation", "arguments": {}},
+        {"name": "navigation_status", "arguments": {}},
     )
     assert result.status == "completed"
     actions = result.actions
@@ -56,7 +66,12 @@ def test_navigation_registration_goal_cancel_and_unknown_failure():
     assert actions[3].data["current_goal"] == "书房"
     assert actions[5].data["state"] == "cancelled"
     assert "书房" in result.reply
-    failed = submit(agent, provider, "navigate_to('未知')", "head_smile")
+    failed = submit(
+        agent,
+        provider,
+        {"name": "navigate_to", "arguments": {"location": "未知"}},
+        {"name": "head_smile", "arguments": {}},
+    )
     assert [a.status for a in failed.actions] == [
         "failed",
         "not_executed",
@@ -71,14 +86,14 @@ def test_music_queue_alias_recommendation_and_filter_state():
     result = submit(
         agent,
         provider,
-        "play_song('小幸运')",
-        "add_to_queue('夜曲')",
-        "add_to_queue('夜曲')",
-        "next_song",
-        "music_status",
-        "next_song",
-        "music_status",
-        "recommend_songs('青花瓷')",
+        {"name": "play_song", "arguments": {"song_name": "小幸运"}},
+        {"name": "add_to_queue", "arguments": {"song_name": "夜曲"}},
+        {"name": "add_to_queue", "arguments": {"song_name": "夜曲"}},
+        {"name": "next_song", "arguments": {}},
+        {"name": "music_status", "arguments": {}},
+        {"name": "next_song", "arguments": {}},
+        {"name": "music_status", "arguments": {}},
+        {"name": "recommend_songs", "arguments": {"song_name": "青花瓷"}},
     )
     assert result.status == "completed"
     assert result.actions[4].data == {
@@ -93,9 +108,19 @@ def test_music_queue_alias_recommendation_and_filter_state():
         "夜曲",
         "东风破",
     )
-    fallback = submit(agent, provider, "next_song", "music_status")
+    fallback = submit(
+        agent,
+        provider,
+        {"name": "next_song", "arguments": {}},
+        {"name": "music_status", "arguments": {}},
+    )
     assert fallback.actions[1].data["current_song"] == "小幸运"
-    stopped = submit(agent, provider, "stop_music", "music_status")
+    stopped = submit(
+        agent,
+        provider,
+        {"name": "stop_music", "arguments": {}},
+        {"name": "music_status", "arguments": {}},
+    )
     assert stopped.actions[1].data["is_playing"] is False
     assert "夜曲" in result.reply
 
@@ -107,13 +132,19 @@ def test_head_pose_expression_sequence_and_repetition():
     result = submit(
         agent,
         provider,
-        "head_position(pitch=70, yaw=110)",
-        "head_down",
-        "head_think(2)",
-        "head_breathing(cycles=2, duration=0.5)",
-        "head_breathing(cycles=2, duration=0.5)",
-        "sleep",
-        "wake_up",
+        {"name": "head_position", "arguments": {"pitch": 70, "yaw": 110}},
+        {"name": "head_down", "arguments": {}},
+        {"name": "head_think", "arguments": {"duration": 2}},
+        {
+            "name": "head_breathing",
+            "arguments": {"cycles": 2, "duration": 0.5},
+        },
+        {
+            "name": "head_breathing",
+            "arguments": {"cycles": 2, "duration": 0.5},
+        },
+        {"name": "sleep", "arguments": {}},
+        {"name": "wake_up", "arguments": {}},
     )
     assert result.status == "completed"
     actions = result.actions
@@ -139,20 +170,20 @@ def test_volume_wifi_and_music_display_state():
     result = submit(
         agent,
         provider,
-        "volume_set(98)",
-        "volume_up",
-        "volume_mute",
-        "volume_status",
-        "volume_down(20)",
-        "volume_unmute",
-        "volume_status",
-        "show_wifi_info",
-        "get_wifi_ip",
-        "wifi_status",
-        "play_music('稻香')",
-        "head_position(yaw=90)",
-        "stop_music",
-        "head_position(yaw=90)",
+        {"name": "volume_set", "arguments": {"level": 98}},
+        {"name": "volume_up", "arguments": {}},
+        {"name": "volume_mute", "arguments": {}},
+        {"name": "volume_status", "arguments": {}},
+        {"name": "volume_down", "arguments": {"step": 20}},
+        {"name": "volume_unmute", "arguments": {}},
+        {"name": "volume_status", "arguments": {}},
+        {"name": "show_wifi_info", "arguments": {}},
+        {"name": "get_wifi_ip", "arguments": {}},
+        {"name": "wifi_status", "arguments": {}},
+        {"name": "play_music", "arguments": {"song_name": "稻香"}},
+        {"name": "head_position", "arguments": {"yaw": 90}},
+        {"name": "stop_music", "arguments": {}},
+        {"name": "head_position", "arguments": {"yaw": 90}},
     )
     assert result.status == "completed"
     assert result.actions[3].data == {"level": 100, "is_muted": True}
@@ -166,58 +197,58 @@ def test_volume_wifi_and_music_display_state():
 
 # 独立来源为首票动作清单，不能从实现的注册表生成期望覆盖范围。
 SIMULATION_CALLS = [
-    "head_smile",
-    "head_nod",
-    "head_shake",
-    "head_dance",
-    "excited",
-    "normal",
-    "sleep",
-    "wake_up",
-    "volume_up",
-    "volume_down",
-    "volume_set",
-    "volume_mute",
-    "volume_unmute",
-    "volume_status",
-    "head_forward",
-    "head_down",
-    "head_up",
-    "head_left",
-    "head_right",
-    "head_reset",
-    "head_position(pitch=90)",
-    "show_wifi_info",
-    "get_wifi_ip",
-    "wifi_status",
-    "play_music('小幸运')",
-    "play_song('青花瓷')",
-    "stop_music",
-    "next_song",
-    "add_to_queue('夜曲')",
-    "music_status",
-    "recommend_songs",
-    "navigate_to('厨房')",
-    "cancel_navigation",
-    "go_to('厨房')",
-    "navigation_status",
-    "list_locations",
-    "add_location('客厅', 0, 1)",
-    "head_think",
-    "head_confused",
-    "head_surprised",
-    "head_look_around",
-    "head_greet",
-    "head_goodbye",
-    "head_refuse",
-    "head_breathing",
-    "head_attention",
-    "head_emotional",
-    "head_listen",
-    "head_interest",
-    "head_concern",
-    "head_agree",
-    "head_disagree",
+    {"name": "head_smile", "arguments": {}},
+    {"name": "head_nod", "arguments": {}},
+    {"name": "head_shake", "arguments": {}},
+    {"name": "head_dance", "arguments": {}},
+    {"name": "excited", "arguments": {}},
+    {"name": "normal", "arguments": {}},
+    {"name": "sleep", "arguments": {}},
+    {"name": "wake_up", "arguments": {}},
+    {"name": "volume_up", "arguments": {}},
+    {"name": "volume_down", "arguments": {}},
+    {"name": "volume_set", "arguments": {}},
+    {"name": "volume_mute", "arguments": {}},
+    {"name": "volume_unmute", "arguments": {}},
+    {"name": "volume_status", "arguments": {}},
+    {"name": "head_forward", "arguments": {}},
+    {"name": "head_down", "arguments": {}},
+    {"name": "head_up", "arguments": {}},
+    {"name": "head_left", "arguments": {}},
+    {"name": "head_right", "arguments": {}},
+    {"name": "head_reset", "arguments": {}},
+    {"name": "head_position", "arguments": {"pitch": 90}},
+    {"name": "show_wifi_info", "arguments": {}},
+    {"name": "get_wifi_ip", "arguments": {}},
+    {"name": "wifi_status", "arguments": {}},
+    {"name": "play_music", "arguments": {"song_name": "小幸运"}},
+    {"name": "play_song", "arguments": {"song_name": "青花瓷"}},
+    {"name": "stop_music", "arguments": {}},
+    {"name": "next_song", "arguments": {}},
+    {"name": "add_to_queue", "arguments": {"song_name": "夜曲"}},
+    {"name": "music_status", "arguments": {}},
+    {"name": "recommend_songs", "arguments": {}},
+    {"name": "navigate_to", "arguments": {"location": "厨房"}},
+    {"name": "cancel_navigation", "arguments": {}},
+    {"name": "go_to", "arguments": {"location": "厨房"}},
+    {"name": "navigation_status", "arguments": {}},
+    {"name": "list_locations", "arguments": {}},
+    {"name": "add_location", "arguments": {"name": "客厅", "x": 0, "y": 1}},
+    {"name": "head_think", "arguments": {}},
+    {"name": "head_confused", "arguments": {}},
+    {"name": "head_surprised", "arguments": {}},
+    {"name": "head_look_around", "arguments": {}},
+    {"name": "head_greet", "arguments": {}},
+    {"name": "head_goodbye", "arguments": {}},
+    {"name": "head_refuse", "arguments": {}},
+    {"name": "head_breathing", "arguments": {}},
+    {"name": "head_attention", "arguments": {}},
+    {"name": "head_emotional", "arguments": {}},
+    {"name": "head_listen", "arguments": {}},
+    {"name": "head_interest", "arguments": {}},
+    {"name": "head_concern", "arguments": {}},
+    {"name": "head_agree", "arguments": {}},
+    {"name": "head_disagree", "arguments": {}},
 ]
 
 
@@ -229,7 +260,7 @@ def test_every_source_simulation_action_from_interaction():
     assert result.status == "completed"
     assert len(result.actions) == 52
     for action, call in zip(result.actions, SIMULATION_CALLS):
-        assert action.name == call.split("(")[0]
+        assert action.name == call["name"]
         assert action.status == "simulated_success"
         assert action.data
         assert "模拟" in action.detail
@@ -253,37 +284,53 @@ def test_invalid_parameters_reject_all_without_state_changes():
     provider = FixedProvider()
     agent = Agent(provider, create_default_actions().registry)
     invalid_calls = [
-        "head_position()",
-        "head_position(64)",
-        "head_position(yaw=131)",
-        "head_position(True)",
-        "head_think(0)",
-        "head_greet('慢')",
-        "head_breathing(0)",
-        "head_breathing(65)",
-        "head_breathing(1.5)",
-        "head_attention('behind')",
-        "head_emotional('unknown')",
-        "volume_up(-1)",
-        "volume_down('5')",
-        "volume_set(True)",
-        "play_music('')",
-        "add_to_queue(1)",
-        "recommend_songs('')",
-        "navigate_to('')",
-        "add_location('', 0, 0)",
-        "add_location('坏姿态', 0, 0, qw=0)",
-        "add_location('坏坐标', 'x', 0)",
-        "add_location('无穷', 1e309, 0)",
-        "head_think(1e309)",
-        "wifi_status(1)",
-        "volume_mute(level=0)",
+        {"name": "head_position", "arguments": {}},
+        {"name": "head_position", "arguments": {"pitch": 64}},
+        {"name": "head_position", "arguments": {"yaw": 131}},
+        {"name": "head_position", "arguments": {"pitch": True}},
+        {"name": "head_think", "arguments": {"duration": 0}},
+        {"name": "head_greet", "arguments": {"duration": "慢"}},
+        {"name": "head_breathing", "arguments": {"cycles": 0}},
+        {"name": "head_breathing", "arguments": {"cycles": 65}},
+        {"name": "head_breathing", "arguments": {"cycles": 1.5}},
+        {"name": "head_attention", "arguments": {"direction": "behind"}},
+        {"name": "head_emotional", "arguments": {"emotion": "unknown"}},
+        {"name": "volume_up", "arguments": {"step": -1}},
+        {"name": "volume_down", "arguments": {"step": "5"}},
+        {"name": "volume_set", "arguments": {"level": True}},
+        {"name": "play_music", "arguments": {"song_name": ""}},
+        {"name": "add_to_queue", "arguments": {"song_name": 1}},
+        {"name": "recommend_songs", "arguments": {"song_name": ""}},
+        {"name": "navigate_to", "arguments": {"location": ""}},
+        {"name": "add_location", "arguments": {"name": "", "x": 0, "y": 0}},
+        {
+            "name": "add_location",
+            "arguments": {"name": "坏姿态", "x": 0, "y": 0, "qw": 0},
+        },
+        {
+            "name": "add_location",
+            "arguments": {"name": "坏坐标", "x": "x", "y": 0},
+        },
+        {
+            "name": "add_location",
+            "arguments": {"name": "无穷", "x": float("inf"), "y": 0},
+        },
+        {"name": "head_think", "arguments": {"duration": float("inf")}},
+        {"name": "wifi_status", "arguments": {"unexpected_0": 1}},
+        {"name": "volume_mute", "arguments": {"level": 0}},
     ]
     for invalid in invalid_calls:
-        result = submit(agent, provider, "volume_set(90)", invalid)
+        result = submit(
+            agent,
+            provider,
+            {"name": "volume_set", "arguments": {"level": 90}},
+            invalid,
+        )
         assert result.status == "rejected", invalid
         assert result.actions == (), invalid
-        query = submit(agent, provider, "volume_status")
+        query = submit(
+            agent, provider, {"name": "volume_status", "arguments": {}}
+        )
         assert query.actions[0].data["level"] == 50, invalid
 
 
@@ -292,7 +339,11 @@ def test_navigation_overlap_cancel_restart_and_independent_agents():
     provider = FixedProvider()
     first = Agent(provider, create_default_actions().registry)
     result = submit(
-        first, provider, "go_to('厨房')", "navigate_to('厨房')", "head_smile"
+        first,
+        provider,
+        {"name": "go_to", "arguments": {"location": "厨房"}},
+        {"name": "navigate_to", "arguments": {"location": "厨房"}},
+        {"name": "head_smile", "arguments": {}},
     )
     assert [a.status for a in result.actions] == [
         "simulated_success",
@@ -300,15 +351,34 @@ def test_navigation_overlap_cancel_restart_and_independent_agents():
         "not_executed",
     ]
     cancelled = submit(
-        first, provider, "cancel_navigation", "cancel_navigation"
+        first,
+        provider,
+        {"name": "cancel_navigation", "arguments": {}},
+        {"name": "cancel_navigation", "arguments": {}},
     )
     assert cancelled.status == "completed"
-    restarted = submit(first, provider, "navigate_to('厨房')")
+    restarted = submit(
+        first,
+        provider,
+        {"name": "navigate_to", "arguments": {"location": "厨房"}},
+    )
     assert restarted.actions[0].data["state"] == "active"
-    submit(first, provider, "add_location('私有', 1, 1)", "play_music('夜曲')")
+    submit(
+        first,
+        provider,
+        {
+            "name": "add_location",
+            "arguments": {"name": "私有", "x": 1, "y": 1},
+        },
+        {"name": "play_music", "arguments": {"song_name": "夜曲"}},
+    )
     second = Agent(provider, create_default_actions().registry)
     result = submit(
-        second, provider, "list_locations", "music_status", "navigation_status"
+        second,
+        provider,
+        {"name": "list_locations", "arguments": {}},
+        {"name": "music_status", "arguments": {}},
+        {"name": "navigation_status", "arguments": {}},
     )
     assert list(result.actions[0].data["locations"]) == ["厨房"]
     assert result.actions[1].data["is_playing"] is False
@@ -330,7 +400,12 @@ def test_attention_direction_parameters(direction, pitch, yaw):
     provider = FixedProvider()
     agent = Agent(provider, create_default_actions().registry)
     result = submit(
-        agent, provider, f"head_attention(direction='{direction}', duration=4)"
+        agent,
+        provider,
+        {
+            "name": "head_attention",
+            "arguments": {"direction": direction, "duration": 4},
+        },
     )
     assert result.status == "completed"
     data = result.actions[0].data
@@ -353,7 +428,12 @@ def test_emotional_combinations(emotion, pitch, yaw):
     provider = FixedProvider()
     agent = Agent(provider, create_default_actions().registry)
     result = submit(
-        agent, provider, f"head_emotional(emotion='{emotion}', duration=4)"
+        agent,
+        provider,
+        {
+            "name": "head_emotional",
+            "arguments": {"emotion": emotion, "duration": 4},
+        },
     )
     assert result.status == "completed"
     data = result.actions[0].data
@@ -370,16 +450,27 @@ def test_full_pose_parameters_and_volume_saturation():
     result = submit(
         agent,
         provider,
-        "add_location(name='客厅', x=-2, y=3, z=1, "
-        "qx=0, qy=0, qz=0.6, qw=0.8)",
-        "navigate_to(location='客厅')",
-        "cancel_navigation",
-        "go_to('客厅')",
-        "play_music(song_name='夜曲')",
-        "play_song('夜曲')",
-        "volume_set(200)",
-        "volume_down(step=120)",
-        "volume_set(-10)",
+        {
+            "name": "add_location",
+            "arguments": {
+                "name": "客厅",
+                "x": -2,
+                "y": 3,
+                "z": 1,
+                "qx": 0,
+                "qy": 0,
+                "qz": 0.6,
+                "qw": 0.8,
+            },
+        },
+        {"name": "navigate_to", "arguments": {"location": "客厅"}},
+        {"name": "cancel_navigation", "arguments": {}},
+        {"name": "go_to", "arguments": {"location": "客厅"}},
+        {"name": "play_music", "arguments": {"song_name": "夜曲"}},
+        {"name": "play_song", "arguments": {"song_name": "夜曲"}},
+        {"name": "volume_set", "arguments": {"level": 200}},
+        {"name": "volume_down", "arguments": {"step": 120}},
+        {"name": "volume_set", "arguments": {"level": -10}},
     )
     assert result.status == "completed"
     assert result.actions[0].data["locations"]["客厅"] == {

@@ -3,7 +3,7 @@
 import time
 from concurrent.futures import Future, wait
 from dataclasses import dataclass, replace
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from robot_agent.actions.registry import (
     CONFIRMED_SUCCESS,
@@ -21,6 +21,7 @@ class _PendingAction:
     call: Future
     turn_id: str
     actions: List[ActionOutcome]
+    tool_call_id: Optional[str] = None
 
 
 def confirmed_action_reply(actions: List[ActionOutcome]) -> str:
@@ -68,7 +69,10 @@ class ActionExecution:
         return self._pending_action is not None
 
     def execute(
-        self, commands: List[ActionCommand], turn_id: str
+        self,
+        commands: Sequence[ActionCommand],
+        turn_id: str,
+        tool_call_id: Optional[str] = None,
     ) -> ExecutionResult:
         """执行已校验动作；须先确认未阻塞，流程异常携带事实抛出。"""
         # 1. 建立全表记录，后续失败不能丢弃已提交动作与剩余项。
@@ -77,7 +81,7 @@ class ActionExecution:
             for command in commands
         ]
         try:
-            self._execute_actions(commands, outcomes, turn_id)
+            self._execute_actions(commands, outcomes, turn_id, tool_call_id)
         except Exception as error:
             raise ActionExecutionError(
                 ExecutionResult(
@@ -85,11 +89,12 @@ class ActionExecution:
                     "failed",
                     "动作执行流程异常，请核对执行记录。",
                     tuple(outcomes),
+                    tool_call_id,
                 )
             ) from error
 
         # 2. 报告只依据执行事实，异常也必须保留原记录。
-        return self._report_actions(turn_id, outcomes)
+        return self._report_actions(turn_id, outcomes, tool_call_id)
 
     def reconcile(self, turn_id: str) -> ExecutionResult:
         """只核对原调用的迟到回执，不重新执行；未知或异常回执不能解除阻塞。"""
@@ -104,6 +109,7 @@ class ActionExecution:
                 "failed",
                 "调用仍在执行，结果未知。",
                 tuple(pending.actions),
+                pending.tool_call_id,
             )
 
         try:
@@ -119,6 +125,7 @@ class ActionExecution:
                 "failed",
                 "设备最终状态仍未知，请核实设备状态后重新启动入口。",
                 tuple(pending.actions),
+                pending.tool_call_id,
             )
 
         # 仅替换超时项，未执行的后续动作保持原状，绝不补执行。
@@ -134,13 +141,14 @@ class ActionExecution:
             for action in pending.actions
         ]
         self._pending_action = None
-        return self._report_actions(turn_id, outcomes)
+        return self._report_actions(turn_id, outcomes, pending.tool_call_id)
 
     def _execute_actions(
         self,
-        commands: List[ActionCommand],
+        commands: Sequence[ActionCommand],
         outcomes: List[ActionOutcome],
         turn_id: str,
+        tool_call_id: Optional[str],
     ) -> None:
         """按序提交调用；超时或未知回执保留 Future 供核对。"""
         for index, command in enumerate(commands):
@@ -152,11 +160,7 @@ class ActionExecution:
             deadline = time.monotonic() + self._action_timeout
             try:
                 call = start_call(
-                    lambda: ActionReceipt.from_legacy(
-                        self._actions.execute(
-                            command.name, command.parameters, deadline
-                        )
-                    )
+                    lambda: self._actions.invoke(command, deadline)
                 )
             except Exception:
                 outcomes[index] = replace(
@@ -165,7 +169,9 @@ class ActionExecution:
                     detail="调用提交失败，未发出设备动作",
                 )
                 break
-            self._pending_action = _PendingAction(call, turn_id, outcomes)
+            self._pending_action = _PendingAction(
+                call, turn_id, outcomes, tool_call_id
+            )
             if not wait(
                 [call], timeout=max(0.0, deadline - time.monotonic())
             ).done:
@@ -195,7 +201,10 @@ class ActionExecution:
                 break
 
     def _report_actions(
-        self, turn_id: str, outcomes: List[ActionOutcome]
+        self,
+        turn_id: str,
+        outcomes: List[ActionOutcome],
+        tool_call_id: Optional[str] = None,
     ) -> ExecutionResult:
         """只在报告阶段捕获格式异常，始终保留完整执行记录。"""
         try:
@@ -207,6 +216,7 @@ class ActionExecution:
                 "completed" if completed else "failed",
                 confirmed_action_reply(outcomes),
                 tuple(outcomes),
+                tool_call_id,
             )
         except Exception:
             return ExecutionResult(
@@ -214,4 +224,5 @@ class ActionExecution:
                 "failed",
                 "执行结果回复生成失败，请查看动作记录。",
                 tuple(outcomes),
+                tool_call_id,
             )

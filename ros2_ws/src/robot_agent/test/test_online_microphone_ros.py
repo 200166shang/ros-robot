@@ -1,11 +1,11 @@
 """通过ROS入口及外部音频/在线传输验证唯一麦克风逐轮流程。"""
 
-import io
 import json
 import time
 
 import rclpy
 import websocket
+from native_protocol_fixture import native_response
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -109,11 +109,7 @@ def test_microphone_is_only_input_and_turns_resume_in_order(
         model_inputs.append(
             json.loads(request.data)["messages"][-1]["content"]
         )
-        reply = json.dumps({"function": ["head_nod"], "response": "已完成"})
-        event = {"choices": [{"delta": {"content": reply}}]}
-        return io.BytesIO(
-            ("data: " + json.dumps(event) + "\n\ndata: [DONE]\n").encode()
-        )
+        return native_response([{"name": "head_nod", "arguments": {}}])
 
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     monkeypatch.setattr(websocket, "create_connection", connect)
