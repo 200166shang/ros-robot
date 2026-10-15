@@ -194,5 +194,6 @@ reconcile → _reconcile_turn
   git diff --check通过。
 - robot_agent源码外增量构建成功（8.51秒）。
 
-安装版与双轴审查结果在提交前补充。日志沿用源码外证据目录，
+从/tmp加载安装版执行相同语音/麦克风回归：15 passed（3.35秒）。
+双轴审查Standards/Spec均0项发现。日志沿用源码外证据目录，
 前缀voice-flow-。
