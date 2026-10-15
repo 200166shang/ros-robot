@@ -68,6 +68,7 @@ class ActionExecution:
         self._actions = actions
         self._action_timeout = timeout
         self._pending_action: Optional[_PendingAction] = None
+        self._closed = False
         self.last_result: Optional[ExecutionResult] = None
 
     @property
@@ -82,11 +83,15 @@ class ActionExecution:
         tool_call_id: Optional[str] = None,
     ) -> ExecutionResult:
         """整表先建事实，逐项等待回执；超时保留原 Task 供核对。"""
+        if self._closed:
+            raise RuntimeError("动作执行已经关闭")
         if self.blocked:
             raise RuntimeError("未知动作未核对，不能提交新计划")
         outcomes = [ActionOutcome(c.name, c.parameters) for c in plan.commands]
         try:
             for index, command in enumerate(plan.commands):
+                if self._closed:
+                    break
                 # 1. 提交前记录 unknown，后续错误不能抹掉事实。
                 outcomes[index] = replace(
                     outcomes[index],
@@ -170,6 +175,31 @@ class ActionExecution:
                 turn_id, pending.actions, pending.tool_call_id
             )
             raise ActionExecutionError(self.last_result) from error
+
+    async def aclose(self, deadline: float) -> Optional[ExecutionResult]:
+        """关闭时核对原调用；预算耗尽仅结束本地等待，保留未知事实。"""
+        self._closed = True
+        pending = self._pending_action
+        if pending is None:
+            return None
+        if not pending.task.done():
+            await asyncio.wait(
+                {pending.task}, timeout=max(0, deadline - time.monotonic())
+            )
+        if pending.task.done() and not pending.task.cancelled():
+            if self._pending_action is pending:
+                return await self.reconcile(pending.turn_id)
+            # execute 的原等待者可能已先一步记录回执并结束计划。
+            return self.last_result
+        pending.task.cancel()
+        try:
+            await pending.task
+        except asyncio.CancelledError:
+            pass
+        self.last_result = self._report(
+            pending.turn_id, pending.actions, pending.tool_call_id
+        )
+        return self.last_result
 
     def _snapshot(self, turn_id, outcomes, tool_call_id) -> ExecutionResult:
         """即使报告出错，仍保留设备事实供调用者保存。"""

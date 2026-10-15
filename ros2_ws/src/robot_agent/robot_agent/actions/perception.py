@@ -1,12 +1,10 @@
 """感知动作流程：复用设备 Interface，不管理进程或输出运动命令。"""
 
-import asyncio
 import json
 import time
 from typing import Dict, Optional, Protocol
 
 from robot_agent.actions.contracts import ActionHandler
-from robot_agent.calls import start_call
 
 
 class PerceptionInterface(Protocol):
@@ -16,7 +14,9 @@ class PerceptionInterface(Protocol):
         """提交采集请求；成功只代表发布完成。"""
         ...
 
-    def set_enabled(self, kind: str, enabled: bool, deadline: float) -> Dict:
+    async def set_enabled(
+        self, kind: str, enabled: bool, deadline: float
+    ) -> Dict:
         """等待服务最终回执；在途超时由交互 Interface 管理。"""
         ...
 
@@ -43,13 +43,18 @@ class PerceptionActions:
 
     def start_camera(self, *, deadline: Optional[float] = None) -> Dict:
         """恢复采集，不把发布完成当作设备开启确认。"""
+        if time.monotonic() >= self._deadline(deadline):
+            return {
+                "status": "failed",
+                "detail": "动作期限已过，未提交采集请求，不补执行",
+            }
         return self._interface.camera(True)
 
-    def stop_camera(self, *, deadline: Optional[float] = None) -> Dict:
+    async def stop_camera(self, *, deadline: Optional[float] = None) -> Dict:
         """先确认 Follow standby，再暂停采集，失败则不继续。"""
         # 1. Follow 待机回执确认后，才提交无确认的相机开关。
         deadline = self._deadline(deadline)
-        receipt = self.disable_tracking(deadline=deadline)
+        receipt = await self.disable_tracking(deadline=deadline)
         if receipt["status"] != "real_success":
             return receipt
         # 2. 只报告采集请求提交，不能声称相机硬件已停机。
@@ -71,13 +76,13 @@ class PerceptionActions:
             "detail": "相机采集状态未知：/enable_camera 无状态回执",
         }
 
-    def _set_state(
+    async def _set_state(
         self, kind: str, enabled: bool, deadline: Optional[float] = None
     ) -> Dict:
         """成功服务回执更新记录，失败不推断设备当前状态。"""
         if deadline is None:
             deadline = self._deadline(deadline)
-        receipt = self._interface.set_enabled(kind, enabled, deadline)
+        receipt = await self._interface.set_enabled(kind, enabled, deadline)
         confirmed = enabled if receipt["status"] == "real_success" else None
         if kind == "follow":
             self._follow = confirmed
@@ -87,15 +92,17 @@ class PerceptionActions:
                 self._follow = False
         return receipt
 
-    def enable_lidar(self, *, deadline: Optional[float] = None) -> Dict:
+    async def enable_lidar(self, *, deadline: Optional[float] = None) -> Dict:
         """开启 tracker 扫描融合，保留服务端 TF/发布端检查。"""
-        return self._set_state("fusion", True, deadline)
+        return await self._set_state("fusion", True, deadline)
 
-    def disable_lidar(self, *, deadline: Optional[float] = None) -> Dict:
+    async def disable_lidar(self, *, deadline: Optional[float] = None) -> Dict:
         """关闭融合，服务确认后记录其隐含的 Follow standby。"""
-        return self._set_state("fusion", False, deadline)
+        return await self._set_state("fusion", False, deadline)
 
-    def start_following(self, *, deadline: Optional[float] = None) -> Dict:
+    async def start_following(
+        self, *, deadline: Optional[float] = None
+    ) -> Dict:
         """采集请求、融合确认、Follow 确认按序执行，不重试。"""
         # 1. 恢复相机采集，成功仅代表请求已发布。
         deadline = self._deadline(deadline)
@@ -108,7 +115,7 @@ class PerceptionActions:
         if receipt["status"] != "real_success":
             return receipt
         # 2. 融合失败即停止，不越过 TF 和 LiDAR 前提。
-        receipt = self._set_state("fusion", True, deadline)
+        receipt = await self._set_state("fusion", True, deadline)
         if receipt["status"] != "real_success":
             return {
                 "status": receipt["status"],
@@ -122,7 +129,7 @@ class PerceptionActions:
                 "detail": "融合回执迟到：已确认融合，未提交 Follow，不补执行",
             }
         fusion_detail = receipt["detail"]
-        receipt = self._set_state("follow", True, deadline)
+        receipt = await self._set_state("follow", True, deadline)
         return {
             "status": receipt["status"],
             "detail": "采集请求已发布，无设备确认；融合已确认："
@@ -131,19 +138,25 @@ class PerceptionActions:
             + receipt["detail"],
         }
 
-    def enable_tracking(self, *, deadline: Optional[float] = None) -> Dict:
+    async def enable_tracking(
+        self, *, deadline: Optional[float] = None
+    ) -> Dict:
         """仅启用 Follow，保留融合尚未开启时服务端拒绝的语义。"""
-        return self._set_state("follow", True, deadline)
+        return await self._set_state("follow", True, deadline)
 
-    def disable_tracking(self, *, deadline: Optional[float] = None) -> Dict:
+    async def disable_tracking(
+        self, *, deadline: Optional[float] = None
+    ) -> Dict:
         """仅进入 Follow 待机，保持当前融合订阅。"""
-        return self._set_state("follow", False, deadline)
+        return await self._set_state("follow", False, deadline)
 
-    def stop_following(self, *, deadline: Optional[float] = None) -> Dict:
+    async def stop_following(
+        self, *, deadline: Optional[float] = None
+    ) -> Dict:
         """按源动作先进入待机，再关闭融合；拒绝或超时不继续。"""
         # 1. 服务确认 Follow standby，不能把提交请求当作停止。
         deadline = self._deadline(deadline)
-        receipt = self._set_state("follow", False, deadline)
+        receipt = await self._set_state("follow", False, deadline)
         if receipt["status"] != "real_success":
             return receipt
         # 2. 同一截止时间内关闭融合，不重试或补执行。
@@ -153,7 +166,7 @@ class PerceptionActions:
                 "status": "failed",
                 "detail": "Follow 已确认待机，但回执迟到；未提交融合关闭请求",
             }
-        receipt = self._set_state("fusion", False, deadline)
+        receipt = await self._set_state("fusion", False, deadline)
         return {
             "status": receipt["status"],
             "detail": "Follow 已确认待机："
@@ -162,7 +175,9 @@ class PerceptionActions:
             + receipt["detail"],
         }
 
-    def toggle_following(self, *, deadline: Optional[float] = None) -> Dict:
+    async def toggle_following(
+        self, *, deadline: Optional[float] = None
+    ) -> Dict:
         """只切换本入口有确认依据的状态，未知时拒绝猜测。"""
         if self._follow is None:
             return {
@@ -170,9 +185,9 @@ class PerceptionActions:
                 "detail": "Follow 状态未知，请明确启动或停止；不自动猜测切换",
             }
         return (
-            self.stop_following(deadline=deadline)
+            await self.stop_following(deadline=deadline)
             if self._follow
-            else self.start_following(deadline=deadline)
+            else await self.start_following(deadline=deadline)
         )
 
     def following_status(self, *, deadline: Optional[float] = None) -> Dict:
@@ -231,18 +246,4 @@ def perception_actions(
         "disable_lidar": ActionHandler(perception.disable_lidar, timed=True),
     }
 
-    return {
-        name: ActionHandler(_blocking_perception(handler.execute), timed=True)
-        for name, handler in handlers.items()
-    }
-
-
-def _blocking_perception(method):
-    """#92 前的唯一阻塞设备 Adapter；执行模块仍持有原异步操作。"""
-
-    async def invoke(**parameters):
-        """只包裹尚未迁移的感知调用，不把线程引入业务主流程。"""
-        operation = start_call(lambda: method(**parameters))
-        return await asyncio.shield(asyncio.wrap_future(operation))
-
-    return invoke
+    return handlers

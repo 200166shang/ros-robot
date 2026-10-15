@@ -38,19 +38,18 @@ model result cannot execute actions or apply a late summary.
 
 `ActionRegistry.invoke(command, deadline)` and `ActionExecution.execute(plan,
 turn_id)` are native async Interfaces. Instant simulations run in the event loop;
-async device implementations are awaited directly. The temporary blocking
-perception Adapter in `actions/perception.py` is the only action worker bridge
-until the ROS receipt migration. Execution retains the original operation Task
-when a wait expires or its caller is cancelled. A completed `unknown` receipt
+async device implementations are awaited directly. Perception actions await native
+ROS receipt delivery without a blocking worker or nested spin. Execution retains
+the original operation Task when a wait expires or its caller is cancelled. A completed `unknown` receipt
 still blocks admission; `reconcile(turn_id)` only checks that original operation.
 Unexpected action/report errors carry `ActionExecutionError.result` and preserve
 the original exception as the cause. `Agent.last_result` also retains confirmed
 or submitted facts when later memory or programming errors propagate.
 
 The temporary `legacy_io.py` Adapters still own blocking speech operations.
-`AgentApplication.aclose` closes speech and the Agent's model client. Native audio
-I/O and the total shutdown budget remain subsequent migration steps; the accepted
-application `aclose(deadline)` shape does not yet impose that total budget.
+`AgentApplication.aclose(deadline)` closes speech and the Agent, retaining action
+receipt delivery within the remaining deadline. Native audio I/O and a configurable
+total budget across all resources remain subsequent migration steps.
 The model Adapter owns bounded JSON/SSE assembly and returns a complete `ModelReply`.
 It exposes one native `execute_actions` tool; ordinary chat is plain model text.
 Summaries explicitly disable tools and use one attempt with a separate phase
@@ -64,9 +63,23 @@ exist only at device Adapters; the registry returns an `ActionReceipt`.
 `ExecutionResult.tool_call_id` keeps the native call associated with execution
 and reconciliation without changing the external result JSON. The memory stores
 plain exchanges, so it does not persist unpaired native tool messages.
-The ROS edge temporarily hosts the asyncio loop in its managed business thread
-while the ROS executor delivers receipts. Memory storage owns bounded data and
-atomic persistence; it has no callback that can invoke a model. Clear/new turn
+The ROS entry owns the asyncio main loop and explicitly starts `RosExecutor`'s
+dedicated thread. Constructing `OnlineVoiceRosNode` only wires ROS; `run()` starts
+the shared microphone application. The ROS Adapter retains each original rclpy
+Future and transfers its receipt with `loop.call_soon_threadsafe`. A business
+wait timeout never cancels that Future or removes the pending service request.
+Compound actions share one absolute deadline: a late partial confirmation may
+update facts, but cannot submit a later service, camera publication, or plan item.
+Camera publication remains a request without device state confirmation.
+`Agent.aclose(deadline)` waits for original action completion and records available
+facts before the ROS Adapter detaches; `RosPerception.aclose(deadline)` then drains
+or disconnects local receipt delivery before `RosExecutor.aclose(deadline)` stops
+its thread. Ending local waiting cannot establish device cancellation. Executor
+callback errors propagate to the main loop. The current entry uses a five-second
+shutdown allowance; configurable total-budget persistence belongs to the shutdown
+migration.
+
+Memory storage owns bounded data and atomic persistence; it has no callback that can invoke a model. Clear/new turn
 admission stays blocked while summary cleanup is in flight, so retired summaries
 cannot write after a successful clear.
 
